@@ -34,7 +34,7 @@ on large survival worlds. Players, plugins, and Bedrock players all see the same
 * **What changes:** region files become compact `.linear` files; gameplay stays identical.
 * **What stays:** old `.mca` files keep working side by side with new `.linear` files.
 * **Way back:** any world can switch back to the normal format; swapping in the stock server jar completes leaving these custom server files entirely.
-* **Proof:** check live compression figures in game — `/linearstats` on the Folia and Canvas jars, `/linear stats` on the Horizon plugin.
+* **Proof:** check live compression figures in game with `/linearstats` or `/linear stats`.
 
 ## 🧩 Compatibility
 
@@ -55,19 +55,19 @@ You do **not** need to compile anything. Every server type ships as a ready-to-r
    ```
 
 4. After a save, look for new `.linear` files in your world folder.
-5. Check live compression figures in game: `/linearstats` on Folia and Canvas, `/linear stats` on Horizon.
+5. Check live compression figures in game with `/linearstats` or `/linear stats`.
 
 If you want to build from source instead, `CONTRIBUTING.md` documents the one build command.
 
 ## ⌨️ Commands
 
-| Command | What it does | Availability |
-| --- | --- | --- |
-| `/linearstats [filter]` | Live compression figures for every tracked folder, optionally filtered | Folia and Canvas only — **not available on Horizon** |
-| `/linear stats [world]` | Same figures, optionally limited to one world | All server types — the **only** stats command on Horizon |
-| `/linear convert <world> [--to-linear\|--to-mca] [--level 1..22] [--threads N] [--execute\|--dry-run]` | Queues a world conversion job; dry-run is the default, `--execute` really converts | All server types |
-| `/linear queue list\|status\|pause\|resume\|cancel\|clear` | Manages background conversion jobs by id | All server types |
-| `/linear help` | Prints an in-game summary of the above | All server types |
+| Command | What it does |
+| --- | --- |
+| `/linearstats [filter]` | Live compression figures for every tracked folder, optionally filtered |
+| `/linear stats [world]` | Same figures, optionally limited to one world |
+| `/linear convert <world> [--to-linear\|--to-mca] [--level 1..22] [--threads N] [--execute\|--dry-run]` | Queues a world conversion job; dry-run is the default, `--execute` really converts |
+| `/linear queue list\|status\|pause\|resume\|cancel\|clear` | Manages background conversion jobs by id |
+| `/linear help` | Prints an in-game summary of the above |
 
 Operators hold every permission by default; anyone else needs the exact node (`docs/commands.md` lists them all).
 
