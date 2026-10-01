@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch, minecraft-0014-Linear-default-format.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
+--- a/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
+@@ -22,10 +22,28 @@ public class RecreatingSimpleRegionStorage extends SimpleRegionStorage {
+         final DataFixer fixerUpper,
+         final boolean syncWrites,
+         final DataFixTypes dataFixType
++    ) {
++        this(readInfo, readFolder, writeInfo, writeFolder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
++    }
++
++    // Linear - format-aware entry point for --recreate. The write side
++    // (new_<folder>) inherits the world's configured format via ctor params
++    // (RegionStorageInfo/storage flow, never Bukkit lookups). LINEAR creates
++    // r.X.Z.linear via AbstractRegionFileFactory; explicit ANVIL still writes .mca unchanged.
++    public RecreatingSimpleRegionStorage(
++        final RegionStorageInfo readInfo,
++        final Path readFolder,
++        final RegionStorageInfo writeInfo,
++        final Path writeFolder,
++        final DataFixer fixerUpper,
++        final boolean syncWrites,
++        final DataFixTypes dataFixType,
++        final net.linear.RegionFileFormat writeFormat,
++        final int linearCompression
+     ) {
+         super(readInfo, readFolder, fixerUpper, syncWrites, dataFixType);
+         this.writeFolder = writeFolder;
+-        this.writeWorker = new IOWorker(writeInfo, writeFolder, syncWrites);
++        this.writeWorker = new IOWorker(writeInfo, writeFolder, syncWrites, writeFormat, linearCompression);
+     }
+ 
+     @Override
+@@ -51,6 +51,14 @@ public class RecreatingSimpleRegionStorage extends SimpleRegionStorage {
+         return this.writeWorker.store(pos, supplier);
+     }
+ 
++    // Linear - persist the write side (new_<folder>) to disk. Linear
++    // buffers chunk bytes in RAM (dirty flag) and only materialises the file
++    // on flush; without this, onFileFinished would move a stale/missing file.
++    // Called by RegionStorageUpgrader.onFileFinished after joining pending writes.
++    public CompletableFuture<Void> synchronizeWriteSide(final boolean flush) {
++        return this.writeWorker.synchronize(flush);
++    }
++
+     @Override
+     public void close() throws IOException {
+         super.close();

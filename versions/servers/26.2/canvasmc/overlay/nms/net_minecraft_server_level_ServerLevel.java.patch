@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/level/ServerLevel.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch, minecraft-0017-Linear-save-drain.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -688,9 +688,29 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+         this.chunkTaskScheduler = new ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler((ServerLevel)(Object)this);
++        // Linear - Canvas-native source: WorldConfig.regionFormat (canvas-worlds.yml),
++        // sysprop-first via LinearPolicy (-Dlinearmc.format / -Dlinearmc.compression-level).
++        final net.linear.RegionFileFormat linearFileFormat = this.canvasConfig().regionFormat.format;
++        final int linearFileLevel = this.canvasConfig().regionFormat.compressionLevel;
++        final boolean linearCrashOnBrokenSymlink = this.canvasConfig().regionFormat.crashOnBrokenSymlink;
++        final String linearSysFormat = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_FORMAT);
++        final String linearSysLevel = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_LEVEL);
++        final net.linear.RegionFileFormat linearFormat = net.linear.config.LinearPolicy.resolveFormatWithOverride(linearSysFormat, linearFileFormat.toString(), net.linear.RegionFileFormat.ANVIL, levelStorage.getDimensionPath(dimension).resolve("entities").toString(), levelStorage.getLevelId()); // Linear - runtime override (reverse jobs flip this folder to ANVIL) wins over the file; sysprop still wins overall
++        final int linearCompression = net.linear.config.LinearPolicy.resolveLevel(linearSysLevel, linearFileLevel, 6);
++        if (linearSysFormat != null && !linearFormat.equals(linearFileFormat)) {
++            LOGGER.info(net.linear.config.LinearPolicy.overrideLine(net.linear.config.LinearPolicy.SYSPROP_FORMAT, linearSysFormat, linearFileFormat.toString(), linearFormat.toString(), "server"));
++        }
++        if (linearSysLevel != null && linearCompression != linearFileLevel) {
++            LOGGER.info(net.linear.config.LinearPolicy.overrideLine(net.linear.config.LinearPolicy.SYSPROP_LEVEL, linearSysLevel, String.valueOf(linearFileLevel), String.valueOf(linearCompression), "server"));
++        }
+         this.entityDataController = new ca.spottedleaf.moonrise.patches.chunk_system.io.datacontroller.EntityDataController(
+             new ca.spottedleaf.moonrise.patches.chunk_system.io.datacontroller.EntityDataController.EntityRegionFileStorage(
+                 new RegionStorageInfo(levelStorage.getLevelId(), dimension, "entities"),
+                 levelStorage.getDimensionPath(dimension).resolve("entities"),
+-                server.forceSynchronousWrites()
++                server.forceSynchronousWrites(),
++                // Linear - single mapping point: Canvas WorldConfig already
++                // carries the core enum, sysprop-first locals above.
++                linearFormat,
++                linearCompression,
++                linearCrashOnBrokenSymlink
+             ),
+             this.chunkTaskScheduler
+         );
+@@ -1609,6 +1609,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             this.saveLevelData(false);
+         }
+         // chunk autosave is already called by the ChunkSystem during unload processing (ChunkMap#processUnloads)
++        // Linear - periodic autosave drain, fire-and-forget (async split):
++        // Moonrise unload processing marks linear files dirty but nothing flushes
++        // them, so submit the age-gated batch every autosave cycle without
++        // joining. Cheap no-op when young/clean; per-folder failures logged,
++        // never thrown.
++        net.linear.LinearFlushCoordinator.flushDirtyAsync(false);
+     }
+     // Paper end - Incremental chunk and player saving
+ 
+@@ -2849,6 +2849,9 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     public void close() throws IOException {
+         super.close();
+         //this.entityManager.close(); // Paper - rewrite chunk system
++        // Linear - belt-and-braces stop drain (finding F fix): force-flush every
++        // tracked linear folder so a clean shutdown never loses young writes.
++        net.linear.LinearFlushCoordinator.evictAll();
+     }
+ 
+     @Override

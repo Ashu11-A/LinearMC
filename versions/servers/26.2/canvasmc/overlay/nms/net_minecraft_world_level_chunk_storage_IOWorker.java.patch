@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/world/level/chunk/storage/IOWorker.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch, minecraft-0014-Linear-default-format.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/world/level/chunk/storage/IOWorker.java b/net/minecraft/world/level/chunk/storage/IOWorker.java
+--- a/net/minecraft/world/level/chunk/storage/IOWorker.java
++++ b/net/minecraft/world/level/chunk/storage/IOWorker.java
+@@ -37,7 +37,17 @@ public class IOWorker implements AutoCloseable, ChunkScanAccess {
+     private static final int REGION_CACHE_SIZE = 1024;
+ 
+     protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync) {
+-        this.storage = new RegionFileStorage(info, dir, sync);
++        this(info, dir, sync, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
++    }
++
++    // Linear - format-aware entry point (called by the SimpleRegionStorage overload).
++    // Linear - 6-arg overload adds the crash flag; 5-arg delegates with default true.
++    protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync, final net.linear.RegionFileFormat format, final int linearCompression) {
++        this(info, dir, sync, format, linearCompression, true);
++    }
++
++    protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync, final net.linear.RegionFileFormat format, final int linearCompression, final boolean linearCrashOnBrokenSymlink) {
++        this.storage = new RegionFileStorage(info, dir, sync, format, linearCompression, linearCrashOnBrokenSymlink);
+         this.consecutiveExecutor = new PriorityConsecutiveExecutor(IOWorker.Priority.values().length, Util.ioPool(), "IOWorker-" + info.type());
+     }
+ 

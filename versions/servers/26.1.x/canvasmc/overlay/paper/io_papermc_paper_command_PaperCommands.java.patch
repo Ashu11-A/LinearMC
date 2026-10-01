@@ -1,0 +1,13 @@
+diff --git a/src/main/java/io/papermc/paper/command/PaperCommands.java b/src/main/java/io/papermc/paper/command/PaperCommands.java
+index cf9996228..b8e2d60b7 100644
+--- a/src/main/java/io/papermc/paper/command/PaperCommands.java
++++ b/src/main/java/io/papermc/paper/command/PaperCommands.java
+@@ -25,6 +25,8 @@ public final class PaperCommands {
+         COMMANDS.put("paper", new PaperCommand("paper"));
+         COMMANDS.put("mspt", new MSPTCommand("mspt"));
+         COMMANDS.put("tps", new io.papermc.paper.threadedregions.commands.CommandServerHealth()); // Folia - region threading
++        COMMANDS.put("linear", new CommandLinear("linear")); // Linear /linear tree (stats/convert/queue/help)
++        COMMANDS.put("linearstats", new CommandLinearStats("linearstats")); // Linear linearstats (Bukkit command map registration)
+ 
+         COMMANDS.forEach((s, command) -> {
+             server.server.getCommandMap().register(s, "Paper", command);

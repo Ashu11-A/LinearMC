@@ -1,0 +1,225 @@
+From f4e2d70bca634e3ad707f5cf4f4669124cc1d422 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 15:59:36 -0300
+Subject: [PATCH] Linear startup conversion
+
+Pre-plugin conversion pass driver. Enumerates dimensions from the level
+stem registry, reads each effective world config through the initialized
+Paper configuration API, and converts region, entities and poi folders
+holding old-format files when the world target is LINEAR. Explicit-ANVIL
+worlds and unreadable configs convert nothing. Per-folder start and done
+logging with counts; a protection failure logs full per-file detail,
+halts the server, and returns false so the DedicatedServer call site
+aborts boot before plugins load. Synchronous on the boot thread.
+Also logs the in-memory /linear convert-queue drop once per boot (the
+queue is not persisted, so operators know to re-issue converts).
+---
+ .../paper/linear/LinearStartupConversion.java | 197 ++++++++++++++++++
+ 1 file changed, 197 insertions(+)
+ create mode 100644 src/main/java/io/papermc/paper/linear/LinearStartupConversion.java
+
+diff --git a/src/main/java/io/papermc/paper/linear/LinearStartupConversion.java b/src/main/java/io/papermc/paper/linear/LinearStartupConversion.java
+new file mode 100644
+index 000000000..aaebc7dd1
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/linear/LinearStartupConversion.java
+@@ -0,0 +1,197 @@
++package io.papermc.paper.linear;
++
++import com.mojang.logging.LogUtils;
++import io.papermc.paper.configuration.PaperConfigurations;
++import io.papermc.paper.configuration.WorldConfiguration;
++import io.papermc.paper.world.PaperWorldLoader;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.util.List;
++import net.linear.AbstractRegionFileFactory;
++import net.linear.LinearRegionConverter;
++import net.minecraft.core.registries.Registries;
++import net.minecraft.resources.ResourceKey;
++import net.minecraft.server.MinecraftServer;
++import net.minecraft.util.worldupdate.RegionStorageUpgrader;
++import net.minecraft.world.level.Level;
++import net.minecraft.world.level.dimension.LevelStem;
++import org.slf4j.Logger;
++import org.spigotmc.SpigotWorldConfig;
++
++/**
++ * Linear startup auto-conversion: pre-plugin boot pass (B2; paper-0011).
++ *
++ * <p>Runs synchronously on the main boot thread after the world-config init
++ * and before any plugin code executes (trigger call sits in
++ * {@code DedicatedServer.initServer} between
++ * {@code initializeWorldDefaultsConfiguration} and {@code loadPlugins}).
++ * For every dimension, the world target format is resolved from the Paper
++ * configuration files (never from {@code level.paperConfig()}: the per-world
++ * {@code WorldConfiguration} is created in the {@code ServerLevel} ctor,
++ * after STARTUP plugins, so no level instance exists yet). When the target
++ * is LINEAR and old-format ({@code .mca}) files are present, each storage
++ * folder ({@code region/}, {@code entities/}, {@code poi/}) converts via the
++ * NMS entry point, which fronts the retry machinery. A folder that exhausts
++ * retries raises the protection exception: the pass logs a terminal alert
++ * with full per-file detail, halts the server, and returns {@code false} so
++ * the caller aborts boot before plugins load.</p>
++ *
++ * <p>P1 safety: explicit-ANVIL worlds (and unreadable configs, which fail
++ * closed to ANVIL) never convert; dual-read keeps serving them.</p>
++ *
++ * <p>HIGH-4 halt-aborts-boot guarantee: a {@code false} return means the
++ * server was halted by a protection trip, and the {@code DedicatedServer}
++ * call site returns {@code false} from {@code initServer} at once, so NO
++ * plugin code ({@code STARTUP} or {@code POSTWORLD}) executes afterwards.</p>
++ */
++public final class LinearStartupConversion {
++
++    private static final Logger LOGGER = LogUtils.getClassLogger();
++
++    // Storage folders converted per dimension (folder names match WorldUpgrader).
++    private static final List<String> STORAGE_FOLDERS = List.of("region", "entities", "poi");
++
++    private LinearStartupConversion() {
++    }
++
++    /**
++     * Conversion pass entry point. Synchronous and blocking: boot waits while
++     * folders convert (no scheduler exists yet and no plugin is loaded, so
++     * correctness requires blocking the boot thread here).
++     *
++     * @return {@code true} when the pass finished without tripping protection
++     *     (boot may continue to plugin load); {@code false} when a protection
++     *     trip halted the server — the caller must abort boot immediately.
++     */
++    public static boolean runPrePluginConversion(final MinecraftServer server) {
++        // Linear - the /linear convert queue is in-memory only: name the drop once per boot.
++        LOGGER.info(net.linear.command.JobQueue.droppedByRestartLine(0));
++        final var stemRegistry = server.registryAccess().lookupOrThrow(Registries.LEVEL_STEM);
++        for (final LevelStem stem : stemRegistry) {
++            if (!server.isRunning()) {
++                // Protection halt fired in an earlier dimension: stop the pass.
++                return false;
++            }
++            final ResourceKey<LevelStem> stemKey = stemRegistry.getResourceKey(stem).orElse(null);
++            if (stemKey == null) {
++                continue;
++            }
++            if (!convertDimension(server, stemKey)) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    /**
++     * Converts one dimension's storage folders when its target is LINEAR.
++     *
++     * @return {@code false} when protection tripped (terminal alert logged and
++     *     server halted; boot must abort, no further folders or dimensions run).
++     */
++    private static boolean convertDimension(final MinecraftServer server, final ResourceKey<LevelStem> stemKey) {
++        final ResourceKey<Level> dimensionKey = PaperWorldLoader.dimensionKey(stemKey);
++        final Path worldFolder = server.storageSource.getDimensionPath(dimensionKey);
++        final WorldConfiguration worldConfig = readWorldConfig(server, worldFolder, dimensionKey);
++        if (worldConfig == null) {
++            // Config unreadable: fail closed (treat as ANVIL, convert nothing).
++            LOGGER.warn("[Linear] Startup conversion: could not read world config for {}, skipping (treating as ANVIL).", worldFolder);
++            return true;
++        }
++        // P1 SAFETY INVARIANT (negative assertion): resolveTargetFormat returns
++        // ANVIL for explicit-ANVIL worlds (and for unset/invalid values), and
++        // conversion below runs ONLY when the returned target is LINEAR. Hence
++        // NO explicit-ANVIL path can reach conversion: dual-read (.mca
++        // preferred, negative cache means neither) keeps serving those worlds.
++        final net.linear.RegionFileFormat target = RegionStorageUpgrader.resolveTargetFormat(
++            worldFolder, worldConfig.regionFormat == null ? null : worldConfig.regionFormat.format);
++        if (target != net.linear.RegionFileFormat.LINEAR) {
++            return true;
++        }
++        // Same configured level the live write side uses (B1's tuned default flows
++        // via the shared constant, never a literal).
++        final int compressionLevel = worldConfig.regionFormat != null && worldConfig.regionFormat.linear != null
++            ? worldConfig.regionFormat.linear.compressionLevel
++            : AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL;
++        for (final String folderName : STORAGE_FOLDERS) {
++            final Path folder = worldFolder.resolve(folderName);
++            if (!Files.isDirectory(folder) || !RegionStorageUpgrader.needsConversion(folder)) {
++                continue;
++            }
++            LOGGER.info("[Linear] Startup conversion: converting {} to LINEAR (level {})...", folder, compressionLevel);
++            try {
++                final LinearRegionConverter.ConversionSummary summary = RegionStorageUpgrader.convertFolderToLinear(
++                    folder, compressionLevel, new LogListener(folder));
++                LOGGER.info("[Linear] Startup conversion done: {} (converted={}, validated={}, deleted={}, failed={}).",
++                    folder, summary.converted(), summary.validated(), summary.deleted(), summary.failed());
++            } catch (final LinearRegionConverter.ConversionProtectionException ex) {
++                // Terminal alert: full per-file detail from the summary, then
++                // HALT before plugins load (same halt call as the
++                // broken-symlink guard in RegionFileStorage). Returning false
++                // makes the DedicatedServer call site abort initServer, so no
++                // plugin code runs after this trip.
++                final LinearRegionConverter.ConversionSummary summary = ex.getSummary();
++                LOGGER.error("[Linear] Startup conversion PROTECTION HALT: {} file(s) failed in {} after 3 attempts;"
++                    + " stopping the server before plugins load (converted={}, validated={}, deleted={}, failed={}).",
++                    summary.failures().size(), folder,
++                    summary.converted(), summary.validated(), summary.deleted(), summary.failed());
++                for (final LinearRegionConverter.FileResult failure : summary.failures()) {
++                    LOGGER.error("[Linear] Startup conversion failure: {} -> {} [{}] {}",
++                        failure.source(), failure.target(), failure.status(), failure.detail());
++                }
++                server.halt(false);
++                return false;
++            } catch (final RuntimeException ex) {
++                // Unexpected error: fail closed per folder (remaining .mca files
++                // stay dual-readable; nothing hidden, nothing half-wired).
++                LOGGER.error("[Linear] Startup conversion: unexpected error converting {}; skipping folder.", folder, ex);
++            }
++        }
++        return true;
++    }
++
++    // Reads the effective per-world config via the already-initialized Paper
++    // configuration API (global + world-defaults init ran before the trigger).
++    // Merges world-defaults under the world file exactly like the ServerLevel
++    // path does (creating an empty paper-world.yml for brand-new worlds, which
++    // the later ServerLevel load would create anyway). Null when unreadable.
++    private static WorldConfiguration readWorldConfig(
++        final MinecraftServer server, final Path worldFolder, final ResourceKey<Level> dimensionKey
++    ) {
++        try {
++            final SpigotWorldConfig spigotConfig = PaperConfigurations.SPIGOT_WORLD_DEFAULTS.get();
++            final var contextMap = PaperConfigurations.createWorldContextMap(
++                worldFolder,
++                dimensionKey.identifier(),
++                spigotConfig,
++                server.registryAccess(),
++                MinecraftServer.DEFAULT_GAME_RULES.get());
++            return server.paperConfigurations.createWorldConfig(contextMap);
++        } catch (final Exception ex) {
++            LOGGER.warn("[Linear] Startup conversion: failed to read world config for {}", worldFolder, ex);
++            return null;
++        }
++    }
++
++    // Listener for the conversion contract: per-file progress stays at debug
++    // (folder totals log at INFO at the call site); retries always warn.
++    private static final class LogListener implements LinearRegionConverter.Listener {
++        private final Path folder;
++
++        private LogListener(final Path folder) {
++            this.folder = folder;
++        }
++
++        @Override
++        public void onFile(final LinearRegionConverter.FileResult result) {
++            LOGGER.debug("[Linear] Startup conversion: {} -> {} [{}]",
++                result.source(), result.target(), result.status());
++        }
++
++        @Override
++        public void onRetry(final Path source, final int attempt, final String reason) {
++            LOGGER.warn("[Linear] Startup conversion: retry {}/3 for {} in {} ({})",
++                attempt, source, this.folder, reason);
++        }
++    }
++}
+-- 
+2.43.0

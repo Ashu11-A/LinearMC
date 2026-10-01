@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/world/entity/ai/village/poi/PoiManager.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/world/entity/ai/village/poi/PoiManager.java b/net/minecraft/world/entity/ai/village/poi/PoiManager.java
+--- a/net/minecraft/world/entity/ai/village/poi/PoiManager.java
++++ b/net/minecraft/world/entity/ai/village/poi/PoiManager.java
+@@ -181,10 +181,16 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> im
+         final boolean sync,
+         final RegistryAccess registryAccess,
+         final ChunkIOErrorReporter errorReporter,
+-        final LevelHeightAccessor levelHeightAccessor
++        final LevelHeightAccessor levelHeightAccessor,
++        final net.linear.RegionFileFormat format, // Linear - threaded from ChunkMap (world config)
++        final int linearCompression, // Linear - linear zstd level
++        final boolean linearCrashOnBrokenSymlink // Linear - broken-symlink flag
+     ) {
+         super(
+-            new SimpleRegionStorage(info, folder, fixerUpper, sync, DataFixTypes.POI_CHUNK),
++            // Linear - format-aware storage. Note 26.1.2 PoiManager HAS-A
++            // SimpleRegionStorage (built here), so no SectionStorage
++            // constructor change is needed.
++            new SimpleRegionStorage(info, folder, fixerUpper, sync, DataFixTypes.POI_CHUNK, format, linearCompression, linearCrashOnBrokenSymlink),
+             PoiSection.Packed.CODEC,
+             PoiSection::pack,
+             PoiSection.Packed::unpack,

@@ -1,0 +1,9 @@
+# Canvas upstream pin (template — fill in once the Canvas base branch is chosen)
+
+# Copy to upstream.canvas.properties once the Canvas base branch is chosen.
+# Do NOT duplicate the Folia pin here; Folia stays in upstream.properties.
+CANVAS_REPO=https://github.com/CraftCanvasMC/Canvas.git
+CANVAS_BRANCH=main
+# Replace with the full 40-char SHA the Canvas patches are rebased onto.
+CANVAS_REF=4a0ed14a386f20d8f7992103dc71130bc2641209
+MC_VERSION=26.1.2

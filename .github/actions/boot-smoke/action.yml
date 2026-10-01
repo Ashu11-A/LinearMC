@@ -1,0 +1,109 @@
+name: boot-smoke
+description: >
+  Boot a built paperclip jar once (fast: boot-and-wait.sh kills the server as
+  soon as `Done (` lands instead of idling a fixed `timeout 300`), then assert
+  the LINEAR dispatch property for that boot. One boot per call; callers stack
+  calls for multi-boot flows (canvas ANVIL = anvil boot + convert reboot).
+  Owned by the build workflow (G2) — never duplicate smoke logic inline.
+
+inputs:
+  server:
+    description: "Server leg: 'folia' or 'canvas' (selects the config file the format preseed is written to)."
+    required: true
+  jar:
+    description: Path (or glob) of the paperclip jar to boot; the first match wins.
+    required: true
+  name:
+    description: Smoke directory name (created under GITHUB_WORKSPACE) and log prefix.
+    required: true
+  format:
+    description: "Region format to preseed before boot: 'none' (server default), 'ANVIL', or 'LINEAR'."
+    required: false
+    default: none
+  expect-text:
+    description: Optional string that must appear in the boot log (e.g. 'Startup conversion done').
+    required: false
+    default: ''
+  expect-linear:
+    description: "'absent' (no .linear may exist), 'present' (at least one required), or 'any' (no assertion)."
+    required: false
+    default: any
+  expect-mca:
+    description: "'absent' (no .mca may remain), or 'any' (no assertion)."
+    required: false
+    default: any
+  linear-lenient:
+    description: "When 'true' and expect-linear is 'present', a missing .linear only warns (idle worlds write nothing) instead of failing."
+    required: false
+    default: 'false'
+  timeout-secs:
+    description: Cap for boot-and-wait.sh (server is killed on Done long before this except on failure).
+    required: false
+    default: '240'
+
+runs:
+  using: composite
+  steps:
+    - name: Boot + assert (${{ inputs.name }})
+      shell: bash
+      env:
+        SERVER: ${{ inputs.server }}
+        JAR: ${{ inputs.jar }}
+        SMOKE_NAME: ${{ inputs.name }}
+        FORMAT: ${{ inputs.format }}
+        EXPECT_TEXT: ${{ inputs.expect-text }}
+        EXPECT_LINEAR: ${{ inputs.expect-linear }}
+        EXPECT_MCA: ${{ inputs.expect-mca }}
+        LINEAR_LENIENT: ${{ inputs.linear-lenient }}
+        TIMEOUT_SECS: ${{ inputs.timeout-secs }}
+        # The helper lives in the bootstrap checkout (repo root), NOT in the
+        # supplement copy this action is loaded from: github.action_path
+        # points under supplement/, so resolve from GITHUB_WORKSPACE.
+        HELPER: ${{ github.workspace }}/.github/scripts/boot-and-wait.sh
+      run: |
+        # Resolve the jar glob BEFORE cd (paths are workspace-relative).
+        # NOTE: the $JAR operand MUST stay unquoted (glob expansion);
+        # only the workspace prefix is quoted.
+        # shellcheck disable=SC2086
+        JAR="$(ls "$GITHUB_WORKSPACE"/$JAR | head -1)"
+        test -f "$JAR" || { echo "::error::paperclip jar missing: ${{ inputs.jar }}"; exit 1; }
+        test -x "$HELPER" || { echo "::error::boot helper missing/not executable: $HELPER"; exit 1; }
+        DIR="$GITHUB_WORKSPACE/$SMOKE_NAME"
+        mkdir -p "$DIR" && cd "$DIR"
+        printf 'online-mode=false\nlevel-name=world\n' > server.properties
+        # Preseed the region format BEFORE boot (fresh dir: no world/ exists
+        # yet, so the per-world file is written sparsely — Paper/Canvas merge
+        # missing keys with defaults; never append-blindly to a live file).
+        if [ "$FORMAT" != "none" ]; then
+          if [ "$SERVER" = "canvas" ]; then
+            mkdir -p config
+            printf 'region-format:\n  format: "%s"\n' "$FORMAT" > config/canvas-worlds.yml
+          else
+            mkdir -p world
+            printf 'region-format:\n  format: %s\n' "$FORMAT" > world/paper-world.yml
+          fi
+          echo "boot-smoke: preseeded $FORMAT"
+        fi
+        bash "$HELPER" "$JAR" "$DIR" "$SMOKE_NAME.log" "$TIMEOUT_SECS"
+        if [ -n "$EXPECT_TEXT" ]; then
+          grep -q "$EXPECT_TEXT" "$SMOKE_NAME.log" \
+            || { echo "::error::expected text missing: $EXPECT_TEXT"; tail -n 40 "$SMOKE_NAME.log"; exit 1; }
+          echo "boot-smoke: found '$EXPECT_TEXT'"
+        fi
+        LINEAR_N="$(find world -name '*.linear' 2>/dev/null | wc -l)"
+        MCA_N="$(find world -name '*.mca' 2>/dev/null | wc -l)"
+        echo "boot-smoke: .linear=$LINEAR_N .mca=$MCA_N"
+        if [ "$EXPECT_LINEAR" = "absent" ] && [ "$LINEAR_N" -ne 0 ]; then
+          echo "::error::.linear files exist under a non-LINEAR boot:"; find world -name '*.linear'; exit 1
+        fi
+        if [ "$EXPECT_LINEAR" = "present" ] && [ "$LINEAR_N" -eq 0 ]; then
+          if [ "$LINEAR_LENIENT" = "true" ]; then
+            echo "::warning::No .linear emitted (an idle world writes nothing)"
+          else
+            echo "::error::conversion wrote no .linear"; exit 1
+          fi
+        fi
+        if [ "$EXPECT_MCA" = "absent" ] && [ "$MCA_N" -ne 0 ]; then
+          echo "::error::.mca files remain after conversion:"; find world -name '*.mca'; exit 1
+        fi
+        echo "boot-smoke: $SMOKE_NAME OK"

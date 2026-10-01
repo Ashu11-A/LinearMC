@@ -1,0 +1,132 @@
+name: stage-overlay
+description: >
+  Stage the Canvas Linear overlay onto a weaver-APPLIED tree (must run AFTER
+  applyAllPatches generates canvas-server/build.gradle.kts and
+  paper-server/). Implements versions/servers/26.1.x/canvasmc/OVERLAY.md:
+  every patch family is --check-gated before application so upstream drift
+  fails loudly instead of landing half-applied. Stable matrix id `canvas`
+  maps to the `canvasmc/` leg dir. Never stage pre-apply: the generated
+  dirs do not exist yet and weaver output generation must not meet stray
+  files. Core copy (step 2) is root-relative (linear-core/ at repo root)
+  and needs no leg-path change.
+
+inputs:
+  version:
+    description: Server line folder under versions/servers/ (e.g. '26.1.x'). Comes from the discover matrix.
+    required: true
+  supplement-dir:
+    description: Path to the already-checked-out supplement repo.
+    required: false
+    default: supplement
+  canvas-dir:
+    description: Directory holding the applied Canvas checkout (weaver apply already run).
+    required: false
+    default: folia
+  include-tests:
+    description: Stage tests/** into canvas-server/src/test/java (preserving packages). Keep 'true' for compile/test jobs.
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Stage Canvas overlay (check-gated)
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        SUPPLEMENT_DIR: ${{ inputs.supplement-dir }}
+        CANVAS_DIR: ${{ inputs.canvas-dir }}
+        INCLUDE_TESTS: ${{ inputs.include-tests }}
+      run: |
+        LEG="$SUPPLEMENT_DIR/versions/servers/$VERSION/canvasmc"
+        test -f "$LEG/OVERLAY.md" || { echo "::error::Missing $LEG/OVERLAY.md"; exit 1; }
+        # Absolute paths from here on: `git -C <dir> apply <patch>` resolves
+        # the patch file against the -C directory, NOT the invoking cwd, so
+        # relative supplement paths die with "can't open patch" (observed).
+        LEG="$(cd "$LEG" && pwd)"
+        CANVAS_DIR="$(cd "$CANVAS_DIR" && pwd)"
+        test -d "$CANVAS_DIR/paper-server/src/main/java" || { echo "::error::$CANVAS_DIR/paper-server missing: run applyAllPatches before stage-overlay"; exit 1; }
+        test -d "$CANVAS_DIR/canvas-server/src/minecraft/java" || { echo "::error::$CANVAS_DIR/canvas-server/src/minecraft missing: run applyAllPatches before stage-overlay"; exit 1; }
+        # 1. NMS overlay (18): check ALL, then apply ALL (never half-apply).
+        for p in "$LEG"/overlay/nms/*.patch; do
+          git -C "$CANVAS_DIR/canvas-server/src/minecraft/java" apply --check -p1 "$p" \
+            || { echo "::error::NMS overlay --check failed: $p"; exit 1; }
+        done
+        for p in "$LEG"/overlay/nms/*.patch; do
+          git -C "$CANVAS_DIR/canvas-server/src/minecraft/java" apply -p1 --whitespace=nowarn "$p" \
+            || { echo "::error::NMS overlay apply failed: $p"; exit 1; }
+        done
+        # 2. Core sources (single codebase: linear-core owns all net.linear classes).
+        # Each module contributes its top-level net/linear/*.java plus any
+        # subpackage trees (command/, config/) preserving relative paths.
+        # Destination layout is unchanged: net/linear/ flat + subpackages.
+        mkdir -p "$CANVAS_DIR/canvas-server/src/main/java/net/linear"
+        for m in "$SUPPLEMENT_DIR"/linear-core/*/src/net/linear; do
+          for f in "$m"/*.java; do
+            [ -f "$f" ] || continue
+            cp "$f" "$CANVAS_DIR/canvas-server/src/main/java/net/linear/"
+          done
+          for sub in "$m"/*/; do
+            [ -d "$sub" ] || continue
+            subname="$(basename "$sub")"
+            mkdir -p "$CANVAS_DIR/canvas-server/src/main/java/net/linear/$subname"
+            for f in "$sub"/*.java; do
+              [ -f "$f" ] || continue
+              cp "$f" "$CANVAS_DIR/canvas-server/src/main/java/net/linear/$subname/"
+            done
+          done
+        done
+        # 3. Paper-side new files (verbatim). The leg stores them as
+        # paper-server/src/main/java/**; strip that prefix so they land on
+        # the module path (a bare paper-server/** layout keeps working too).
+        P_SRC="$LEG/paper-server"
+        [ -d "$P_SRC/src/main/java" ] && P_SRC="$P_SRC/src/main/java"
+        (cd "$P_SRC" && find . -name '*.java' | while read -r f; do
+          mkdir -p "$CANVAS_DIR/paper-server/src/main/java/$(dirname "$f")"
+          cp "$f" "$CANVAS_DIR/paper-server/src/main/java/$f"
+        done)
+        # 4. Paper-side modifications (check-gated).
+        for p in "$LEG"/overlay/paper/*.patch; do
+          git -C "$CANVAS_DIR/paper-server" apply --check -p1 "$p" \
+            || { echo "::error::paper overlay --check failed: $p"; exit 1; }
+        done
+        for p in "$LEG"/overlay/paper/*.patch; do
+          git -C "$CANVAS_DIR/paper-server" apply -p1 --whitespace=nowarn "$p" \
+            || { echo "::error::paper overlay apply failed: $p"; exit 1; }
+        done
+        # 5. Canvas config (git-derived paths, check-gated).
+        for p in "$LEG"/overlay/config/*.patch; do
+          git -C "$CANVAS_DIR" apply --check -p1 "$p" \
+            || { echo "::error::config overlay --check failed: $p"; exit 1; }
+        done
+        for p in "$LEG"/overlay/config/*.patch; do
+          git -C "$CANVAS_DIR" apply -p1 --whitespace=nowarn "$p" \
+            || { echo "::error::config overlay apply failed: $p"; exit 1; }
+        done
+        # 6. zstd dep (generated build file exists only post-apply).
+        python3 - "$CANVAS_DIR/canvas-server/build.gradle.kts" <<'EOF'
+        import re, sys
+        p = sys.argv[1]
+        s = open(p).read()
+        dep = '    implementation("com.github.luben:zstd-jni:1.5.6-8") // Linear - whole-region zstd (same coordinate as the Folia leg)\n'
+        if 'zstd-jni' not in s:
+            # Prefix anchor: the httpclient version floats across lines
+            # (1.0.0 on 26.1, 1.0.1 on 26.2); match the coordinate, not the version.
+            m = re.search(r'    implementation\("io\.canvasmc\.httpclient:httpclient:[^"]+"\)\n', s)
+            assert m, 'zstd anchor moved; update stage-overlay wiring'
+            anchor = m.group(0)
+            open(p, 'w').write(s.replace(anchor, anchor + dep))
+            print('stage-overlay: zstd dep added')
+        else:
+            print('stage-overlay: zstd dep present')
+        EOF
+        # 7. Tests (package tree preserved; canvas-server/src/test/java is the
+        # module's own test source set — Canvas 26.2 dropped the folia-server
+        # test-srcDir wiring, and Canvas has no folia-server module).
+        if [ "$INCLUDE_TESTS" = "true" ]; then
+          (cd "$LEG/tests" && find . -name '*.java' | while read -r f; do
+            mkdir -p "$CANVAS_DIR/canvas-server/src/test/java/$(dirname "$f")"
+            cp "$f" "$CANVAS_DIR/canvas-server/src/test/java/$f"
+          done)
+        fi
+        echo "stage-overlay: done ($(ls "$LEG"/overlay/nms/*.patch | wc -l) nms, $(ls "$LEG"/overlay/paper/*.patch | wc -l) paper, $(ls "$LEG"/overlay/config/*.patch | wc -l) config)"

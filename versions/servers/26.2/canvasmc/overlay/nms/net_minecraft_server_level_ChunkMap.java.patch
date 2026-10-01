@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/level/ChunkMap.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch, minecraft-0017-Linear-save-drain.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -185,14 +185,20 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         final Supplier<SavedDataStorage> overworldDataStorage,
+         final TicketStorage ticketStorage,
+         final int serverViewDistance,
+-        final boolean syncWrites
++        final boolean syncWrites,
++        final net.linear.RegionFileFormat format, // Linear - world region format (wired from world config; ANVIL default at call site)
++        final int linearCompression, // Linear - linear zstd level
++        final boolean linearCrashOnBrokenSymlink // Linear - broken-symlink flag
+     ) {
+         super(
+             new RegionStorageInfo(levelStorage.getLevelId(), level.dimension(), "chunk"),
+             levelStorage.getDimensionPath(level.dimension()).resolve("region"),
+             dataFixer,
+             syncWrites,
+-            DataFixTypes.CHUNK
++            DataFixTypes.CHUNK,
++            format, // Linear
++            linearCompression, // Linear
++            linearCrashOnBrokenSymlink // Linear
+         );
+         Path storageFolder = levelStorage.getDimensionPath(level.dimension());
+         this.storageName = storageFolder.getFileName().toString();
+@@ -234,7 +234,10 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+             syncWrites,
+             registryAccess,
+             level.getServer(),
+-            level
++            level,
++            format, // Linear
++            linearCompression, // Linear
++            linearCrashOnBrokenSymlink // Linear
+         );
+         this.setServerViewDistance(serverViewDistance);
+         this.worldGenContext = new WorldGenContext(level, generator, structureManager, this.lightEngine, null, this::setChunkUnsaved); // Paper - rewrite chunk system
+@@ -441,6 +441,12 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+     private void processUnloads(final BooleanSupplier haveTime) {
+         ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.processUnloads(); // Paper - rewrite chunk system
+         ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.autoSave(); // Paper - rewrite chunk system
++        // Linear - periodic drain, fire-and-forget (async split): Moonrise
++        // unload/autosave marks linear files dirty but nothing flushes them
++        // (vanilla save paths are bypassed). Submit the age-gated batch without
++        // joining so the tick never blocks; cheap no-op when young/clean;
++        // per-folder failures logged, never thrown.
++        net.linear.LinearFlushCoordinator.flushDirtyAsync(false);
+     }
+ 
+     private void saveChunksEagerly(final BooleanSupplier haveTime) {

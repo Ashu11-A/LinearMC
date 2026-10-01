@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/Main.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/server/Main.java b/net/minecraft/server/Main.java
+--- a/net/minecraft/server/Main.java
++++ b/net/minecraft/server/Main.java
+@@ -112,9 +112,12 @@ public class Main {
+             DedicatedServerSettings settings = new DedicatedServerSettings(options); // CraftBukkit - CLI argument support
+             settings.forceSave();
+             // Paper start
++            // Linear - upgrade/recreate path restored.
++            // RegionFileVersion.configure below still runs before boot, so the upgrader
++            // write path recompresses through the selected version (deflate after the
++            // revert flip). PaperWorldLoader.loadInitialWorld performs the upgrade.
+             if (options.has("forceUpgrade") || options.has("recreateRegionFiles")) {
+-                LOGGER.error("World upgrade and region file recreation are not yet implemented in Paper 26.1.");
+-                return;
++                LOGGER.warn("World upgrade and/or region file recreation requested; running upgrade path during boot.");
+             }
+             // Paper end
+             RegionFileVersion.configure(settings.getProperties().regionFileComression);
+@@ -430,10 +430,8 @@ public class Main {
+         final RegistryAccess registryAccess,
+         final boolean recreateRegionFiles
+     ) {
+-        throw new UnsupportedOperationException(
+-            "World upgrade and region file recreation are not yet implemented in Paper 26.1."
+-        );
+-        /*
++        // Linear - un-stubbed (was UnsupportedOperationException). Restores the
++        // vanilla WorldUpgrader loop so --forceUpgrade/--recreateRegionFiles work.
+         LOGGER.info("Forcing world upgrade! {}", storageSource.getLevelId()); // CraftBukkit
+ 
+         try (WorldUpgrader upgrader = new WorldUpgrader(storageSource, fixerUpper, registryAccess, eraseCache, recreateRegionFiles)) {
+@@ -460,6 +460,5 @@ public class Main {
+                 }
+             }
+         }
+-        */
+     }
+ }

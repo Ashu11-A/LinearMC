@@ -1,0 +1,1138 @@
+From 51276d4fa0cb220e19867e8f1ca1a7907d886d81 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 15:46:20 -0300
+Subject: [PATCH] Linear linearstats
+
+Paper-side linearstats readout: a Bukkit command showing per-folder
+timing snapshots, a shared folder-identity helper, async flush-completion
+events (Bukkit and Paper-native) plus a JDK-only stats delegate for
+plugins. Display is pull-only with no new storage fields and no extra
+threads; the bridge fires once per coordinator flush that attempted at
+least one file, dropping clean-no-op flushes, and ships a sync entry
+point for the server-internal save path alongside the async one.
+
+Plus the /linear command tree (stats/convert/queue/help) as a thin Paper
+leg over command: stats reuses the byte-exact linearstats panel,
+convert plans by default and runs --execute on a daemon
+worker behind a quiesce gate (both directions via core JobRunner),
+queue mutates the in-memory JobQueue singleton.
+---
+ .../paper/command/CommandLinear.java          | 391 +++++++++++++++++++++++++++++++++++++
+ .../paper/command/CommandLinearStats.java     | 152 ++++++++++++++++++
+ .../papermc/paper/command/PaperCommands.java  |   2 ++
+ .../LinearRegionFlushCompletedEvent.java      | 123 +++++++++
+ .../paper/linear/LinearFlushBridge.java       | 121 +++++++++
+ .../paper/linear/LinearFolderNames.java       |  41 +++
+ .../io/papermc/paper/linear/LinearStats.java  | 155 +++++++++++
+ .../LinearRegionFlushCompletedEvent.java      |   94 +++++++
+ 8 files changed, 1087 insertions(+)
+ create mode 100644 src/main/java/io/papermc/paper/command/CommandLinear.java
+ create mode 100644 src/main/java/io/papermc/paper/command/CommandLinearStats.java
+ create mode 100644 src/main/java/io/papermc/paper/event/linear/LinearRegionFlushCompletedEvent.java
+ create mode 100644 src/main/java/io/papermc/paper/linear/LinearFlushBridge.java
+ create mode 100644 src/main/java/io/papermc/paper/linear/LinearFolderNames.java
+ create mode 100644 src/main/java/io/papermc/paper/linear/LinearStats.java
+ create mode 100644 src/main/java/org/bukkit/event/world/LinearRegionFlushCompletedEvent.java
+
+diff --git a/src/main/java/io/papermc/paper/command/CommandLinearStats.java b/src/main/java/io/papermc/paper/command/CommandLinearStats.java
+new file mode 100644
+index 000000000..2e84b0b81
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/command/CommandLinearStats.java
+@@ -0,0 +1,172 @@
++package io.papermc.paper.command;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
++import java.util.Optional;
++import net.linear.LinearFlushCoordinator;
++import net.linear.LinearRegionTimings;
++import net.linear.command.LinearStatsCompact;
++import net.linear.command.LinearStatsHealth;
++import net.kyori.adventure.text.Component;
++import net.kyori.adventure.text.format.NamedTextColor;
++import net.kyori.adventure.text.format.TextDecoration;
++import org.bukkit.Bukkit;
++import org.bukkit.command.Command;
++import org.bukkit.command.CommandSender;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Linear linearstats: compact pull-only Adventure panel (proposal A).
++ *
++ * <p>One row per folder with an inline world tag, e.g.
++ * {@code world L6 reg d12/512 f0 p99 12.3ms 42% 3.1s W4.2s}.
++ * No printf-aligned columns: Minecraft chat is proportional, so alignment
++ * would not hold visually. Plain text comes from the JDK-only
++ * {@link LinearStatsCompact}; this leg only maps health to colour:
++ * {@code OK/WARN/CRIT -> GREEN/YELLOW/RED}, worlds/levels/numbers BLUE,
++ * unknown {@code na} gray. Empty state keeps the exact legacy line.
++ * Permission stays {@code linear.command.linearstats}.</p>
++ */
++public class CommandLinearStats extends Command {
++
++    public CommandLinearStats(@NotNull String name) {
++        super(name);
++        this.setDescription("Shows Linear region timing stats (per-folder + totals)");
++        this.setUsage("/linearstats");
++        this.setPermission("linear.command.linearstats");
++        this.setPermissionMessage("You do not have permission to use linearstats.");
++    }
++
++    @Override
++    public boolean execute(@NotNull CommandSender sender, @NotNull String commandLabel, @NotNull String[] args) {
++        if (!this.testPermission(sender)) {
++            return false;
++        }
++        Map<String, LinearRegionTimings.LinearFolderSnapshot> snaps = LinearFlushCoordinator.snapshots();
++        Optional<String> filter = args.length > 0 && args[0] != null && !args[0].isEmpty()
++            ? Optional.of(args[0]) : Optional.empty();
++        List<LinearStatsCompact.CompactRow> rows = LinearStatsCompact.renderCompact(
++            snaps, filter, CommandLinearStats::resolveCompressionLevel);
++        for (LinearStatsCompact.CompactRow row : rows) {
++            sender.sendMessage(render(row));
++        }
++        return true;
++    }
++
++    static Component render(LinearStatsCompact.CompactRow row) {
++        switch (row.kind()) {
++            case EMPTY:
++                return Component.text(row.text(), NamedTextColor.GRAY);
++            case HEADER:
++                return Component.text(row.text(), NamedTextColor.GOLD, TextDecoration.BOLD);
++            case TOTALS:
++                return totalsRow(row);
++            default:
++                return folderRow(row);
++        }
++    }
++
++    private static Component folderRow(LinearStatsCompact.CompactRow row) {
++        Map<String, String> p = row.parts();
++        Map<String, LinearStatsHealth> h = row.health();
++        return Component.text(p.getOrDefault("world", ""), NamedTextColor.BLUE)
++            .append(Component.text(" L" + p.getOrDefault("level", "?"), NamedTextColor.BLUE))
++            .append(Component.text(" " + p.getOrDefault("type", ""), NamedTextColor.GRAY))
++            .append(Component.text(" " + p.getOrDefault("dirty", ""), healthColor(h.get("dirty"))))
++            .append(Component.text(" " + p.getOrDefault("fail", ""), healthColor(h.get("fail"))))
++            .append(Component.text(" " + p.getOrDefault("p99", ""), healthColor(h.get("p99"))))
++            .append(Component.text(" " + p.getOrDefault("saved", "na"),
++                h.containsKey("saved") ? healthColor(h.get("saved")) : NamedTextColor.GRAY))
++            .append(Component.text(" " + p.getOrDefault("age", ""), NamedTextColor.BLUE))
++            .append(Component.text(" " + p.getOrDefault("wage", ""), NamedTextColor.BLUE));
++    }
++
++    private static Component totalsRow(LinearStatsCompact.CompactRow row) {
++        Map<String, String> p = row.parts();
++        Map<String, LinearStatsHealth> h = row.health();
++        String saved = p.getOrDefault("saved", "na");
++        String tail = row.text();
++        int at = tail.indexOf(saved);
++        String rest = at < 0 ? "" : tail.substring(at + saved.length());
++        return Component.text("TOTALS ", NamedTextColor.GOLD)
++            .append(Component.text(p.getOrDefault("files", ""), NamedTextColor.BLUE))
++            .append(Component.text(" " + p.getOrDefault("fail", ""), healthColor(h.get("fail"))))
++            .append(Component.text(" " + saved,
++                h.containsKey("saved") ? healthColor(h.get("saved")) : NamedTextColor.GRAY))
++            .append(Component.text(rest, NamedTextColor.BLUE));
++    }
++
++    static NamedTextColor healthColor(LinearStatsHealth health) {
++        if (health == null) {
++            return NamedTextColor.GRAY;
++        }
++        switch (health) {
++            case CRIT:
++                return NamedTextColor.RED;
++            case WARN:
++                return NamedTextColor.YELLOW;
++            default:
++                return NamedTextColor.GREEN;
++        }
++    }
++
++    /**
++     * Per-world compression level without assuming the folder parent equals
++     * the Bukkit world name. Folia stores dimensions at
++     * {@code .../dimensions/minecraft/<id>/region}, so the compact view's
++     * world tag yields the dimension id ({@code overworld},
++     * {@code the_nether}, {@code the_end}) while {@code Bukkit.getWorld}
++     * wants the level name. Try the direct name first, then match
++     * {@code ServerLevel.dimension().identifier().getPath()} across loaded
++     * worlds. Returns -1 (panel {@code L?}) when unresolvable; non-fatal.
++     */
++    private static int resolveCompressionLevel(String worldName) {
++        try {
++            org.bukkit.World direct = Bukkit.getWorld(worldName);
++            if (direct instanceof org.bukkit.craftbukkit.CraftWorld cw) {
++                return cw.getHandle().paperConfig().regionFormat.linear.compressionLevel;
++            }
++            for (org.bukkit.World w : Bukkit.getWorlds()) {
++                if (w instanceof org.bukkit.craftbukkit.CraftWorld cw) {
++                    final String dimPath;
++                    try {
++                        dimPath = cw.getHandle().dimension().identifier().getPath();
++                    } catch (RuntimeException e) {
++                        continue;
++                    }
++                    if (worldName.equals(dimPath)) {
++                        return cw.getHandle().paperConfig().regionFormat.linear.compressionLevel;
++                    }
++                }
++            }
++        } catch (RuntimeException ignored) {
++        }
++        return -1;
++    }
++
++    @Override
++    public @NotNull List<String> tabComplete(@NotNull CommandSender sender, @NotNull String alias, @NotNull String[] args) {
++        if (args.length > 1) {
++            return new ArrayList<>();
++        }
++        String prefix = args.length == 0 || args[0] == null ? "" : args[0];
++        List<String> out = new ArrayList<>();
++        try {
++            for (org.bukkit.World w : org.bukkit.Bukkit.getWorlds()) {
++                String name = w.getName();
++                if (name == null) {
++                    continue;
++                }
++                if (prefix.isEmpty() || (prefix.length() <= name.length()
++                    && name.regionMatches(true, 0, prefix, 0, prefix.length()))) {
++                    out.add(name);
++                }
++            }
++        } catch (RuntimeException empty) {
++            return new ArrayList<>();
++        }
++        java.util.Collections.sort(out);
++        return out;
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/command/CommandLinear.java b/src/main/java/io/papermc/paper/command/CommandLinear.java
+new file mode 100644
+index 000000000..7c1e5a9b2
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/command/CommandLinear.java
+@@ -0,0 +1,339 @@
++package io.papermc.paper.command;
++
++import java.io.File;
++import java.nio.file.Path;
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++import java.util.UUID;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import net.linear.LinearFlushCoordinator;
++import net.linear.LinearRegionConverter;
++import net.linear.LinearRegionTimings;
++import net.linear.command.ConvertDirection;
++import net.linear.command.ConvertJob;
++import net.linear.command.InvalidUsageException;
++import net.linear.command.JobQueue;
++import net.linear.command.JobState;
++import net.linear.command.LinearAction;
++import net.linear.command.LinearCommandExecutor;
++import net.linear.command.LinearCommandParser;
++import net.linear.command.LinearPermissions;
++import net.linear.command.LinearTabCompleter;
++import net.linear.command.StatsProvider;
++import net.linear.config.LinearPolicy;
++import org.bukkit.Bukkit;
++import org.bukkit.World;
++import org.bukkit.command.Command;
++import org.bukkit.command.CommandSender;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Linear {@code /linear} command tree (stats/convert/queue/help): thin Paper
++ * leg over command (single owner of the grammar, permissions and queue
++ * planning in {@code net.linear.command}).
++ *
++ * <p>Branch ownership: {@code stats} reuses the pinned
++ * {@code /linearstats} panel ({@link CommandLinearStats} stays untouched)
++ * by forwarding the grammar's optional world filter to it;
++ * {@code help} and
++ * {@code queue} (list/pause/resume/cancel/clear on the static
++ * {@link JobQueue} singleton) delegate to {@link LinearCommandExecutor};
++ * {@code convert} delegates submit hor planning to the executor too, then the
++ * leg drives execution.</p>
++ *
++ * <p>Permissions: no command-level node on purpose (each branch enforces its
++ * own {@link LinearPermissions} node; {@code help} is public). Usage errors
++ * print the parser {@code USAGE} text (already the tail of every
++ * {@link InvalidUsageException}).</p>
++ *
++ * <p>Convert execution (both directions {@code --execute}): the world
++ * folder resolves on the calling thread, then a dedicated daemon
++ * single-thread worker (never the tick thread) runs a quiesce gate
++ * ({@code flushAllDirty(true)} forced drain, abort unless every tracked
++ * folder reads {@code dirtyDepth == 0}) followed by
++ * {@code convertRegionFolder} per storage folder
++ * ({@code region/}, {@code entities/}, {@code poi/}, same set as the
++ * pre-plugin pass). The job moves {@code start/recordFile/complete/fail} on
++ * the worker; pause is polled in the per-file listener callback (the
++ * in-flight file always finishes first, converter pool threads pile into the
++ * pause loop as backpressure until resume); a terminal state (cancelled and
++ * friends) cannot interrupt the blocking pass, so late per-file records are
++ * dropped and the pre-existing terminal state wins.</p>
++ *
++ * <p>Dry-run only plans (candidate echo, nothing converted).
++ * Both directions {@code --execute} run on the worker via core
++ * {@code JobRunner} (direction switch owned by core).</p>
++ */
++public class CommandLinear extends Command {
++
++    /** Storage folders converted per world (same set as the pre-plugin pass). */
++    private static final List<String> STORAGE_FOLDERS = List.of("region", "entities", "poi");
++
++    /** Queue singleton: in-memory only (dropped on restart; boot logs the drop). */
++    private static final JobQueue QUEUE = new JobQueue();
++
++    /** Stats pull-through: coordinator snapshots (zero new storage, no threads). */
++    private static final StatsProvider STATS = LinearFlushCoordinator::snapshots;
++
++    /**
++     * Dedicated single-thread convert worker (daemon, never the tick thread).
++     * One pass at a time; further submits queue behind the running pass.
++     */
++    private static final ExecutorService CONVERT_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
++        final Thread thread = new Thread(r, "linear-convert");
++        thread.setDaemon(true);
++        return thread;
++    });
++
++    private final LinearCommandExecutor executor = new LinearCommandExecutor(QUEUE, STATS);
++
++    public CommandLinear(@NotNull String name) {
++        super(name);
++        this.setDescription("Linear region commands (stats/convert/queue/help)");
++        this.setUsage(LinearCommandParser.USAGE);
++        this.setPermissionMessage(LinearPermissions.denied("linear"));
++    }
++
++    @Override
++    public boolean execute(@NotNull CommandSender sender, @NotNull String commandLabel, @NotNull String[] args) {
++        final LinearAction action;
++        try {
++            action = new LinearCommandParser().parse(args);
++        } catch (InvalidUsageException bad) {
++            sender.sendMessage(bad.getMessage());
++            return true;
++        }
++        if (action instanceof LinearAction.StatsAction stats) {
++            // Single rendering path: call the pinned panel, never fork it.
++            final String[] statsArgs = stats.worldFilter()
++                .map(world -> new String[]{world})
++                .orElseGet(() -> new String[0]);
++            return new CommandLinearStats("linearstats").execute(sender, commandLabel, statsArgs);
++        }
++        if (action instanceof LinearAction.ConvertAction convert) {
++            return this.executeConvert(sender, convert);
++        }
++        this.executor.execute(adapt(sender), action);
++        return true;
++    }
++
++    /**
++     * Convert submit (core-owned) plus leg execution. The executor enforces
++     * permissions, enqueues exactly one job and messages the sender; the new
++     * job is found by queue diff (nothing new means denied: fail closed, no
++     * launch). Dry-run only echoes candidates; both directions
++     * {@code --execute} reach the background worker (core JobRunner
++     * switches on direction).
++     */
++    private boolean executeConvert(@NotNull CommandSender sender, @NotNull LinearAction.ConvertAction convert) {
++        final Set<UUID> before = jobIds();
++        this.executor.execute(adapt(sender), convert);
++        final ConvertJob job = newJobSince(before);
++        if (job == null) {
++            return true;
++        }
++        if (convert.dryRun()) {
++            echoCandidates(sender, convert.world(), convert.direction());
++            return true;
++        }
++        final World world = Bukkit.getWorld(convert.world());
++        if (world == null) {
++            final String unknown = "Unknown world '" + convert.world() + "'.";
++            job.start();
++            job.fail(unknown);
++            sender.sendMessage(unknown);
++            return true;
++        }
++        final Path worldFolder = world.getWorldFolder().toPath();
++        final String sysLevel = System.getProperty(LinearPolicy.SYSPROP_LEVEL);
++        final int level = LinearPolicy.resolveLevel(
++            sysLevel, convert.level(), net.linear.RegionFileFormat.DEFAULT_COMPRESSION_LEVEL);
++        if (sysLevel != null && level != convert.level()) {
++            sender.sendMessage(LinearPolicy.overrideLine(LinearPolicy.SYSPROP_LEVEL, sysLevel,
++                String.valueOf(convert.level()), String.valueOf(level), "global"));
++        }
++        sender.sendMessage(net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
++        CONVERT_EXECUTOR.execute(() -> runConvert(sender, job, level, worldFolder, convert.world(), convert.threads()));
++        return true;
++    }
++
++    /** Snapshot of queued job ids (single-threaded tick submit: exactly one new job appears). */
++    private static Set<UUID> jobIds() {
++        final Set<UUID> ids = new HashSet<>();
++        for (ConvertJob job : QUEUE.list()) {
++            ids.add(job.id());
++        }
++        return ids;
++    }
++
++    /** The single job submitted since {@code before}; null when none (denied) or ambiguous (fail closed). */
++    private static ConvertJob newJobSince(final Set<UUID> before) {
++        ConvertJob found = null;
++        for (ConvertJob job : QUEUE.list()) {
++            if (!before.contains(job.id())) {
++                if (found != null) {
++                    return null;
++                }
++                found = job;
++            }
++        }
++        return found;
++    }
++
++    /** Dry-run plan: candidate echo per storage folder (capped), nothing converted. */
++    private static void echoCandidates(@NotNull CommandSender sender, @NotNull String worldName, @NotNull ConvertDirection direction) {
++        final World world = Bukkit.getWorld(worldName);
++        if (world == null) {
++            sender.sendMessage("Dry-run plan: unknown world '" + worldName + "'.");
++            return;
++        }
++        final Path worldFolder = world.getWorldFolder().toPath();
++        final List<String> counts = new ArrayList<>();
++        final List<String> sample = new ArrayList<>();
++        int total = 0;
++        final String ext = direction == ConvertDirection.LINEAR_TO_MCA ? ".linear" : ".mca";
++        for (String folder : STORAGE_FOLDERS) {
++            final File dir = worldFolder.resolve(folder).toFile();
++            final String[] mca = dir.list((parent, name) -> name.endsWith(ext));
++            final int count = mca == null ? 0 : mca.length;
++            total += count;
++            counts.add(folder + "=" + count);
++            if (mca != null) {
++                for (String name : mca) {
++                    if (sample.size() < 20) {
++                        sample.add(folder + "/" + name);
++                    }
++                }
++            }
++        }
++        sender.sendMessage("Dry-run plan for '" + worldName + "': " + total
++            + " candidate " + ext + " file(s) (" + String.join(", ", counts) + "); nothing converted.");
++        for (String name : sample) {
++            sender.sendMessage("  " + name);
++        }
++        if (total > sample.size()) {
++            sender.sendMessage("  ... and " + (total - sample.size()) + " more.");
++        }
++    }
++
++    /**
++     * Background convert pass (worker thread, never tick): quiesce gate
++     * first, then core {@code JobRunner} over every storage folder
++     * (direction switch owned by core). Reverse jobs flip
++     * {@code LinearFormatOverride} to ANVIL so new writes land in
++     * {@code .mca} while unconverted {@code .linear} files keep serving
++     * reads through dual-read. Completion/failure notices reuse core
++     * {@code JobStatusView} templates and go to the originating sender
++     * (best-effort, falls back to the server log) and always to the log.
++     */
++    private static void runConvert(@NotNull CommandSender sender, @NotNull ConvertJob job, final int level, @NotNull Path worldFolder, @NotNull String worldName, final int threads) {
++        try {
++            job.start();
++        } catch (IllegalStateException alreadyTerminal) {
++            Bukkit.getLogger().info("[Linear] " + net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
++            return;
++        }
++        try {
++            LinearFlushCoordinator.flushAllDirty(true);
++        } catch (RuntimeException gate) {
++            final String reason = "quiesce flush failed: " + gate.getMessage();
++            failQuietly(job, reason);
++            tell(sender, net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
++            tell(sender, net.linear.command.JobStatusView.failedAction(reason));
++            return;
++        }
++        long dirty = 0L;
++        try {
++            for (LinearRegionTimings.LinearFolderSnapshot snapshot : STATS.snapshots().values()) {
++                dirty += Math.max(0, snapshot.dirtyDepth());
++            }
++        } catch (RuntimeException gate) {
++            final String reason = "quiesce snapshot failed: " + gate.getMessage();
++            failQuietly(job, reason);
++            tell(sender, net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
++            tell(sender, net.linear.command.JobStatusView.failedAction(reason));
++            return;
++        }
++        if (dirty > 0L) {
++            final String stillDirty = "quiesce gate: " + dirty + " file(s) still dirty after forced flush; retry when worlds are idle.";
++            failQuietly(job, stillDirty);
++            tell(sender, net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
++            tell(sender, net.linear.command.JobStatusView.failedAction(stillDirty));
++            return;
++        }
++        final java.util.List<Path> folders = new java.util.ArrayList<>();
++        for (String folder : STORAGE_FOLDERS) {
++            folders.add(worldFolder.resolve(folder));
++        }
++        final boolean reverse = job.direction() == ConvertDirection.LINEAR_TO_MCA;
++        if (reverse) {
++            net.linear.config.LinearFormatOverride.set(worldName, "ANVIL");
++            for (Path folderPath : folders) {
++                net.linear.config.LinearFormatOverride.set(folderPath.toString(), "ANVIL");
++            }
++        }
++        try {
++            net.linear.command.JobRunner.run(job, folders, level, threads);
++        } finally {
++            if (reverse) {
++                net.linear.config.LinearFormatOverride.clear(worldName);
++                for (Path folderPath : folders) {
++                    net.linear.config.LinearFormatOverride.clear(folderPath.toString());
++                }
++            }
++        }
++        final long nowMs = System.currentTimeMillis();
++        Bukkit.getLogger().info("[Linear] " + net.linear.command.JobStatusView.statusLine(job, nowMs));
++        tell(sender, net.linear.command.JobStatusView.statusLine(job, nowMs));
++        for (String line : net.linear.command.JobStatusView.detailLines(job, nowMs)) {
++            tell(sender, line);
++        }
++    }
++
++    /** Fails the job unless it already went terminal (operator cancel wins over failure). */
++    private static void failQuietly(@NotNull ConvertJob job, @NotNull String reason) {
++        try {
++            job.fail(reason);
++        } catch (IllegalStateException terminalWins) {
++            Bukkit.getLogger().info("[Linear] Convert job " + job.id() + " is already " + job.state()
++                + "; keeping terminal state over failure: " + reason);
++        }
++    }
++
++    /** Best-effort sender notice from the worker thread (falls back to the server log). */
++    private static void tell(@NotNull CommandSender sender, @NotNull String line) {
++        try {
++            sender.sendMessage(line);
++        } catch (RuntimeException lost) {
++            Bukkit.getLogger().info("[Linear] " + line);
++        }
++    }
++
++    /** Adapts the Bukkit sender to the core message sink (plain strings, no Adventure). */
++    private static net.linear.command.CommandSender adapt(@NotNull CommandSender sender) {
++        return new net.linear.command.CommandSender() {
++            @Override
++            public void sendMessage(final String message) {
++                sender.sendMessage(message);
++            }
++
++            @Override
++            public boolean hasPermission(final String permission) {
++                return sender.hasPermission(permission);
++            }
++
++            @Override
++            public String name() {
++                return sender.getName();
++            }
++        };
++    }
++
++    @Override
++    public @NotNull List<String> tabComplete(@NotNull CommandSender sender, @NotNull String alias, @NotNull String[] args) {
++        return LinearTabCompleter.suggest(args, QUEUE, () -> { try { final java.util.Set<String> names = new java.util.HashSet<>(); for (org.bukkit.World w : org.bukkit.Bukkit.getWorlds()) { names.add(w.getName()); } return names; } catch (RuntimeException empty) { return java.util.Collections.emptySet(); } });
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/command/PaperCommands.java b/src/main/java/io/papermc/paper/command/PaperCommands.java
+index 6dfd0b1a8..95b1a131e 100644
+--- a/src/main/java/io/papermc/paper/command/PaperCommands.java
++++ b/src/main/java/io/papermc/paper/command/PaperCommands.java
+@@ -26,5 +26,7 @@ public final class PaperCommands {
+         COMMANDS.put("mspt", new MSPTCommand("mspt"));
+         COMMANDS.put("tps", new io.papermc.paper.threadedregions.commands.CommandServerHealth()); // Folia - region threading
+         COMMANDS.put("profiler", new io.papermc.paper.threadedregions.commands.CommandProfiler()); // Folia - region threading - profiler
++        COMMANDS.put("linearstats", new CommandLinearStats("linearstats")); // Linear linearstats (Bukkit command map registration)
++        COMMANDS.put("linear", new CommandLinear("linear")); // Linear /linear tree: stats/convert/queue/help (Bukkit command map registration)
+ 
+         COMMANDS.forEach((s, command) -> {
+diff --git a/src/main/java/io/papermc/paper/event/linear/LinearRegionFlushCompletedEvent.java b/src/main/java/io/papermc/paper/event/linear/LinearRegionFlushCompletedEvent.java
+new file mode 100644
+index 000000000..e5819854e
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/event/linear/LinearRegionFlushCompletedEvent.java
+@@ -0,0 +1,123 @@
++package io.papermc.paper.event.linear;
++
++import org.bukkit.event.Event;
++import org.bukkit.event.HandlerList;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Linear linearstats: flush-completed event, Paper-native package (ASYNC).
++ *
++ * <p>ASYNC contract: extends {@code Event} with {@code super(true)} and is
++ * fired OFF IO threads via the async scheduler (Folia-safe: never on the
++ * Moonrise IO thread). Listeners run async and MUST NOT touch world state
++ * directly; schedule back via the region scheduler if world access is needed.
++ * Fired once per coordinator {@code flushDirty()} that attempted {@code >=1}
++ * file (clean-no-op flushes fire nothing). Carries only JDK primitives +
++ * Strings (no NMS types; no NMS-typed totals accessor): per-flush
++ * identity plus primitive count/avg totals.</p>
++ *
++ * <p>Listener sample (5 lines, async-safe: log only, no world touch):</p>
++ * <pre>
++ * &#64;EventHandler
++ * public void onLinearFlush(LinearRegionFlushCompletedEvent e) {
++ *     // Async: do not touch world state here; schedule back if needed.
++ *     getLogger().info(e.getWorldName() + "[" + e.getFolderType() + "] flushed=" + e.getFilesFlushed());
++ * }
++ * </pre>
++ */
++public class LinearRegionFlushCompletedEvent extends Event {
++
++    private static final HandlerList HANDLERS = new HandlerList();
++
++    private final String worldName;
++    private final String folderType;
++    private final long filesFlushed;
++    private final long failures;
++    private final long elapsedMicros;
++    private final long readCount;
++    private final long readMicrosAvg;
++    private final long writeCount;
++    private final long writeMicrosAvg;
++    private final long flushCount;
++    private final long flushMicrosAvg;
++
++    public LinearRegionFlushCompletedEvent(
++        @NotNull String worldName,
++        @NotNull String folderType,
++        long filesFlushed,
++        long failures,
++        long elapsedMicros,
++        long readCount,
++        long readMicrosAvg,
++        long writeCount,
++        long writeMicrosAvg,
++        long flushCount,
++        long flushMicrosAvg
++    ) {
++        super(true); // Linear: ASYNC event (off-IO via async scheduler; see javadoc contract).
++        this.worldName = worldName;
++        this.folderType = folderType;
++        this.filesFlushed = filesFlushed;
++        this.failures = failures;
++        this.elapsedMicros = elapsedMicros;
++        this.readCount = readCount;
++        this.readMicrosAvg = readMicrosAvg;
++        this.writeCount = writeCount;
++        this.writeMicrosAvg = writeMicrosAvg;
++        this.flushCount = flushCount;
++        this.flushMicrosAvg = flushMicrosAvg;
++    }
++
++    public @NotNull String getWorldName() {
++        return this.worldName;
++    }
++
++    public @NotNull String getFolderType() {
++        return this.folderType;
++    }
++
++    public long getFilesFlushed() {
++        return this.filesFlushed;
++    }
++
++    public long getFailures() {
++        return this.failures;
++    }
++
++    public long getElapsedMicros() {
++        return this.elapsedMicros;
++    }
++
++    public long getReadCount() {
++        return this.readCount;
++    }
++
++    public long getReadMicrosAvg() {
++        return this.readMicrosAvg;
++    }
++
++    public long getWriteCount() {
++        return this.writeCount;
++    }
++
++    public long getWriteMicrosAvg() {
++        return this.writeMicrosAvg;
++    }
++
++    public long getFlushCount() {
++        return this.flushCount;
++    }
++
++    public long getFlushMicrosAvg() {
++        return this.flushMicrosAvg;
++    }
++
++    @Override
++    public @NotNull HandlerList getHandlers() {
++        return HANDLERS;
++    }
++
++    public static @NotNull HandlerList getHandlerList() {
++        return HANDLERS;
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/linear/LinearFlushBridge.java b/src/main/java/io/papermc/paper/linear/LinearFlushBridge.java
+new file mode 100644
+index 000000000..e60442221
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/linear/LinearFlushBridge.java
+@@ -0,0 +1,121 @@
++package io.papermc.paper.linear;
++
++import net.linear.LinearFlushCoordinator;
++import net.linear.LinearRegionTimings;
++import org.bukkit.Bukkit;
++import org.bukkit.event.world.LinearRegionFlushCompletedEvent;
++import org.bukkit.plugin.Plugin;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Linear linearstats: Paper-side flush-completion bridge.
++ *
++ * <p>Fires {@link LinearRegionFlushCompletedEvent} (ASYNC {@code super(true)},
++ * see event javadoc) at flush granularity, OFF IO threads when a Plugin is
++ * available, only when {@code >=1} file was attempted. Two entry points:</p>
++ * <ul>
++ *   <li>{@link #notifyFlush(Plugin,String,long,long)}: async scheduler
++ *       (Folia-safe, never on the Moonrise IO thread). The caller passes
++ *       the owning {@code Plugin} explicitly (the old
++ *       {@code getProvidingPlugin(Bridge.class)} misuse is fixed via param; do
++ *       NOT use it — the bridge class lives in server code, not a plugin
++ *       jar). Drops clean-no-ops, falls back to sync fire when the scheduler
++ *       is absent.</li>
++ *   <li>{@link #notifyFlushSync(String,long,long)}: sync fire with NO Plugin
++ *       required, for the server-internal call site right after
++ *       {@code LinearFlushCoordinator.flushDirty()} (NMS, no Plugin on that
++ *       path; autosave + manual saves all funnel through the coordinator, so
++ *       this is the one place that catches every flush). The event itself is
++ *       async-contract ({@code super(true)}), so firing it sync from the save
++ *       thread still delivers async semantics to listeners (they must not touch
++ *       world state; schedule back via region scheduler if needed). This is the
++ *       reserved server-internal call site: until wired, the command and
++ *       delegate worked (pull) but the event stayed silent.</li>
++ * </ul>
++ */
++public final class LinearFlushBridge {
++
++    private LinearFlushBridge() {
++    }
++
++    /**
++     * Paper-side entry point: schedules the flush-completed event off-IO.
++     *
++     * @param owningPlugin owning plugin for the async scheduler (explicit;
++     *     fixes the old {@code getProvidingPlugin} misuse — the bridge is
++     *     server code, not a plugin; the caller passes the Paper plugin
++     *     instance at the wired Paper-side save-path call site)
++     * @param folderKey absolute folder-path key (as in {@code snapshots()})
++     * @param filesAttempted number of files the flush attempted ({@code >=1} to fire)
++     * @param elapsedMicros wall time for the flush batch
++     */
++    public static void notifyFlush(final @NotNull Plugin owningPlugin, final String folderKey, final long filesAttempted, final long elapsedMicros) {
++        if (filesAttempted < 1) {
++            return; // flush-granularity + clean-no-op suppression
++        }
++        final LinearRegionTimings.LinearFolderSnapshot totals;
++        try {
++            totals = LinearFlushCoordinator.snapshots().getOrDefault(folderKey, LinearRegionTimings.LinearFolderSnapshot.EMPTY);
++        } catch (RuntimeException ignored) {
++            return;
++        }
++        final String folderType = LinearFolderNames.inferFolderType(folderKey);
++        final String worldName = LinearFolderNames.inferWorld(folderKey);
++        final long filesFlushed = totals.filesFlushed();
++        final long failures = totals.failures();
++        // OFF IO threads: async scheduler (falls back to sync fire when absent).
++        try {
++            Bukkit.getAsyncScheduler().runNow(
++                owningPlugin,
++                task -> Bukkit.getPluginManager().callEvent(new LinearRegionFlushCompletedEvent(
++                    worldName, folderType, filesFlushed, failures, elapsedMicros, totals)));
++        } catch (RuntimeException fallback) {
++            // Fallback (documented): if the async scheduler is absent, fire
++            // synchronously so no completion is silently lost (still at flush
++            // granularity, still only when filesAttempted >= 1).
++            Bukkit.getPluginManager().callEvent(new LinearRegionFlushCompletedEvent(
++                worldName, folderType, filesFlushed, failures, elapsedMicros, totals));
++        }
++    }
++
++    /**
++     * Server-internal sync entry point (NO Plugin required).
++     * Called after the coordinator drains a folder. Fires
++     * synchronously on the save thread; the event remains async-contract, so
++     * listeners still observe async semantics (must not touch world state).
++     * No Plugin handle is needed on this path.
++     *
++     * @param folderKey absolute folder-path key (as in {@code snapshots()})
++     * @param filesAttempted number of files the flush attempted ({@code >=1} to fire)
++     * @param elapsedMicros wall time for the flush batch
++     */
++    public static void notifyFlushSync(final String folderKey, final long filesAttempted, final long elapsedMicros) {
++        if (filesAttempted < 1) {
++            return;
++        }
++        if (folderKey == null) {
++            return;
++        }
++        final LinearRegionTimings.LinearFolderSnapshot totals;
++        try {
++            totals = LinearFlushCoordinator.snapshots().getOrDefault(folderKey, LinearRegionTimings.LinearFolderSnapshot.EMPTY);
++        } catch (RuntimeException ignored) {
++            return;
++        }
++        final String folderType;
++        final String worldName;
++        try {
++            folderType = LinearFolderNames.inferFolderType(folderKey);
++            worldName = LinearFolderNames.inferWorld(folderKey);
++        } catch (RuntimeException ignored) {
++            return;
++        }
++        final long filesFlushed = totals.filesFlushed();
++        final long failures = totals.failures();
++        try {
++            Bukkit.getPluginManager().callEvent(new LinearRegionFlushCompletedEvent(
++                worldName, folderType, filesFlushed, failures, elapsedMicros, totals));
++        } catch (RuntimeException ignored) {
++        }
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/linear/LinearFolderNames.java b/src/main/java/io/papermc/paper/linear/LinearFolderNames.java
+new file mode 100644
+index 000000000..5eaa5a82c
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/linear/LinearFolderNames.java
+@@ -0,0 +1,41 @@
++package io.papermc.paper.linear;
++
++/**
++ * Linear linearstats: shared folder-identity helper.
++ *
++ * <p>Single shared helper for {@code folderType}/{@code world} inference
++ * (de-duplicated from the command + bridge). {@code folderType} domain is
++ * pinned to {@code region|poi|entities} inferred from the absolute
++ * folder-path suffix (default {@code region}); {@code world} is the parent
++ * dir name ({@code .../<world>/<type>}). Granularity is flush-granularity:
++ * the event fires once per coordinator {@code flushDirty()} that attempted
++ * {@code >=1} file (clean-no-op flushes fire nothing).</p>
++ */
++public final class LinearFolderNames {
++
++    private LinearFolderNames() {
++    }
++
++    public static String inferFolderType(String folder) {
++        String f = folder.replace('\\', '/');
++        if (f.endsWith("/entities") || f.contains("/entities/")) {
++            return "entities";
++        }
++        if (f.endsWith("/poi") || f.contains("/poi/")) {
++            return "poi";
++        }
++        return "region";
++    }
++
++    public static String inferWorld(String folder) {
++        String f = folder.replace('\\', '/');
++        // Folder is .../<world>/<region|poi|entities>; world is the parent name.
++        int slash = f.lastIndexOf('/');
++        if (slash <= 0) {
++            return f;
++        }
++        String parent = f.substring(0, slash);
++        int slash2 = parent.lastIndexOf('/');
++        return slash2 < 0 ? parent : parent.substring(slash2 + 1);
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/linear/LinearStats.java b/src/main/java/io/papermc/paper/linear/LinearStats.java
+new file mode 100644
+index 000000000..ed1456120
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/linear/LinearStats.java
+@@ -0,0 +1,155 @@
++package io.papermc.paper.linear;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
++import java.util.Optional;
++import net.linear.LinearFlushCoordinator;
++import net.linear.LinearRegionTimings;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Linear linearstats API delegate: JDK-only view for plugins.
++ *
++ * <p>Plugins must not import {@code net.linear} (NMS/coordinator types are
++ * server-internal and may move). This class is the single supported entry
++ * point: {@link #snapshots()} / {@link #snapshot(String)} return plain JDK
++ * DTOs ({@link FolderSnapshot} holds only String/long/int). Internally it
++ * delegates to {@code LinearFlushCoordinator.snapshots()} (static map) and
++ * converts each {@code LinearRegionTimings.LinearFolderSnapshot} field by
++ * field; averages are {@code total/count} with a divide-by-zero guard
++ * (count==0 yields 0). Folder identity ({@code folderType}/{@code worldName})
++ * reuses the shared folder-identity helper (requires it on the classpath;
++ * {@code folderType} pinned to {@code region|poi|entities}).</p>
++ * Single-key lookup delegates the same way (map get, empty when absent).
++ *
++ * <p>Pull-only, no threads, no storage fields, no NMS leaks: every public
++ * signature uses JDK types only (String/List/Optional/primitives + this
++ * DTO). The private mapping helper is the only place that names NMS types.
++ * Compression has no per-folder source in the coordinator snapshot, so this
++ * delegate reports {@code compressionLevel = 0} (unknown) until wired, while
++ * byte, latency and age fields below ARE coordinator-sourced and mapped
++ * straight through.</p>
++ */
++public final class LinearStats {
++
++    private LinearStats() {
++    }
++
++    /**
++     * JDK-only folder snapshot (no {@code net.linear} in any component).
++     *
++     * @param folderKey absolute folder-path key (as in coordinator snapshots())
++     * @param folderType region|poi|entities (via LinearFolderNames)
++     * @param worldName parent dir name (.../world/type)
++     * @param reads read op count
++     * @param readMicrosAvg avg read micros (total/count, 0 when reads==0)
++     * @param writes write op count
++     * @param writeMicrosAvg avg write micros (total/count, 0 when writes==0)
++     * @param flushes flush op count
++     * @param flushMicrosAvg avg flush micros (total/count, 0 when flushes==0)
++     * @param compressionLevel zstd level, or 0=unknown (no coordinator source; see class javadoc)
++     * @param filesFlushed files successfully flushed
++     * @param failures flush failures
++     * @param dirtyNow current dirty depth (coordinator dirtyDepth)
++     * @param rawBytes summed flush-image bytes, uncompressed (success-only)
++     * @param compressedBytes summed flush-image bytes, zstd (success-only)
++     * @param flushP50Micros bucketed p50 flush latency estimate, upper bound (clean-no-ops excluded, 0 when no flushes)
++     * @param flushP99Micros bucketed p99 flush latency estimate, upper bound (clean-no-ops excluded, 0 when no flushes)
++     * @param millisSinceLastFlush wall-millis since last success, -1 = never
++     */
++    public record FolderSnapshot(
++        String folderKey,
++        String folderType,
++        String worldName,
++        long reads,
++        long readMicrosAvg,
++        long writes,
++        long writeMicrosAvg,
++        long flushes,
++        long flushMicrosAvg,
++        int compressionLevel,
++        long filesFlushed,
++        long failures,
++        int dirtyNow,
++        long rawBytes,
++        long compressedBytes,
++        long flushP50Micros,
++        long flushP99Micros,
++        long millisSinceLastFlush
++    ) {
++    }
++
++    /**
++     * Pull-only view: one DTO per tracked Linear folder.
++     *
++     * @return snapshots in folder-key order as returned by the coordinator map
++     */
++    public static @NotNull List<FolderSnapshot> snapshots() {
++        Map<String, LinearRegionTimings.LinearFolderSnapshot> snaps;
++        try {
++            snaps = LinearFlushCoordinator.snapshots();
++        } catch (RuntimeException e) {
++            return List.of();
++        }
++        List<FolderSnapshot> out = new ArrayList<>(snaps.size());
++        for (Map.Entry<String, LinearRegionTimings.LinearFolderSnapshot> e : snaps.entrySet()) {
++            out.add(toSnapshot(e.getKey(), e.getValue()));
++        }
++        return out;
++    }
++
++    /**
++     * Single-folder lookup by absolute folder-path key.
++     *
++     * @param folderKey absolute folder-path key (as in snapshots())
++     * @return DTO when tracked, else empty
++     */
++    public static @NotNull Optional<FolderSnapshot> snapshot(final @NotNull String folderKey) {
++        Map<String, LinearRegionTimings.LinearFolderSnapshot> snaps;
++        try {
++            snaps = LinearFlushCoordinator.snapshots();
++        } catch (RuntimeException e) {
++            return Optional.empty();
++        }
++        LinearRegionTimings.LinearFolderSnapshot s = snaps.get(folderKey);
++        if (s == null) {
++            return Optional.empty();
++        }
++        return Optional.of(toSnapshot(folderKey, s));
++    }
++
++    // Private mapping: the ONLY place that names NMS types. Converts the NMS
++    // record field by field; avg = total/count with divide-by-zero guard.
++    private static @NotNull FolderSnapshot toSnapshot(final String folderKey, final LinearRegionTimings.LinearFolderSnapshot s) {
++        long reads = s.read().count();
++        long readAvg = s.read().count() == 0L ? 0L : s.read().totalMicros() / s.read().count();
++        long writes = s.write().count();
++        long writeAvg = s.write().count() == 0L ? 0L : s.write().totalMicros() / s.write().count();
++        long flushes = s.flush().count();
++        long flushAvg = s.flush().count() == 0L ? 0L : s.flush().totalMicros() / s.flush().count();
++        String folderType = LinearFolderNames.inferFolderType(folderKey);
++        String worldName = LinearFolderNames.inferWorld(folderKey);
++        // No per-folder compression source in the coordinator snapshot; 0=unknown.
++        int compressionLevel = 0;
++        return new FolderSnapshot(
++            folderKey,
++            folderType,
++            worldName,
++            reads,
++            readAvg,
++            writes,
++            writeAvg,
++            flushes,
++            flushAvg,
++            compressionLevel,
++            s.filesFlushed(),
++            s.failures(),
++            s.dirtyDepth(),
++            s.rawBytes(),
++            s.compressedBytes(),
++            s.flushP50Micros(),
++            s.flushP99Micros(),
++            s.millisSinceLastFlush());
++    }
++}
+diff --git a/src/main/java/org/bukkit/event/world/LinearRegionFlushCompletedEvent.java b/src/main/java/org/bukkit/event/world/LinearRegionFlushCompletedEvent.java
+new file mode 100644
+index 000000000..b402e2dbc
+--- /dev/null
++++ b/src/main/java/org/bukkit/event/world/LinearRegionFlushCompletedEvent.java
+@@ -0,0 +1,94 @@
++package org.bukkit.event.world;
++
++import net.linear.LinearRegionTimings;
++import org.bukkit.event.Event;
++import org.bukkit.event.HandlerList;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Linear linearstats: flush-granularity completion event (ASYNC).
++ *
++ * <p>ASYNC contract (decided vs region-scheduler sync delivery): this event
++ * extends {@code Event} with {@code super(true)} and is fired OFF IO threads
++ * via the async scheduler (Folia-safe: never on the Moonrise IO thread).
++ * Listeners run async and MUST NOT touch world state directly; schedule back
++ * via the region scheduler if world access is needed. Fired once per
++ * coordinator {@code flushDirty()} that attempted {@code >=1} file
++ * (clean-no-op flushes fire nothing). Carries the world/folder identity
++ * ({@code folderType} pinned to {@code region|poi|entities} via
++ * {@code LinearFolderNames}, default {@code region}) plus the
++ * post-flush totals snapshot. The bridge ({@code LinearFlushBridge}) fires
++ * this; wire the {@code notifyFlush} call site into the save path after the
++ * coordinator flush (no call site in this patch; the sync overload covers
++ * the server-internal path).</p>
++ *
++ * <p>Listener sample (5 lines, async-safe: log only, no world touch):</p>
++ * <pre>
++ * &#64;EventHandler
++ * public void onLinearFlush(LinearRegionFlushCompletedEvent e) {
++ *     // Async: do not touch world state here; schedule back if needed.
++ *     getLogger().info(e.getWorldName() + "[" + e.getFolderType() + "] flushed=" + e.getFilesFlushed());
++ * }
++ * </pre>
++ */
++public class LinearRegionFlushCompletedEvent extends Event {
++
++    private static final HandlerList HANDLERS = new HandlerList();
++
++    private final String worldName;
++    private final String folderType;
++    private final long filesFlushed;
++    private final long failures;
++    private final long elapsedMicros;
++    private final LinearRegionTimings.LinearFolderSnapshot totals;
++
++    public LinearRegionFlushCompletedEvent(
++        @NotNull String worldName,
++        @NotNull String folderType,
++        long filesFlushed,
++        long failures,
++        long elapsedMicros,
++        @NotNull LinearRegionTimings.LinearFolderSnapshot totals
++    ) {
++        super(true); // Linear: ASYNC event (off-IO via async scheduler; see javadoc contract).
++        this.worldName = worldName;
++        this.folderType = folderType;
++        this.filesFlushed = filesFlushed;
++        this.failures = failures;
++        this.elapsedMicros = elapsedMicros;
++        this.totals = totals;
++    }
++
++    public @NotNull String getWorldName() {
++        return this.worldName;
++    }
++
++    public @NotNull String getFolderType() {
++        return this.folderType;
++    }
++
++    public long getFilesFlushed() {
++        return this.filesFlushed;
++    }
++
++    public long getFailures() {
++        return this.failures;
++    }
++
++    public long getElapsedMicros() {
++        return this.elapsedMicros;
++    }
++
++    public @NotNull LinearRegionTimings.LinearFolderSnapshot getTotals() {
++        return this.totals;
++    }
++
++    @Override
++    public @NotNull HandlerList getHandlers() {
++        return HANDLERS;
++    }
++
++    public static @NotNull HandlerList getHandlerList() {
++        return HANDLERS;
++    }
++}
+-- 
+2.43.0
+

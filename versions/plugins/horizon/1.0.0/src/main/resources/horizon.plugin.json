@@ -1,0 +1,17 @@
+{
+  "name": "LinearMC",
+  "version": "1.0.0-SNAPSHOT",
+  "description": "Linear-format region compression via Horizon mixins",
+  "authors": [
+    "LinearMC"
+  ],
+  "mixins": [
+    "mixins.linearmc.json"
+  ],
+  "dependencies": {
+    "minecraft": ">1.20.6"
+  },
+  "wideners": [
+    "linearmc.at"
+  ]
+}

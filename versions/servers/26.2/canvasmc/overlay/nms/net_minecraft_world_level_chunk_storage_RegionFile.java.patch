@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/world/level/chunk/storage/RegionFile.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch, minecraft-0018-Linear-core-decoupling.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFile.java b/net/minecraft/world/level/chunk/storage/RegionFile.java
+--- a/net/minecraft/world/level/chunk/storage/RegionFile.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFile.java
+@@ -22,7 +22,7 @@ import net.minecraft.world.level.ChunkPos;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+ 
+-public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemRegionFile { // Paper - rewrite chunk system
++public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemRegionFile, net.linear.AbstractRegionFile { // Paper - rewrite chunk system // Linear - anvil side of the AbstractRegionFile duality
+     private static final Logger LOGGER = LogUtils.getLogger();
+     public static final int MAX_CHUNK_SIZE = 500 * 1024 * 1024; // Paper - don't write garbage data to disk if writing serialization fails
+     private static final int SECTOR_BYTES = 4096;
+@@ -789,6 +789,8 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         }
+     }
+ 
++    // Linear - vanilla write is already public on this base; the long-key
++    // bridge below satisfies AbstractRegionFile.write.
+     public synchronized void write(final ChunkPos pos, final ByteBuffer data) throws IOException {
+         int offsetIndex = getOffsetIndex(pos);
+         int offset = this.offsets.get(offsetIndex);
+@@ -863,6 +865,20 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         return this.getOffset(pos) != 0;
+     }
+ 
++    // Linear start - AbstractRegionFile dirty-flag contract. Anvil writes are
++    // synchronous (sectors + header hit the FileChannel inside write()), so there is
++    // never deferred state to flush; Linear is the only implementation
++    // for which these return/track anything.
++    @Override
++    public boolean isMarkedToSave() {
++        return false;
++    }
++
++    @Override
++    public void clearMarkedToSave() {
++    }
++    // Linear end
++
+     private static int getOffsetIndex(final ChunkPos pos) {
+         return pos.getRegionLocalX() + pos.getRegionLocalZ() * 32;
+     }
+@@ -907,8 +923,8 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         }
+ 
+         @Override
+-        public final void moonrise$write(final RegionFile regionFile) throws IOException {
+-            regionFile.write(this.pos, ByteBuffer.wrap(this.buf, 0, this.count));
++        public final void moonrise$write(final net.linear.AbstractRegionFile regionFile) throws IOException { // Linear - widened to the shared region-file type
++            regionFile.write(net.linear.ChunkKey.of(this.pos.x(), this.pos.z()), ByteBuffer.wrap(this.buf, 0, this.count));
+         }
+         // Paper end - rewrite chunk system
+ 
+@@ -1024,4 +1040,27 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+ 
+     }
+     // Paper end
++
++    // Linear - AbstractRegionFile long-key bridges. Vanilla ChunkPos bodies above
++    // are untouched; conversion happens once here at the boundary.
++    @Override
++    public void clear(final long chunk) throws IOException {
++        this.clear(new ChunkPos(net.linear.ChunkKey.x(chunk), net.linear.ChunkKey.z(chunk)));
++    }
++
++    @Override
++    public synchronized void write(final long chunk, final ByteBuffer data) throws IOException {
++        this.write(new ChunkPos(net.linear.ChunkKey.x(chunk), net.linear.ChunkKey.z(chunk)), data);
++    }
++
++    @Override
++    public boolean hasChunk(final long chunk) {
++        return this.hasChunk(new ChunkPos(net.linear.ChunkKey.x(chunk), net.linear.ChunkKey.z(chunk)));
++    }
++
++    @Override
++    public DataInputStream getChunkDataInputStream(final long chunk) throws IOException {
++        return this.getChunkDataInputStream(
++            new ChunkPos(net.linear.ChunkKey.x(chunk), net.linear.ChunkKey.z(chunk)));
++    }
+ }

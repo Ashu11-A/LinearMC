@@ -1,0 +1,207 @@
+From 26604d661f29885bfd4500c98930180e3c086d33 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Linear flush unlock
+
+Stop holding the RegionFileStorage monitor across the flush batch and
+the LRU eviction close. flush() and close() snapshot the region cache
+under lock and run the batch unlocked; eviction removes under lock and
+closes outside the monitor. The coordinator dirty set never aliases the
+region cache nor the negative cache, and file flush/close touches only
+its own slots. Level-22 closes no longer block all I/O on the folder.
+---
+ .../chunk/storage/RegionFileStorage.java      | 106 ++++++++++++------
+ 1 file changed, 69 insertions(+), 37 deletions(-)
+
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+index 2eeefe3..797b594 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+@@ -136,17 +136,23 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     }
+ 
+     @Override
+-    public synchronized final AbstractRegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException { // Linear - widened + dual-read probe
++    public final AbstractRegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException { // Linear - widened + dual-read probe
++        // eviction close outside the monitor. Level-22 eviction
++        // close is a full-region zstd rewrite; holding the monitor blocked all
++        // I/O on this folder. Removed `synchronized` from the method signature;
++        // cache accesses stay under an explicit block, close runs unlocked after.
+         final long key = ChunkPos.pack(chunkX >> REGION_SHIFT, chunkZ >> REGION_SHIFT);
+-
+-        AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key); // Linear: cache-hit accounting below (no recalc-counter touch)
+-        if (ret != null) {
++        AbstractRegionFile evicted = null;
++        final AbstractRegionFile ret;
++        synchronized (this) {
++        AbstractRegionFile hit = this.regionCache.getAndMoveToFirst(key); // Linear: cache-hit accounting below (no recalc-counter touch)
++        if (hit != null) {
+             // Linear: cache hit (lock-free delegate, zero new fields).
+             try {
+                 LinearFlushCoordinator.forFolder(this.folder).reportCacheHit();
+             } catch (RuntimeException ignored) {
+             }
+-            return ret;
++            return hit;
+         }
+         // Linear: cache miss (lock-free delegate, zero new fields).
+         try {
+@@ -161,7 +167,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         final int cacheSize = io.papermc.paper.configuration.GlobalConfiguration.get() == null ? 256 : io.papermc.paper.configuration.GlobalConfiguration.get().misc.regionFileCacheSize; // Paper - Sanitise RegionFileCache and make configurable - Config not available during initial FileFixerUpper run
+ 
+         if (this.regionCache.size() >= cacheSize) {
+-            this.regionCache.removeLast().close();
++            evicted = this.regionCache.removeLast(); // close outside (see below)
+         }
+ 
+         // Linear - dual-read probe: .mca preferred, else .linear. The negative cache
+@@ -183,10 +189,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         FileUtil.createDirectoriesSafe(this.folder);
+ 
+         this.guardAgainstBrokenSymlinks(regionPath); // Linear - existingOnly probe call site
+-        ret = AbstractRegionFileFactory.get(regionPath, this.info, this.folder, this.sync, this.compressionLevel); // Linear - open in probed format
+-
+-        this.regionCache.putAndMoveToFirst(key, ret);
++        AbstractRegionFile opened = AbstractRegionFileFactory.get(regionPath, this.info, this.folder, this.sync, this.compressionLevel); // Linear - open in probed format
+ 
++        this.regionCache.putAndMoveToFirst(key, opened);
++        ret = opened;
++        }
++        if (evicted != null) {
++            evicted.close(); // unlocked (full rewrite safe outside monitor)
++        }
+         return ret;
+     }
+ 
+@@ -402,17 +412,22 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         if (existingOnly) {
+             return this.moonrise$getRegionFileIfExists(pos.x(), pos.z());
+         }
++        // eviction close outside the monitor (same rationale
++        // as moonrise$getRegionFileIfExists above: level-22 close is a full
++        // rewrite blocking all I/O on this folder).
++        AbstractRegionFile evicted = null;
++        final AbstractRegionFile ret;
+         synchronized (this) {
+             final long key = ChunkPos.pack(pos.x() >> REGION_SHIFT, pos.z() >> REGION_SHIFT);
+ 
+-            AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key);
+-            if (ret != null) {
++            AbstractRegionFile hit = this.regionCache.getAndMoveToFirst(key);
++            if (hit != null) {
+                 // Linear: cache hit (lock-free delegate, zero new fields).
+                 try {
+                     LinearFlushCoordinator.forFolder(this.folder).reportCacheHit();
+                 } catch (RuntimeException ignored) {
+                 }
+-                return ret;
++                return hit;
+             }
+             // Linear: cache miss (lock-free delegate, zero new fields).
+             try {
+@@ -423,7 +438,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             final int cacheSize = io.papermc.paper.configuration.GlobalConfiguration.get() == null ? 256 : io.papermc.paper.configuration.GlobalConfiguration.get().misc.regionFileCacheSize; // Paper - Sanitise RegionFileCache and make configurable - Config not available during initial FileFixerUpper run
+ 
+             if (this.regionCache.size() >= cacheSize) {
+-                this.regionCache.removeLast().close();
++                evicted = this.regionCache.removeLast(); // close outside (see below)
+             }
+ 
+             // Linear - create in the storage's configured format (default ANVIL).
+@@ -434,12 +449,15 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             FileUtil.createDirectoriesSafe(this.folder);
+ 
+             this.guardAgainstBrokenSymlinks(regionPath); // Linear - write-path creation call site
+-            ret = AbstractRegionFileFactory.get(regionPath, this.info, this.folder, this.sync, this.compressionLevel); // Linear - factory dispatch
++            AbstractRegionFile opened = AbstractRegionFileFactory.get(regionPath, this.info, this.folder, this.sync, this.compressionLevel); // Linear - factory dispatch
+ 
+-            this.regionCache.putAndMoveToFirst(key, ret);
+-
+-            return ret;
++            this.regionCache.putAndMoveToFirst(key, opened);
++            ret = opened;
++        }
++        if (evicted != null) {
++            evicted.close(); // unlocked
+         }
++        return ret;
+         // Paper end - rewrite chunk system
+     }
+ 
+@@ -623,39 +641,53 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     @Override
+     public void close() throws IOException {
+         // Paper start - rewrite chunk system
++        // snapshot under the monitor, close outside it.
++        // Verified safe: LinearFlushCoordinator.evict/flushDirty touches only
++        // the coordinator dirty set (never regionCache nor the negative cache),
++        // and AbstractRegionFile.close() touches only its own slots/file.
++        // Holding the monitor across a level-22 close (full-region zstd rewrite)
++        // blocked all I/O on this folder; eviction close now runs unlocked.
++        final java.util.List<AbstractRegionFile> snapshot;
+         synchronized (this) {
++            snapshot = new java.util.ArrayList<>(this.regionCache.values());
++        }
++        final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
++        for (final AbstractRegionFile regionFile : snapshot) {
+             try {
+-            final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
+-            for (final AbstractRegionFile regionFile : this.regionCache.values()) {
+-                try {
+-                    regionFile.close();
+-                } catch (final IOException ex) {
+-                    exceptionCollector.add(ex);
+-                }
++                regionFile.close();
++            } catch (final IOException ex) {
++                exceptionCollector.add(ex);
+             }
++        }
++        try {
+             exceptionCollector.throwIfPresent();
+-            } finally {
+-                LinearFlushCoordinator.evict(this.folder); // Linear - per-world eviction; flushes stragglers then drops the registry entry
+-            }
++        } finally {
++            LinearFlushCoordinator.evict(this.folder); // Linear - per-world eviction; flushes stragglers then drops the registry entry
+         }
+         // Paper end - rewrite chunk system
+     }
+ 
+     public void flush() throws IOException {
+         // Paper start - rewrite chunk system
++        // flushDirty touches neither regionCache nor the
++        // negative cache (re-verified in applied tree: coordinator dirty set
++        // only), so run the batch outside the monitor. Snapshot keeps the
++        // regionCache iteration safe without blocking concurrent opens.
++        LinearFlushCoordinator.forFolder(this.folder).flushDirty(); // Linear - persist deferred Linear writes first (driven by Moonrise save path, no extra threads)
++        final java.util.List<AbstractRegionFile> snapshot;
+         synchronized (this) {
+-            LinearFlushCoordinator.forFolder(this.folder).flushDirty(); // Linear - persist deferred Linear writes first (driven by Moonrise save path, no extra threads)
+-            final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
+-            for (final AbstractRegionFile regionFile : this.regionCache.values()) {
+-                try {
+-                    regionFile.flush();
+-                } catch (final IOException ex) {
+-                    exceptionCollector.add(ex);
+-                }
++            snapshot = new java.util.ArrayList<>(this.regionCache.values());
++        }
++        final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
++        for (final AbstractRegionFile regionFile : snapshot) {
++            try {
++                regionFile.flush();
++            } catch (final IOException ex) {
++                exceptionCollector.add(ex);
+             }
+-
+-            exceptionCollector.throwIfPresent();
+         }
++
++        exceptionCollector.throwIfPresent();
+         // Paper end - rewrite chunk system
+     }
+ 
+-- 
+2.43.0
+

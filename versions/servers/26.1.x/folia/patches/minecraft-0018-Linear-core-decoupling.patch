@@ -1,0 +1,393 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] Linear core decoupling: NMS-free net.linear boundary
+
+Decouples the Linear core from NMS so common/linear-core compiles standalone:
+opaque ChunkKey longs replace ChunkPos at the AbstractRegionFile boundary
+(exact slot math, vanilla log format preserved), Paper-config reads become
+adapter-registered suppliers (runtime-reload semantics kept), the flush bridge
+becomes a no-op-default listener, and conversion storage opens become an
+injected RegionOpener (probe default handles LINEAR directly). RegionFile
+gains long-key bridge overloads (vanilla ChunkPos bodies untouched);
+RegionFileStorage/Upgrader convert at the boundary; the factory delegates
+constants/clamp to core RegionFileFormat. Behavior-preserving: the full
+LinearNmsTestSuite (119 tests) is green before and after.
+---
+ net/minecraft/world/level/chunk/storage/RegionFileStorage.java |  83 ++++++++++++++++++++++++++++++++-----------------------
+ net/minecraft/world/level/chunk/storage/LinearAnvilSink.java    |  54 +++++++++++++++++++++++++++++++++
+ net/minecraft/world/level/chunk/storage/RegionFile.java         |  34 ++++++++++++++++++++++----
+ net/minecraft/util/worldupdate/RegionStorageUpgrader.java       |  26 ++++++++++++++++++++-
+ 4 files changed, 184 insertions(+), 13 deletions(-)
+
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+index 28268de..4d54c2a 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+@@ -19,6 +19,7 @@ import net.minecraft.world.level.ChunkPos;
+ import net.linear.AbstractRegionFile;
+ import net.linear.AbstractRegionFileFactory;
+ import net.linear.LinearFlushCoordinator;
++import net.linear.LinearRegionFile;
+ import net.linear.RegionFileFormat;
+ import org.jspecify.annotations.Nullable;
+ 
+@@ -250,7 +251,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData(
+                 compound, ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData.WriteResult.WRITE,
+                 linearOut, (final AbstractRegionFile file) -> {
+-                    file.write(pos, ByteBuffer.wrap(linearBytes));
++                    file.write(net.linear.ChunkKey.of(pos.x(), pos.z()), ByteBuffer.wrap(linearBytes));
+                     LinearFlushCoordinator.forFolder(this.folder).markDirty(file);
+                 }
+             );
+@@ -293,7 +294,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             if (regionFile != null) {
+                 // Linear - interface default clear: anvil deletes sectors, Linear clears
+                 // the slot (Linear override) or falls back to write-empty (absent on re-read).
+-                regionFile.clear(pos);
++                regionFile.clear(net.linear.ChunkKey.of(pos.x(), pos.z()));
+             } // else: didn't exist
+ 
+             return;
+@@ -308,7 +309,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     ) throws IOException {
+         final AbstractRegionFile regionFile = this.moonrise$getRegionFileIfExists(chunkX, chunkZ);
+ 
+-        final DataInputStream input = regionFile == null ? null : regionFile.getChunkDataInputStream(new ChunkPos(chunkX, chunkZ));
++        final DataInputStream input = regionFile == null ? null : regionFile.getChunkDataInputStream(net.linear.ChunkKey.of(chunkX, chunkZ));
+ 
+         if (input == null) {
+             return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData(
+@@ -405,6 +406,93 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         this.sync = sync;
+         this.info = info;
+         this.isChunkData = info.dfuType()[0] == net.minecraft.util.datafix.DataFixTypes.CHUNK; // Paper - recalculate region file headers
++        linear$wireCoreSeams();
+     }
++
++    // Linear - wires the NMS-free core seams to live Paper config. Idempotent
++    // (plain setter assignment); runs once per storage construction so the
++    // converter trigger path (which may run before any world storage exists)
++    // is covered by its own identical call. Lambdas read live config on every
++    // call, preserving runtime-reload semantics of the old inline reads.
++    private static void linear$wireCoreSeams() {
++        AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) -> (AbstractRegionFile)(Object) new RegionFile((RegionStorageInfo) info, file, dir, sync));
++        AbstractRegionFileFactory.linear$setLinearOpener(LinearRegionFile::new);
++        net.linear.LinearFlushCoordinator.linear$setFlushThreadsSupplier(() -> {
++            io.papermc.paper.configuration.GlobalConfiguration cfg =
++                io.papermc.paper.configuration.GlobalConfiguration.get();
++            if (cfg == null || cfg.regionFormat == null || cfg.regionFormat.linear == null) {
++                return 1;
++            }
++            return cfg.regionFormat.linear.flushMaxThreads;
++        });
++        net.linear.LinearFlushCoordinator.linear$setFlushFrequencySupplier(() -> {
++            io.papermc.paper.configuration.GlobalConfiguration cfg =
++                io.papermc.paper.configuration.GlobalConfiguration.get();
++            if (cfg == null || cfg.regionFormat == null || cfg.regionFormat.linear == null) {
++                return 10L;
++            }
++            return cfg.regionFormat.linear.flushFrequency;
++        });
++        net.linear.LinearFlushCoordinator.linear$setFlushListener(
++            (folderKey, filesAttempted, elapsedMicros) ->
++                io.papermc.paper.linear.LinearFlushBridge.notifyFlushSync(folderKey, filesAttempted, elapsedMicros));
++        net.linear.LinearRegionFile.linear$setCompressionWorkersSupplier(() -> {
++            io.papermc.paper.configuration.GlobalConfiguration cfg =
++                io.papermc.paper.configuration.GlobalConfiguration.get();
++            if (cfg == null || cfg.regionFormat == null || cfg.regionFormat.linear == null) {
++                return 0;
++            }
++            return cfg.regionFormat.linear.compressionWorkers;
++        });
++        net.linear.LinearRegionFile.linear$setLongDistanceMatchingSupplier(() -> {
++            io.papermc.paper.configuration.GlobalConfiguration cfg =
++                io.papermc.paper.configuration.GlobalConfiguration.get();
++            if (cfg == null || cfg.regionFormat == null || cfg.regionFormat.linear == null) {
++                return 0;
++            }
++            return cfg.regionFormat.linear.longDistanceMatching;
++        });
++        net.linear.LinearRegionConverter.linear$setRegionOpener((file, openFolder, openSync, format, level) ->
++            net.linear.AbstractRegionFileFactory.get(file,
++                new RegionStorageInfo("converter", net.minecraft.world.level.Level.OVERWORLD, "chunk"),
++                openFolder, openSync, level));
++        net.linear.LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) -> new LinearAnvilSink(file, folder));
++        // Loaded-region exclusion is operator guidance: reverse runs online
++        // while the world is loaded, so a file with unflushed writes is skipped.
++        // Open-but-clean handles stay undetected; shadow protection is the backstop.
++        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked
++        // proceeds: every Linear write is tracked, so unseen means clean).
++        net.linear.LinearRegionConverter.linear$setReverseSkipPredicate(path -> {
++            try {
++                java.nio.file.Path parent = path == null ? null : path.getParent();
++                if (parent == null) {
++                    return true;
++                }
++                // Dirty-only: deriving a loaded-region check from a path is unreliable,
++                // so operators must quiesce worlds (the convert gate aborts when dirty).
++                return net.linear.LinearFlushCoordinator.isFolderDirty(parent);
++            } catch (RuntimeException e) {
++                return true;
++            }
++        });
++        // Linear - forward skip parity: same folder-dirty predicate shape as
++        // reverse beside it, so live converts defer loaded regions instead of
++        // copying files under live writes.
++        // Open-but-clean handles stay undetected; shadow protection is the backstop.
++        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked.
++        net.linear.LinearRegionConverter.linear$setForwardSkipPredicate(path -> {
++            try {
++                java.nio.file.Path parent = path == null ? null : path.getParent();
++                if (parent == null) {
++                    return true;
++                }
++                return net.linear.LinearFlushCoordinator.isFolderDirty(parent);
++            } catch (RuntimeException e) {
++                return true;
++            }
++        });
++    }
++    // Linear - reverse sink lives in the top-level LinearAnvilSink (same package,
++    // same directory); registered above and visible to the upgrader trigger too.
+
+      @org.jetbrains.annotations.Contract("_, false -> !null") private @Nullable AbstractRegionFile getRegionFile(final ChunkPos pos, boolean existingOnly) throws IOException { // CraftBukkit // Linear - widened
+@@ -508,7 +616,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         // Linear start - Linear has no oversized sidecars and no recalculable header,
+         // so it takes a direct NBT path; the anvil body below is unchanged.
+         if (!(region instanceof RegionFile anvil)) {
+-            try (DataInputStream regionChunkInputStream = region.getChunkDataInputStream(pos)) {
++            try (DataInputStream regionChunkInputStream = region.getChunkDataInputStream(net.linear.ChunkKey.of(pos.x(), pos.z()))) {
+                 if (regionChunkInputStream == null) {
+                     return null;
+                 }
+@@ -564,7 +672,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         }
+         // CraftBukkit end
+ 
+-        try (DataInputStream regionChunkInputStream = region.getChunkDataInputStream(pos)) {
++        try (DataInputStream regionChunkInputStream = region.getChunkDataInputStream(net.linear.ChunkKey.of(pos.x(), pos.z()))) {
+             if (regionChunkInputStream != null) {
+                 NbtIo.parse(regionChunkInputStream, scanner, NbtAccounter.unlimitedHeap());
+             }
+@@ -581,7 +689,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             }
+             // Paper end - rewrite chunk system
+             if (value == null) {
+-                region.clear(pos); // Linear - interface default: anvil deletes sectors, linear clears the slot
++                region.clear(net.linear.ChunkKey.of(pos.x(), pos.z())); // Linear - interface default: anvil deletes sectors, linear clears the slot
+             } else if (region instanceof RegionFile anvil) {
+                 // Paper - Only write if successful
+                 DataOutputStream output = anvil.getChunkDataOutputStream(pos);
+@@ -617,13 +725,13 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+                 // catch(RegionFileSizeException) arm). The slot clear persists on
+                 // the next flushDirty()/eviction (deferred linear durability).
+                 if (linearBytes.length > net.linear.LinearRegionFile.MAX_CHUNK_SIZE) {
+-                    region.clear(pos);
++                    region.clear(net.linear.ChunkKey.of(pos.x(), pos.z()));
+                     final int maxSize = net.linear.LinearRegionFile.MAX_CHUNK_SIZE / (1024 * 1024);
+                     LOGGER.error("Chunk at (" + pos.x() + "," + pos.z() + ") in regionfile '" + this.folder.resolve(getRegionFileName(pos.x(), pos.z(), this.format)) + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
+                     LinearFlushCoordinator.forFolder(this.folder).markDirty(region);
+                 } else {
+                     JvmProfiler.INSTANCE.onRegionFileWrite(this.info, pos, RegionFileVersion.DEFAULT, linearBytes.length);
+-                    region.write(pos, ByteBuffer.wrap(linearBytes));
++                    region.write(net.linear.ChunkKey.of(pos.x(), pos.z()), ByteBuffer.wrap(linearBytes));
+                     LinearFlushCoordinator.forFolder(this.folder).markDirty(region);
+                 }
+             }
+diff --git a/net/minecraft/world/level/chunk/storage/LinearAnvilSink.java b/net/minecraft/world/level/chunk/storage/LinearAnvilSink.java
+new file mode 100644
+index 0000000..1111111 100644
+--- /dev/null
++++ b/net/minecraft/world/level/chunk/storage/LinearAnvilSink.java
+@@ -0,0 +1,54 @@
++package net.minecraft.world.level.chunk.storage;
++
++import net.minecraft.world.level.ChunkPos;
++
++// Linear - NMS Anvil ChunkSink for reverse (.linear -> .mca) conversion.
++// Top-level (same package as RegionFile): registered in RegionFileStorage
++// and mirrored in the RegionStorageUpgrader trigger, which cannot see a
++// private nested class. Wraps a vanilla RegionFile (converter scope,
++// sync=false: Anvil writes are synchronous, so flush() is a no-op). Raw NBT
++// from the linear source is enveloped exactly like the streaming write path:
++// compress via the selected RegionFileVersion, then [int length][byte version][compressed].
++// Empty buffers are the delete-slot sentinel and clear the slot.
++public final class LinearAnvilSink implements net.linear.LinearRegionConverter.ChunkSink {
++    private final RegionFile file;
++
++    public LinearAnvilSink(final java.nio.file.Path file, final java.nio.file.Path folder) throws java.io.IOException {
++        this.file = new RegionFile(
++            new RegionStorageInfo("converter", net.minecraft.world.level.Level.OVERWORLD, "chunk"),
++            file, folder, false);
++    }
++
++    @Override
++    public void write(final long chunk, final java.nio.ByteBuffer data) throws java.io.IOException {
++        final ChunkPos pos = new ChunkPos(net.linear.ChunkKey.x(chunk), net.linear.ChunkKey.z(chunk));
++        if (!data.duplicate().hasRemaining()) {
++            this.file.clear(pos);
++            return;
++        }
++        final byte[] raw = new byte[data.remaining()];
++        data.duplicate().get(raw);
++        final net.minecraft.world.level.chunk.storage.RegionFileVersion version =
++            net.minecraft.world.level.chunk.storage.RegionFileVersion.getSelected();
++        final java.io.ByteArrayOutputStream compressed = new java.io.ByteArrayOutputStream(raw.length + 16);
++        try (java.io.OutputStream out = version.wrap(compressed)) {
++            out.write(raw);
++        }
++        final byte[] comp = compressed.toByteArray();
++        final java.nio.ByteBuffer enveloped = java.nio.ByteBuffer.allocate(4 + 1 + comp.length);
++        enveloped.putInt(comp.length + 1);
++        enveloped.put((byte) version.getId());
++        enveloped.put(comp);
++        enveloped.flip();
++        this.file.write(pos, enveloped);
++    }
++
++    @Override
++    public void flush() {
++    }
++
++    @Override
++    public void close() throws java.io.IOException {
++        this.file.close();
++    }
++}
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFile.java b/net/minecraft/world/level/chunk/storage/RegionFile.java
+index 0caea4e..633f205 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFile.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFile.java
+@@ -778,7 +778,8 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         this.file.force(true);
+     }
+ 
+-    @Override // Linear - satisfies AbstractRegionFile.clear
++    // Linear - vanilla sector delete (kept ChunkPos-typed); the long-key
++    // bridge below satisfies AbstractRegionFile.clear.
+     public void clear(final ChunkPos pos) throws IOException {
+         int offsetIndex = getOffsetIndex(pos);
+         int offset = this.offsets.get(offsetIndex);
+@@ -791,7 +792,8 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         }
+     }
+ 
+-    @Override // Linear - widened protected -> public to satisfy AbstractRegionFile.write
++    // Linear - widened protected -> public vanilla write (kept ChunkPos-typed);
++    // the long-key bridge below satisfies AbstractRegionFile.write.
+     public synchronized void write(final ChunkPos pos, final ByteBuffer data) throws IOException {
+         int offsetIndex = getOffsetIndex(pos);
+         int offset = this.offsets.get(offsetIndex);
+@@ -862,7 +864,8 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         return this.offsets.get(getOffsetIndex(pos));
+     }
+ 
+-    @Override // Linear - satisfies AbstractRegionFile.hasChunk (existing method, annotation only)
++    // Linear - vanilla hasChunk (kept ChunkPos-typed); the long-key bridge
++    // below satisfies AbstractRegionFile.hasChunk.
+     public boolean hasChunk(final ChunkPos pos) {
+         return this.getOffset(pos) != 0;
+     }
+@@ -926,7 +929,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+ 
+         @Override
+         public final void moonrise$write(final net.linear.AbstractRegionFile regionFile) throws IOException { // Linear - widened to the shared region-file type
+-            regionFile.write(this.pos, ByteBuffer.wrap(this.buf, 0, this.count));
++            regionFile.write(net.linear.ChunkKey.of(this.pos.x(), this.pos.z()), ByteBuffer.wrap(this.buf, 0, this.count));
+         }
+         // Paper end - rewrite chunk system
+ 
+@@ -1043,4 +1046,27 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+ 
+     }
+     // Paper end
++
++    // Linear - AbstractRegionFile long-key bridges. Vanilla ChunkPos bodies above
++    // are untouched; conversion happens once here at the boundary.
++    @Override
++    public void clear(final long chunk) throws IOException {
++        this.clear(new ChunkPos(net.linear.ChunkKey.x(chunk), net.linear.ChunkKey.z(chunk)));
++    }
++
++    @Override
++    public synchronized void write(final long chunk, final ByteBuffer data) throws IOException {
++        this.write(new ChunkPos(net.linear.ChunkKey.x(chunk), net.linear.ChunkKey.z(chunk)), data);
++    }
++
++    @Override
++    public boolean hasChunk(final long chunk) {
++        return this.hasChunk(new ChunkPos(net.linear.ChunkKey.x(chunk), net.linear.ChunkKey.z(chunk)));
++    }
++
++    @Override
++    public DataInputStream getChunkDataInputStream(final long chunk) throws IOException {
++        return this.getChunkDataInputStream(
++            new ChunkPos(net.linear.ChunkKey.x(chunk), net.linear.ChunkKey.z(chunk)));
++    }
+ }
+diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+index e2b7c67..cc09e27 100644
+--- a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
++++ b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+@@ -256,6 +256,50 @@ public class RegionStorageUpgrader {
+         final int compressionLevel,
+         final net.linear.LinearRegionConverter.Listener listener
+     ) throws net.linear.LinearRegionConverter.ConversionProtectionException {
++        // Linear - converter opens need the NMS-backed factory openers (anvil +
++        // linear) plus the converter RegionOpener, and this choke point
++        // (startup + recreate) can run before any RegionFileStorage exists
++        // (fail-loud defaults otherwise). Idempotent; mirrors the storage-ctor registration.
++        net.linear.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) -> (net.linear.AbstractRegionFile)(Object) new net.minecraft.world.level.chunk.storage.RegionFile((net.minecraft.world.level.chunk.storage.RegionStorageInfo) info, file, dir, sync));
++        net.linear.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
++        net.linear.LinearRegionConverter.linear$setRegionOpener((file, openFolder, openSync, format, level) ->
++            net.linear.AbstractRegionFileFactory.get(file,
++                new RegionStorageInfo("converter", net.minecraft.world.level.Level.OVERWORLD, "chunk"),
++                openFolder, openSync, level));
++        net.linear.LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) -> new net.minecraft.world.level.chunk.storage.LinearAnvilSink(file, folder));
++        // Loaded-region exclusion is operator guidance (see storage-ctor seam).
++        // Open-but-clean handles stay undetected; shadow protection is the backstop.
++        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked
++        // proceeds: every Linear write is tracked, so unseen means clean).
++        net.linear.LinearRegionConverter.linear$setReverseSkipPredicate(path -> {
++            try {
++                java.nio.file.Path parent = path == null ? null : path.getParent();
++                if (parent == null) {
++                    return true;
++                }
++                // Dirty-only: deriving a loaded-region check from a path is unreliable,
++                // so operators must quiesce worlds (the convert gate aborts when dirty).
++                return net.linear.LinearFlushCoordinator.isFolderDirty(parent);
++            } catch (RuntimeException e) {
++                return true;
++            }
++        });
++        // Linear - forward skip parity: same folder-dirty predicate shape as
++        // reverse beside it, so live converts defer loaded regions instead of
++        // copying files under live writes.
++        // Open-but-clean handles stay undetected; shadow protection is the backstop.
++        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked.
++        net.linear.LinearRegionConverter.linear$setForwardSkipPredicate(path -> {
++            try {
++                java.nio.file.Path parent = path == null ? null : path.getParent();
++                if (parent == null) {
++                    return true;
++                }
++                return net.linear.LinearFlushCoordinator.isFolderDirty(parent);
++            } catch (RuntimeException e) {
++                return true;
++            }
++        });
+         // Linear - sysprop-first via LinearPolicy (single owner); the clamp stays the range truth.
+         final String sysLevel = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_LEVEL);
+         final int effectiveLevel = net.linear.config.LinearPolicy.resolveLevel(sysLevel, compressionLevel, 6);
+@@ -296,7 +306,7 @@ public class RegionStorageUpgrader {
+                         for (int x = 0; x < 32; x++) {
+                             for (int z = 0; z < 32; z++) {
+                                 ChunkPos pos = new ChunkPos(x + xOffset, z + zOffset);
+-                                if (regionSource.hasChunk(pos)) {
++                                if (regionSource.hasChunk(net.linear.ChunkKey.of(pos.x(), pos.z()))) {
+                                     chunkPositions.add(pos);
+                                 }
+                             }

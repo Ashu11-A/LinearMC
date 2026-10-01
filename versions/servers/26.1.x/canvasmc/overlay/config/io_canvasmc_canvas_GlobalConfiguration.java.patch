@@ -1,0 +1,54 @@
+diff --git a/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java b/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java
+index 516415d6..2f434549 100644
+--- a/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java
++++ b/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java
+@@ -350,6 +350,49 @@ public class GlobalConfiguration extends Part {
+         }
+     }
+ 
++    public Linear linear = new Linear();
++    public static class Linear extends Part {
++        {
++            option("flushFrequency")
++                .docs(
++                    Style.wrap(
++                        "Minimum age, in seconds, of a dirty Linear region file before",
++                        "a periodic flush writes it. Forced saves and shutdown always flush."
++                    )
++                );
++            option("flushMaxThreads")
++                .docs(
++                    Style.wrap(
++                        "Shared Linear flush pool size. Values <= 1 keep the serial path."
++                    )
++                );
++            option("compressionWorkers")
++                .docs(
++                    Style.wrap(
++                        "zstd worker threads for Linear flushes. 0 = serial."
++                    )
++                );
++            option("longDistanceMatching")
++                .docs(
++                    Style.wrap(
++                        "zstd long-distance-matching window log. 0 = off."
++                    )
++                );
++            option("logFlushBatches")
++                .docs(
++                    Style.wrap(
++                        "Log Linear flush batches. Currently informational only."
++                    )
++                );
++        }
++
++        public long flushFrequency = 10L;
++        public int flushMaxThreads = 1;
++        public int compressionWorkers = 0;
++        public int longDistanceMatching = 0;
++        public boolean logFlushBatches = false;
++    }
++
+     public ChunkSystem chunkSystem = new ChunkSystem();
+     public static class ChunkSystem extends Part {
+ 

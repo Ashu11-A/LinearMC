@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Mon, 22 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Linear region observability
+
+Lock-free folder-wide timing and measurement counters for the Linear
+read/write/flush/load paths. No behaviour change on the ANVIL path;
+no hot-interface signature changes; no synchronized added on hot
+record paths (LongAdder/LongAccumulator only); no Bukkit lookups; no
+new threads; micros via System.nanoTime/1000.
+
+Timing groups (count/total/max/avg) for read, write, flush and load,
+plus markDirty, filesFlushed, failures, oversizeRejects, evicts,
+cacheHits/cacheMisses and dirtyDepth. Measurement fields add summed
+raw vs compressed flush bytes, bucketed flush p50/p99 latency
+estimates (10 buckets, 1ms..1s+, upper-bound estimates, clean-no-op
+flushes excluded like flush.count) and millis-since-last-successful-
+flush (-1 when never flushed). Counters live folder-wide on the
+coordinator with per-file views; RegionFileStorage delegates to the
+coordinator and holds zero new fields.
+---
+ net/minecraft/world/level/chunk/storage/RegionFileStorage.java |   46 +++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 45 insertions(+), 1 deletion(-)
+
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+index 63abf1eadd70a7db3a9c4508218059496e2d4fbf..869c6c86fd9bed6c4403bb76e105f43c24f0bf62 100644
+@@ -139,10 +139,20 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     public synchronized final AbstractRegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException { // Linear - widened + dual-read probe
+         final long key = ChunkPos.pack(chunkX >> REGION_SHIFT, chunkZ >> REGION_SHIFT);
+ 
+-        AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key);
++        AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key); // Linear: cache-hit accounting below (no recalc-counter touch)
+         if (ret != null) {
++            // Linear: cache hit (lock-free delegate, zero new fields).
++            try {
++                LinearFlushCoordinator.forFolder(this.folder).reportCacheHit();
++            } catch (RuntimeException ignored) {
++            }
+             return ret;
+         }
++        // Linear: cache miss (lock-free delegate, zero new fields).
++        try {
++            LinearFlushCoordinator.forFolder(this.folder).reportCacheMiss();
++        } catch (RuntimeException ignored) {
++        }
+ 
+         if (!this.doesRegionFilePossiblyExist(key)) {
+             return null;
+@@ -205,6 +215,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             NbtIo.write(compound, linearOut);
+             linearOut.close();
+             final byte[] linearBytes = linearBuffer.toByteArray();
++            // Linear: oversize-reject count (lock-free); behaviour
++            // unchanged (DELETE + log, anvil parity).
++            if (linearBytes.length > net.linear.LinearRegionFile.MAX_CHUNK_SIZE) {
++                try {
++                    LinearFlushCoordinator.forFolder(this.folder).reportOversizeReject();
++                } catch (RuntimeException ignored) {
++                }
++            }
+             // Linear - linear oversize pre-check. Ownership split:
+             // LinearRegionFile.write() enforces the cap invariant (throws); this
+             // site decides behavior (DELETE + log, anvil parity). Early return
+@@ -389,8 +407,18 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+             AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key);
+             if (ret != null) {
++                // Linear: cache hit (lock-free delegate, zero new fields).
++                try {
++                    LinearFlushCoordinator.forFolder(this.folder).reportCacheHit();
++                } catch (RuntimeException ignored) {
++                }
+                 return ret;
+             }
++            // Linear: cache miss (lock-free delegate, zero new fields).
++            try {
++                LinearFlushCoordinator.forFolder(this.folder).reportCacheMiss();
++            } catch (RuntimeException ignored) {
++            }
+ 
+             final int cacheSize = io.papermc.paper.configuration.GlobalConfiguration.get() == null ? 256 : io.papermc.paper.configuration.GlobalConfiguration.get().misc.regionFileCacheSize; // Paper - Sanitise RegionFileCache and make configurable - Config not available during initial FileFixerUpper run
+ 
+@@ -558,6 +586,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+                     NbtIo.write(value, output);
+                 }
+                 byte[] linearBytes = linearBuffer.toByteArray();
++                // Linear: oversize-reject count (lock-free); delete+log
++                // parity unchanged.
++                if (linearBytes.length > net.linear.LinearRegionFile.MAX_CHUNK_SIZE) {
++                    try {
++                        LinearFlushCoordinator.forFolder(this.folder).reportOversizeReject();
++                    } catch (RuntimeException ignored) {
++                    }
++                }
+                 // Linear - same pre-check as the Moonrise path above;
+                 // vanilla parity is delete + log (cf. the anvil
+                 // catch(RegionFileSizeException) arm). The slot clear persists on
+@@ -576,6 +612,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         }
+     }
+ 
++    /**
++     * Linear linearstats: folder snapshot pull-through (zero new fields;
++     * delegates to the per-folder coordinator). NMS stays Bukkit-free.
++     */
++    public net.linear.LinearRegionTimings.LinearFolderSnapshot linear$stats() {
++        return net.linear.LinearFlushCoordinator.forFolder(this.folder).snapshot();
++    }
++
+     @Override
+     public void close() throws IOException {
+         // Paper start - rewrite chunk system

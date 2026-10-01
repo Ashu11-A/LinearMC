@@ -1,0 +1,161 @@
+From e9312e4799f880b2099af2da7607d53880e941c4 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 15:59:31 -0300
+Subject: [PATCH] Linear startup conversion
+
+Boot-time auto-conversion trigger plus NMS entry points. DedicatedServer
+initServer calls the pre-plugin pass after world-config init and before
+plugin load and aborts boot (returns false) when a protection trip halts
+the server, so no plugin code runs afterwards; RegionStorageUpgrader gains
+a filesystem mismatch detector, a config-only target resolver that maps
+anything-but-LINEAR to ANVIL, and a single-folder conversion entry point
+that delegates the compression level through the shared clamp. The
+recreate write side now references the shared default compression
+constant instead of a literal.
+---
+ net/minecraft/server/dedicated/DedicatedServer.java          |   20 ++++++++++++++++++++
+ net/minecraft/util/worldupdate/RegionStorageUpgrader.java    |   80 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 99 insertions(+), 1 deletion(-)
+
+diff --git a/net/minecraft/server/dedicated/DedicatedServer.java b/net/minecraft/server/dedicated/DedicatedServer.java
+index bc857ea..ddfdaee 100644
+--- a/net/minecraft/server/dedicated/DedicatedServer.java
++++ b/net/minecraft/server/dedicated/DedicatedServer.java
+@@ -337,6 +337,26 @@ public class DedicatedServer extends MinecraftServer implements ServerInterface
+             return false;
+         }
+ 
++        // Linear - startup auto-conversion trigger (B2; minecraft-0015).
++        // Boot ordering: world-config init ran above (initializeGlobalConfiguration /
++        // initializeWorldDefaultsConfiguration), and no plugin code has executed yet
++        // (loadPlugins / STARTUP below). The conversion pass itself lives in the Paper
++        // tree (paper-0011, io.papermc.paper.linear.LinearStartupConversion); this
++        // single call fixes its position in the boot order. Synchronous and blocking:
++        // boot waits while old-format (.mca) data converts to LINEAR on
++        // LINEAR-configured worlds. Explicit-ANVIL worlds never convert (P1 invariant,
++        // enforced in RegionStorageUpgrader.resolveTargetFormat: only LINEAR target
++        // converts, dual-read keeps serving everything else).
++        // HIGH-4 halt-aborts-boot: the hook returns false when a protection trip
++        // halted the server, and halt clears the running flag, so abort initServer
++        // at once when either signal fires. Returning false here guarantees NO
++        // plugin code (STARTUP or POSTWORLD) executes after a protection trip.
++        // (initServer returns boolean and isRunning() lives on MinecraftServer,
++        // verified against the live NMS tree, so both spellings link here.)
++        if (!io.papermc.paper.linear.LinearStartupConversion.runPrePluginConversion(this)
++            || !this.isRunning()) {
++            return false;
++        }
+         // CraftBukkit start
+         this.server.loadPlugins();
+         this.server.enablePlugins(org.bukkit.plugin.PluginLoadOrder.STARTUP);
+diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+index 9732cca..a89632d 100644
+--- a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
++++ b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+@@ -155,7 +155,13 @@ public class RegionStorageUpgrader {
+                 true,
+                 this.dataFixType,
+                 writeFormat,
+-                1
++                // Linear - startup conversion level flow (B2; minecraft-0015).
++                // Reference AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL,
++                // never a literal, so B1's tuned default (minecraft-0014, level 6)
++                // flows into the recreate write side. Ordering: this patch
++                // applies AFTER B1's minecraft-0014. Value is 1 until B1 lands,
++                // so behavior is unchanged without it.
++                AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL
+             )
+             : new SimpleRegionStorage(info, regionFolder, this.dataFixer, true, this.dataFixType));
+     }
+@@ -176,6 +182,88 @@ public class RegionStorageUpgrader {
+         return net.linear.RegionFileFormat.ANVIL;
+     }
+ 
++    // Linear - startup auto-conversion mismatch detector (B2; minecraft-0015).
++    // Pure filesystem, config-free like probeWriteFormat above: true when the
++    // folder holds at least one REGEX-matching .mca file (old-format data the
++    // dual-read path still serves from .mca). The Paper pre-plugin hook calls
++    // this per storage folder (region/, entities/, poi/) and converts only
++    // when the world target (see resolveTargetFormat) is LINEAR.
++    public static boolean needsConversion(final Path regionFolder) {
++        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".mca"));
++        if (files == null) {
++            return false;
++        }
++        for (File file : files) {
++            if (REGEX.matcher(file.getName()).matches()) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    // Linear - startup auto-conversion per-world target resolution (B2; minecraft-0015).
++    // Called by the Paper pre-plugin hook with the world folder plus the config
++    // snapshot the caller already read via the Paper configuration API
++    // (level.paperConfig() does not exist yet: WorldConfiguration is created
++    // per ServerLevel AFTER STARTUP plugins, so the hook resolves from config
++    // files, never from a level instance).
++    //
++    // P1 SAFETY INVARIANT (negative assertion): sysprop-first via LinearPolicy
++    // (single owner); the file layer stays case-sensitive and per-world with a
++    // shipped default of LINEAR. Explicit-ANVIL file values (and invalid
++    // sysprops, which fall back to the file layer) still resolve ANVIL, and
++    // the hook converts ONLY when the returned target is LINEAR, so NO
++    // explicit-ANVIL path can reach conversion: dual-read keeps serving those
++    // worlds untouched.
++    public static net.linear.RegionFileFormat resolveTargetFormat(
++        final Path regionFolder,
++        final io.papermc.paper.configuration.type.RegionFileFormat configuredFormat
++    ) {
++        // regionFolder identifies the world for log correlation and any future
++        // filesystem signal; the decision itself is config-only (see invariant).
++        // Linear - sysprop-first (file semantics unchanged: case-sensitive file layer, per-world scope, default LINEAR).
++        final String fileValue = configuredFormat == null ? null : configuredFormat.toString();
++        final String sysFormat = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_FORMAT);
++        final net.linear.RegionFileFormat target = net.linear.config.LinearPolicy.resolveFormat(sysFormat, fileValue, net.linear.RegionFileFormat.ANVIL);
++        if (sysFormat != null && !sysFormat.trim().equals(String.valueOf(fileValue))) { LOGGER.info(net.linear.config.LinearPolicy.overrideLine(net.linear.config.LinearPolicy.SYSPROP_FORMAT, sysFormat, String.valueOf(fileValue), String.valueOf(target), String.valueOf(regionFolder))); }
++        return target;
++    }
++
++    // Linear - startup auto-conversion entry point (B2; minecraft-0015).
++    // Callable OUTSIDE the --recreateRegionFiles/DFU flow: converts every .mca
++    // file in ONE folder (region/, entities/, or poi/) to LINEAR at the given
++    // compression level, with no DataFixer gymnastics beyond what the shared
++    // recreate machinery already performs.
++    //
++    // B1 DEPENDENCY (ordering: this patch applies AFTER B1's minecraft-0014):
++    // the level flows through AbstractRegionFileFactory.clampCompressionLevel
++    // (single source of truth: never a literal and never a second inline range
++    // check here), so out-of-range values fall back to
++    // DEFAULT_COMPRESSION_LEVEL and B1's tuned default (level 6) reaches the
++    // startup conversion write side unchanged.
++    //
++    // B3 DEPENDENCY (cross-agent contract, signatures fixed): this method is a
++    // thin hop from the boot hook to
++    // net.linear.LinearRegionConverter.convertRegionFolder, which owns the file
++    // work plus the retry machinery (maxAttempts=3 internal). The halt itself
++    // does NOT live in the converter: when a file exhausts retries the
++    // converter throws ConversionProtectionException (carrying the per-file
++    // summary), and the Paper hook (paper-0011) logs the terminal alert and
++    // halts the server before plugins load. Signature and nested
++    // Status/FileResult types stay B3-owned and untouched.
++    public static net.linear.LinearRegionConverter.ConversionSummary convertFolderToLinear(
++        final Path regionFolder,
++        final int compressionLevel,
++        final net.linear.LinearRegionConverter.Listener listener
++    ) throws net.linear.LinearRegionConverter.ConversionProtectionException {
++        // Linear - sysprop-first via LinearPolicy (single owner); the clamp stays the range truth.
++        final String sysLevel = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_LEVEL);
++        final int effectiveLevel = net.linear.config.LinearPolicy.resolveLevel(sysLevel, compressionLevel, 6);
++        if (sysLevel != null && !sysLevel.trim().equals(String.valueOf(compressionLevel))) { LOGGER.info(net.linear.config.LinearPolicy.overrideLine(net.linear.config.LinearPolicy.SYSPROP_LEVEL, sysLevel, String.valueOf(compressionLevel), String.valueOf(effectiveLevel), String.valueOf(regionFolder))); }
++        return net.linear.LinearRegionConverter.convertRegionFolder(
++            regionFolder, AbstractRegionFileFactory.clampCompressionLevel(effectiveLevel), listener);
++    }
++
+     private List<FileToUpgrade> getFilesToProcess(final RegionStorageInfo info, final Path regionFolder) {
+         List<FileToUpgrade> filesToUpgrade = getAllChunkPositions(info, regionFolder);
+         this.upgradeProgress.addTotalFileFixOperations(filesToUpgrade.size());
+-- 
+2.43.0
+

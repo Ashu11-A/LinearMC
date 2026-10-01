@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/dedicated/DedicatedServer.java (startup trigger)
+
+Post-apply overlay (see versions/26.1.x/canvas/OVERLAY.md). Pre-plugin
+startup auto-conversion pass: runs after the Canvas pre-start config hook
+(canvas-worlds defaults load on first WorldConfig access; the driver reads
+the files directly) and before loadPlugins. A false return means protection
+tripped and the server halted — abort boot before any plugin loads.
+---
+diff --git a/net/minecraft/server/dedicated/DedicatedServer.java b/net/minecraft/server/dedicated/DedicatedServer.java
+--- a/net/minecraft/server/dedicated/DedicatedServer.java
++++ b/net/minecraft/server/dedicated/DedicatedServer.java
+@@ -289,4 +289,10 @@ public class DedicatedServer extends MinecraftServer implements ServerInterface
+         net.minecraft.world.level.block.state.BlockBehaviour.BlockStateBase.canvas$initPathTypeCache();
+         // Canvas end - pre start server config hook
+         // Paper end - initialize global and world-defaults configuration
++        // Linear - startup auto-conversion (pre-plugin pass): converts .mca
++        // to .linear where canvas-worlds targets LINEAR. False = protection
++        // tripped and server halted: abort boot before plugins load.
++        if (!io.papermc.paper.linear.LinearStartupConversion.runPrePluginConversion(this)) {
++            return false;
++        }
+         this.server.spark.enableEarlyIfRequested(); // Paper - spark
+         // Paper start - fix converting txt to json file; convert old users earlier after PlayerList creation but before file load/save
+         if (this.convertOldUsers()) {

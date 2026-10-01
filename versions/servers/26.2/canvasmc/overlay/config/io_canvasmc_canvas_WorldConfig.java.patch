@@ -1,0 +1,44 @@
+diff --git a/canvas-server/src/main/java/io/canvasmc/canvas/WorldConfig.java b/canvas-server/src/main/java/io/canvasmc/canvas/WorldConfig.java
+index 15cdf599..e08664f1 100644
+--- a/canvas-server/src/main/java/io/canvasmc/canvas/WorldConfig.java
++++ b/canvas-server/src/main/java/io/canvasmc/canvas/WorldConfig.java
+@@ -198,6 +198,39 @@ public class WorldConfig extends Part {
+         option("regionBars").docs("Region resource bars config. You can toggle these on players with the \"/regionbar\" command");
+     }
+ 
++    public RegionFormat regionFormat = new RegionFormat();
++    public static class RegionFormat extends Part {
++        {
++            option("format")
++                .docs(
++                    Style.wrap(
++                        "Region file format for new writes: LINEAR (compact) or ANVIL (default).",
++                        "Reads probe both extensions, so flipping is safe in either direction."
++                    )
++                );
++            option("compressionLevel")
++                .docs(
++                    Style.wrap(
++                        "zstd compression level for Linear flushes, 1-22. Out-of-range",
++                        "values fall back to 6. Levels 12 and above are unsafe (shutdown",
++                        "time) — do not use."
++                    )
++                );
++            option("crashOnBrokenSymlink")
++                .docs(
++                    Style.wrap(
++                        "Halt on a broken region symlink instead of warning. LINEAR only."
++                    )
++                );
++        }
++
++        public net.linear.RegionFileFormat format = net.linear.RegionFileFormat.LINEAR;
++
++        public int compressionLevel = 6;
++
++        public boolean crashOnBrokenSymlink = true;
++    }
++
+     public RegionBars regionBars = new RegionBars();
+     public static class RegionBars extends Part {
+ 

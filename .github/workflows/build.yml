@@ -1,0 +1,588 @@
+name: build
+
+# Release-paperclip workflow. Produces per-version paperclip jars fast and
+# attaches them to GitHub releases. Every-push / PR validation (preflight,
+# unit tests) lives in test.yml -- this workflow never runs on
+# branch pushes or pull_request. Boot smokes stay HERE (release-significant:
+# they prove the shipped jar boots and emits .linear).
+#
+# Speed design (see run 36887591484 analysis: ~25min -> ~10min):
+#   * boots are fast-kill (boot-and-wait.sh via the boot-smoke action): the
+#     server is killed as soon as `Done (` lands instead of idling a fixed
+#     `timeout 300` per boot (~12min saved per fork job);
+#   * the post-patch fork tree is cached (fork-cache): clone + git am are
+#     skipped on exact key hits (upstream ref + every supplement input);
+#   * fork legs build the proven set (build-paperclip action), not the full
+#     upstream `./gradlew build`;
+#   * disk prune is skipped when >=25GB is already free.
+# Shared logic lives in .github/actions/* (setup, stage, stage-overlay,
+# build-paperclip, boot-smoke) and .github/scripts/* -- this file stays a
+# declarative matrix + step list, no inline build/smoke logic.
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: "Version folders to build (comma-separated, e.g. '26.1.x'); 'all' builds every folder; add 'horizon' to include the standalone plugin (its version id is the plugin dir, e.g. 1.0.0, so a line filter alone drops it)"
+        required: false
+        default: 'all'
+
+# Minimal default: read-only. The release job escalates to contents:write
+# (it uploads release assets); nothing else needs write access.
+permissions:
+  contents: read
+
+env:
+  # Upstream pins (repo/branch/ref/MC) are NOT duplicated here: the single
+  # source of truth is versions/*/upstream.properties, fanned out to every
+  # job by the discover matrix below.
+  JAVA_VERSION: 25
+  # GB free required for a fork build. The disk-prune step skips its slow
+  # `docker image prune` when the runner already has this much room.
+  DISK_NEED_GB: 25
+  # How long one smoke boot may take to reach `Done (` before it fails.
+  # boot-and-wait.sh kills the server the moment Done lands, so healthy
+  # boots cost ~60-90s; this cap only binds on genuinely stuck boots.
+  SMOKE_TIMEOUT_SECS: 240
+
+jobs:
+  discover:
+    # Fans out versions/*/*/upstream*.properties into a build matrix (one
+    # entry per version x server channel: folia, canvas, horizon). Adding a
+    # new MC line = adding a new versions/servers/<line>/ directory; adding
+    # a server leg = a new upstream.<server>.properties pin (reorganized
+    # LinearMC layout: versions/servers/<line>/{folia,canvasmc}/ +
+    # versions/plugins/horizon/<plugin-ver>/). A leg is emitted only with
+    # content (folia: patches/; canvas: overlay/; horizon: the standalone
+    # Gradle project at versions/plugins/horizon/<ver>/). No workflow edit
+    # needed.
+    # STABLE SERVER IDS: the matrix `server` id stays `canvas` (release
+    # assets are linearmc-<server>-<mc>, layout resolve maps
+    # canvas->canvas-server/canvas-paperclip) while the leg directory is
+    # now `canvasmc/` (SERVER_DIR_MAP below); renaming the id to canvasmc
+    # would break asset names, so the id<->dir mapping is explicit.
+    # A manual dispatch can limit the run to some folders (partial release
+    # re-run via `gh workflow run build.yml --ref <tag> -f versions=<list>`).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      count: ${{ steps.set-matrix.outputs.count }}
+    steps:
+      - name: Checkout (matrix source)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Discover versions
+        id: set-matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSIONS: ${{ inputs.versions }}
+        run: |
+          python3 - <<'EOF'
+          import glob
+          import json
+          import os
+          import re
+
+          entries = []
+          # Reorganized LinearMC legs: versions/servers/<line>/
+          # upstream.properties (folia, legacy name) plus
+          # versions/servers/<line>/upstream.<server>.properties (canvas),
+          # and versions/plugins/horizon/upstream.horizon.properties. Matrix
+          # `server` ids stay stable (folia/canvas/horizon): the canvas leg
+          # directory is now `canvasmc/`, mapped explicitly via
+          # SERVER_DIR_MAP so release asset names (linearmc-<server>-<mc>)
+          # never change. `version` is the grandparent line dir for servers
+          # (26.1.x) and the plugin version dir (1.0.0) for horizon. A leg
+          # is emitted only when it actually has content (see below). Legs
+          # without content (pins but no patches, e.g. 26.2; status-only
+          # 26.3) are reported and skipped, never fail, so the matrix grows
+          # automatically as ports land — no workflow edit needed.
+          SERVER_DIR_MAP = {'canvas': 'canvasmc'}
+          for prop in sorted(glob.glob('versions/*/*/upstream*.properties')):
+              if prop.endswith('.example'):
+                  continue
+              parts = prop.split('/')
+              stem = parts[-1][len('upstream'):-len('.properties')]
+              server = stem.lstrip('.') or 'folia'
+              if parts[1] == 'servers':
+                  version = parts[2]
+              elif server == 'horizon':
+                  # Plugin version dir(s) holding the standalone Gradle
+                  # project (versions/plugins/horizon/<ver>/
+                  # build.gradle.kts). One matrix entry per plugin version;
+                  # all share this pin file's repo/branch/ref/bundle.
+                  version = None
+              else:
+                  raise SystemExit(f'discover: unexpected pin path {prop}')
+              prefix = server.upper()
+              kv = {}
+              with open(prop) as f:
+                  for line in f:
+                      line = line.strip()
+                      if not line or line.startswith('#') or '=' not in line:
+                          continue
+                      k, v = line.split('=', 1)
+                      kv[k.strip()] = v.strip()
+              for key in (f'{prefix}_REPO', f'{prefix}_BRANCH', f'{prefix}_REF', 'MC_VERSION'):
+                  if not kv.get(key):
+                      raise SystemExit(f'discover: {prop} is missing {key}')
+              if not re.fullmatch(r'[0-9a-f]{40}', kv[f'{prefix}_REF']):
+                  raise SystemExit(
+                      f"discover: {prop} {prefix}_REF must be a full 40-char sha "
+                      f"(got {kv[f'{prefix}_REF']!r})")
+              # Horizon is a standalone Gradle project, not a fork checkout:
+              # its MC target is the paper dev bundle, pinned here (not in
+              # build.gradle.kts) so another versions/plugins/horizon/
+              # upstream.horizon.properties fans out with no workflow edit.
+              dev_bundle = ''
+              if server == 'horizon':
+                  dev_bundle = kv.get('HORIZON_DEV_BUNDLE', '')
+                  if not re.fullmatch(r'[0-9]+\.[0-9]+\.build\.[0-9]+(-beta)?', dev_bundle):
+                      raise SystemExit(
+                          f"discover: {prop} HORIZON_DEV_BUNDLE must be a "
+                          f"pinned dev bundle (got {dev_bundle!r})")
+              # A leg is emitted only when it actually has content:
+              # fork legs (folia/canvas) need patches under the reorganized
+              # tree (folia: versions/servers/<v>/folia/patches/**/*.patch;
+              # canvas leg dir is canvasmc/: versions/servers/<v>/canvasmc/
+              # overlay/**/*.patch, plus any patches/**), or for folia the
+              # legacy flat versions/<v>/patches/*.patch; the horizon leg
+              # is a standalone Gradle project (no fork checkout): its
+              # marker is versions/plugins/horizon/<ver>/build.gradle.kts.
+              # Legs without content are reported and skipped, so the matrix
+              # grows automatically as ports land — no workflow edit needed.
+              if server == 'horizon':
+                  plugin_vers = sorted(
+                      p.split('/')[3]
+                      for p in glob.glob('versions/plugins/horizon/*/build.gradle.kts'))
+                  if not plugin_vers:
+                      print(f'discover: horizon has no plugin version with build.gradle.kts yet; skipping leg')
+                      continue
+                  for version in plugin_vers:
+                      entries.append({
+                          'version': version,
+                          'server': server,
+                          'mc': kv['MC_VERSION'],
+                          'repo': kv[f'{prefix}_REPO'],
+                          'branch': kv[f'{prefix}_BRANCH'],
+                          'ref': kv[f'{prefix}_REF'],
+                          'dev_bundle': dev_bundle,
+                      })
+              else:
+                  legdir = SERVER_DIR_MAP.get(server, server)
+                  leg_content = glob.glob(f'versions/servers/{version}/{legdir}/patches/**/*.patch', recursive=True)
+                  leg_content += glob.glob(f'versions/servers/{version}/{legdir}/overlay/**/*.patch', recursive=True)
+                  if server == 'folia' and not leg_content:
+                      leg_content = glob.glob(f'versions/{version}/patches/*.patch')
+                  if not leg_content:
+                      print(f'discover: {version}/{server} has no content yet; skipping leg')
+                      continue
+                  entries.append({
+                      'version': version,
+                      'server': server,
+                      'mc': kv['MC_VERSION'],
+                      'repo': kv[f'{prefix}_REPO'],
+                      'branch': kv[f'{prefix}_BRANCH'],
+                      'ref': kv[f'{prefix}_REF'],
+                      'dev_bundle': dev_bundle,
+                  })
+          # Report scaffold-only lines (pins but no content, e.g. 26.2; or
+          # status.properties-only lines like 26.3 with no upstream pin at
+          # all): never fail, just report so the skip is visible.
+          for linedir in sorted(glob.glob('versions/servers/*')):
+              line = linedir.split('/')[-1]
+              if not any(e['version'] == line for e in entries):
+                  reason = 'no upstream pin' if not glob.glob(f'{linedir}/upstream*.properties') else 'pin but no leg content'
+                  print(f'discover: {line} scaffold-only ({reason}); skipping line')
+          if not entries:
+              raise SystemExit('discover: no versions/*/*/upstream.properties found')
+          print('discover: versions: ' + ', '.join(
+              f"{e['version']}/{e['server']} (mc {e['mc']}, {e['branch']}@{e['ref'][:12]})"
+              for e in entries))
+
+          keep = list(entries)
+
+          # Manual dispatch can limit the run to some folders (e.g. a fix
+          # that applies to one line, or a partial release re-run via
+          # `gh workflow run build.yml --ref <tag> -f versions=<list>`).
+          # Empty/'all' builds every version. Unknown names fail fast.
+          # Server legs filter on line names (26.1.x/26.2/26.3); the
+          # horizon leg filters on its plugin version dir (1.0.0) OR the
+          # leg token 'horizon' (a line filter alone would silently drop the
+          # plugin, whose version id never matches a server line).
+          if os.environ.get('EVENT_NAME') == 'workflow_dispatch':
+              want = (os.environ.get('INPUT_VERSIONS') or 'all').strip()
+              if want.lower() not in ('', 'all'):
+                  picked = [w.strip() for w in want.split(',') if w.strip()]
+                  known = {e['version'] for e in entries}
+                  want_horizon = any(p.lower() == 'horizon' for p in picked)
+                  picked = [p for p in picked if p.lower() != 'horizon']
+                  unknown = [w for w in picked if w not in known]
+                  if unknown:
+                      raise SystemExit(
+                          'discover: unknown version folder(s): '
+                          + ', '.join(unknown)
+                          + f" (have: {', '.join(sorted(known))} plus the 'horizon' leg token)")
+                  keep = [e for e in entries
+                          if e['version'] in picked
+                          or (want_horizon and e['server'] == 'horizon')]
+                  print('discover: workflow_dispatch limits versions to: '
+                        + ', '.join(f"{e['version']}/{e['server']}" for e in keep))
+                  if not keep:
+                      print('discover: empty selection; '
+                            'matrix will be empty (gated jobs skip)')
+
+          matrix = {'include': keep}
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as gh:
+              gh.write(f"matrix={json.dumps(matrix, separators=(',', ':'))}\n")
+              gh.write(f"count={len(keep)}\n")
+          EOF
+
+  build:
+    needs: [discover]
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    concurrency:
+      # One in-flight build per ref+version+server: re-pushed tags queue instead of
+      # racing each other on the same release assets. Never cancel: a release
+      # build must run to completion.
+      group: build-${{ github.ref }}-${{ matrix.version }}-${{ matrix.server }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Bootstrap checkout (resolves local actions below)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Env setup (checkout + Java + Gradle cache)
+        uses: ./.github/actions/setup
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          checkout-path: supplement
+          fetch-depth: '1'
+
+      - name: Resolve server layout (module, jar glob, world config)
+        id: layout
+        run: |
+          case "${{ matrix.server }}" in
+            canvas)
+              # Stable id `canvas` (asset linearmc-canvas-<mc>); the leg
+              # directory is versions/servers/<line>/canvasmc/ (see
+              # discover SERVER_DIR_MAP). Build module stays canvas-server.
+              echo "module=canvas-server" >> "$GITHUB_OUTPUT"
+              echo "glob=canvas-paperclip-*.jar" >> "$GITHUB_OUTPUT"
+              # Canvas ships LINEAR by default; no config flip needed for the
+              # LINEAR smoke. Per-dimension overrides live in dimension folders.
+              ;;
+            horizon)
+              # Standalone Gradle project (no fork checkout, no paperclip):
+              # module/glob unused; the horizon build step uploads both jars.
+              echo "module=horizon-plugin" >> "$GITHUB_OUTPUT"
+              echo "glob=horizon-plugin-*.jar" >> "$GITHUB_OUTPUT"
+              ;;
+            *) # folia
+              echo "module=folia-server" >> "$GITHUB_OUTPUT"
+              echo "glob=folia-paperclip-*.jar" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Free disk space (skip when the runner already has room)
+        run: |
+          # No larger runner exists for this repo (personal account, no
+          # self-hosted): reclaim the hosted image's dead weight instead.
+          # hostedtoolcache is intentionally KEPT (Java lives there).
+          # Two-phase: removing the dead-weight dirs is fast (~30-60s) and
+          # usually frees enough on its own; the slow `docker image prune`
+          # (1-6min, observed) runs only when still short of DISK_NEED_GB.
+          df -h / | tail -1
+          FREE_GB=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          if [ "$FREE_GB" -ge "${{ env.DISK_NEED_GB }}" ]; then
+            echo "disk: ${FREE_GB}GB free (>= ${{ env.DISK_NEED_GB }}GB); skipping prune"
+          else
+            echo "disk: ${FREE_GB}GB free; removing dead-weight dirs"
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift /usr/local/share/boost 2>/dev/null || true
+            FREE_GB=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+            if [ "$FREE_GB" -ge "${{ env.DISK_NEED_GB }}" ]; then
+              echo "disk: ${FREE_GB}GB free after dir removal; skipping docker prune"
+            else
+              echo "disk: ${FREE_GB}GB free; pruning docker images"
+              sudo docker image prune -af 2>/dev/null || true
+            fi
+          fi
+          df -h / | tail -1
+
+      - name: Disk guard (MC builds need room; fail fast, not ENOSPC)
+        run: |
+          df -h /
+          FREE_GB=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          echo "free=${FREE_GB}GB"
+          if [ "$FREE_GB" -lt "${{ env.DISK_NEED_GB }}" ]; then
+            echo "::error::Need >=${{ env.DISK_NEED_GB }}GB free for the fork build, have ${FREE_GB}GB. Re-run on a larger runner (one-line runs-on change)."
+            exit 1
+          fi
+
+      - name: Restore fork tree (post-patch cache)
+        id: fork-cache
+        if: matrix.server != 'horizon'
+        # Exact-match key only (NO restore-keys): a stale tree with different
+        # patches would silently skip patch application. Miss => the
+        # clone/stage/apply steps below rebuild it and the save step stores it.
+        uses: actions/cache/restore@v4
+        with:
+          path: fork
+          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**') }}
+
+      - name: Validate fork cache hit
+        if: matrix.server != 'horizon' && steps.fork-cache.outputs.cache-hit == 'true'
+        run: |
+          test -d fork/paper-server \
+            || { echo "::error::fork cache hit but fork/paper-server is missing; delete the cache key and re-run"; exit 1; }
+          du -sh fork | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "fork-cache: hit, skipping clone + patch application"
+
+      - name: Clone + stage (pinned base, patches, tests)
+        id: stage
+        if: matrix.server != 'horizon' && steps.fork-cache.outputs.cache-hit != 'true'
+        uses: ./supplement/.github/actions/stage
+        with:
+          version: ${{ matrix.version }}
+          server: ${{ matrix.server }}
+          supplement-dir: supplement
+          folia-dir: fork
+          include-tests: 'true'
+
+      - name: Set git identity (paperweight applies patches via git am)
+        if: matrix.server != 'horizon' && steps.fork-cache.outputs.cache-hit != 'true'
+        run: |
+          git config --global user.name "folia-linear-ci"
+          git config --global user.email "folia-linear-ci@users.noreply.github.com"
+
+      - name: Apply patches (weaver/paperweight)
+        if: matrix.server != 'horizon' && steps.fork-cache.outputs.cache-hit != 'true'
+        working-directory: fork
+        run: |
+          ./gradlew applyAllPatches --stacktrace
+
+      - name: Stage Canvas overlay (post-apply Linear layer)
+        if: matrix.server == 'canvas' && steps.fork-cache.outputs.cache-hit != 'true'
+        uses: ./supplement/.github/actions/stage-overlay
+        with:
+          version: ${{ matrix.version }}
+          supplement-dir: supplement
+          canvas-dir: fork
+          include-tests: 'true'
+
+      - name: Save fork tree (post-patch cache)
+        if: matrix.server != 'horizon' && steps.fork-cache.outputs.cache-hit != 'true'
+        # Saved BEFORE the build so the cache holds the source tree only
+        # (build outputs stay in the Gradle cache, where incrementality
+        # belongs). Key matches the restore step above.
+        uses: actions/cache/save@v4
+        with:
+          path: fork
+          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**') }}
+
+      - name: Build paperclip jar (proven set)
+        if: matrix.server != 'horizon'
+        uses: ./supplement/.github/actions/build-paperclip
+        with:
+          module: ${{ steps.layout.outputs.module }}
+          fork-dir: fork
+
+      - name: 'Build Horizon plugin (standalone project)'
+        if: matrix.server == 'horizon'
+        working-directory: supplement/versions/plugins/horizon/${{ matrix.version }}
+        run: |
+          # Proven in-session (see docs/refactor/05-horizon/TEST-REPORT.md):
+          # userdev build with pinned dev bundle; outputs the mixin jar +
+          # the Paper-half -plugin jar. Boot smokes stay manual (runServer
+          # is interactive); the beta ships both jars.
+          # Hermetic userdev setup: wipe the paperweight-userdev work dir so
+          # a restored cache can never short-circuit decompile/AT prep with
+          # half-baked state (observed: 4.7s short-circuit then JST exit 1;
+          # full 55s setup is proven green). Dependency jars stay cached.
+          rm -rf ~/.gradle/caches/paperweight-userdev
+          # Multi-version matrix: the MC target is the pinned dev bundle from
+          # versions/plugins/horizon/upstream.horizon.properties (discover
+          # fans it out as matrix.dev_bundle); substitute it so another
+          # plugin version builds its own bundle with no workflow edit.
+          # Folia/canvas legs carry an empty dev_bundle and never reach
+          # this step. Project dir is versions/plugins/horizon/<ver>
+          # (matrix.version is the plugin version dir, e.g. 1.0.0).
+          PIN="${{ matrix.dev_bundle }}"
+          test -n "$PIN" || { echo "::error::matrix.dev_bundle is empty (discover must pin HORIZON_DEV_BUNDLE)"; exit 1; }
+          sed -i -E "s|paperweight\.paperDevBundle\(\"[^\"]+\"\)|paperweight.paperDevBundle(\"$PIN\")|" build.gradle.kts
+          grep -F "paperDevBundle(\"$PIN\")" build.gradle.kts
+          ./gradlew build --stacktrace
+          ls -la build/libs/ | grep -iE 'horizon-plugin-.*\.jar'
+
+      - name: Hash paperclip jar (SHA256)
+        if: matrix.server != 'horizon'
+        run: |
+          JAR=$(ls "$GITHUB_WORKSPACE/fork/${{ steps.layout.outputs.module }}/build/libs"/${{ steps.layout.outputs.glob }} | head -1)
+          test -f "$JAR" || { echo "::error::paperclip jar missing:"; ls -la "$GITHUB_WORKSPACE/fork/${{ steps.layout.outputs.module }}/build/libs/" || true; exit 1; }
+          sha256sum "$JAR" | tee "$JAR.sha256"
+
+      - name: Boot smoke (ANVIL fresh world)
+        if: matrix.server != 'horizon'
+        uses: ./supplement/.github/actions/boot-smoke
+        with:
+          server: ${{ matrix.server }}
+          jar: fork/${{ steps.layout.outputs.module }}/build/libs/${{ steps.layout.outputs.glob }}
+          name: smoke-anvil
+          # Canvas reads the live format from canvas-worlds.yml: preseed
+          # ANVIL and assert the dispatch property (no .linear). Folia boots
+          # its default and only proves Done here.
+          format: ${{ matrix.server == 'canvas' && 'ANVIL' || 'none' }}
+          expect-linear: ${{ matrix.server == 'canvas' && 'absent' || 'any' }}
+          timeout-secs: ${{ env.SMOKE_TIMEOUT_SECS }}
+
+      - name: Boot smoke (convert reboot, ANVIL -> LINEAR)
+        if: matrix.server == 'canvas'
+        uses: ./supplement/.github/actions/boot-smoke
+        with:
+          server: canvas
+          jar: fork/${{ steps.layout.outputs.module }}/build/libs/${{ steps.layout.outputs.glob }}
+          name: smoke-anvil
+          # Same dir as the ANVIL boot above: flip to LINEAR and reboot — the
+          # pre-plugin trigger must convert every .mca (validated+deleted).
+          format: LINEAR
+          expect-text: Startup conversion done
+          expect-mca: absent
+          expect-linear: present
+          timeout-secs: ${{ env.SMOKE_TIMEOUT_SECS }}
+
+      - name: Boot smoke (LINEAR, expect .linear emission)
+        if: matrix.server != 'horizon'
+        uses: ./supplement/.github/actions/boot-smoke
+        with:
+          server: ${{ matrix.server }}
+          jar: fork/${{ steps.layout.outputs.module }}/build/libs/${{ steps.layout.outputs.glob }}
+          name: smoke-linear
+          # Canvas default IS linear (no preseed); folia is flipped pre-boot
+          # via a sparse world/paper-world.yml.
+          format: ${{ matrix.server == 'folia' && 'LINEAR' || 'none' }}
+          expect-linear: present
+          linear-lenient: 'true'
+          timeout-secs: ${{ env.SMOKE_TIMEOUT_SECS }}
+
+      - name: Upload paperclip jar (artifact + release asset)
+        if: matrix.server != 'horizon'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linearmc-${{ matrix.server }}-${{ matrix.mc }}
+          path: |
+            fork/${{ steps.layout.outputs.module }}/build/libs/${{ steps.layout.outputs.glob }}
+            fork/${{ steps.layout.outputs.module }}/build/libs/${{ steps.layout.outputs.glob }}.sha256
+          if-no-files-found: error
+
+      - name: Hash + upload Horizon jars (artifact + release asset)
+        if: matrix.server == 'horizon'
+        run: |
+          cd "$GITHUB_WORKSPACE/supplement/versions/plugins/horizon/${{ matrix.version }}/build/libs"
+          # Exactly two jars: the mixin jar + the Paper-half -plugin jar.
+          test "$(ls horizon-plugin-*.jar | wc -l)" -eq 2 || { echo "::error::expected 2 horizon jars:"; ls -la; exit 1; }
+          sha256sum horizon-plugin-*.jar | tee checksums.sha256
+          echo HASHED
+
+      - name: Upload Horizon jars (artifact + release asset)
+        if: matrix.server == 'horizon'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linearmc-${{ matrix.server }}-${{ matrix.mc }}
+          path: |
+            supplement/versions/plugins/horizon/${{ matrix.version }}/build/libs/horizon-plugin-*.jar
+            supplement/versions/plugins/horizon/${{ matrix.version }}/build/libs/checksums.sha256
+          if-no-files-found: error
+
+  release:
+    # Attaches the per-version jars built above to the GitHub release.
+    # Runs on version tags (push) and when a release is published (e.g. a
+    # release created via the UI for an existing tag, or a re-run).
+    needs: [discover, build]
+    if: needs.discover.outputs.count != '0' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: release-${{ github.ref }}-${{ matrix.version }}-${{ matrix.server }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linearmc-${{ matrix.server }}-${{ matrix.mc }}
+          path: dist
+
+      - name: Attach jar to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Release asset name depends on the tag scheme:
+          #   project tags  v<project> (e.g. v1.0.0): every
+          #     matrix leg uploads its own per-version asset,
+          #     linearmc-<server>-<mcversion>-<project>.jar
+          #   legacy tags   v<mcversion>-linear.<build> (history only): the
+          #     matching MC leg uploads folia-<mcversion>-<build>.jar
+          # A manual dispatch on a tag (`gh workflow run build.yml
+          # --ref <tag> -f versions=<list>`) limits the release to some
+          # folders; pushed tags always release every version.
+          TAG="${{ github.event.release.tag_name || github.ref_name }}"
+          case "$TAG" in
+            v*-linear.*)
+              MC="${TAG#v}"; MC="${MC%%-linear.*}"
+              BUILD="${TAG##*-linear.}"
+              # Multi-version matrix: only the leg matching the tag's MC uploads,
+              # so sibling versions never mislabel (or clobber) this asset.
+              if [ "$MC" != "${{ matrix.mc }}" ]; then
+                echo "Tag targets MC $MC; this leg builds ${{ matrix.mc }} — skipping upload."
+                exit 0
+              fi
+              ASSET="folia-${MC}-${BUILD}.jar"
+              ;;
+            v*)
+              PROJ="${TAG#v}"
+              ASSET="linearmc-${{ matrix.server }}-${{ matrix.mc }}-${PROJ}.jar"
+              ;;
+            *)
+              echo "::error::Tag '$TAG' is not a project tag (v<project>) or a legacy tag (v<mc>-linear.<build>)"
+              exit 1
+              ;;
+          esac
+          echo "asset=$ASSET"
+          if [ "${{ matrix.server }}" = "horizon" ]; then
+            # Legacy per-MC tags predate the Horizon channel: nothing to attach.
+            case "$TAG" in
+              v*-linear.*) echo "Legacy tag targets a fork build; horizon has no asset — skipping upload."; exit 0;;
+            esac
+            # Horizon channel ships TWO jars: the mixin jar (plugins/) and
+            # the Paper-half -plugin jar (--add-plugin). Both attach.
+            MAIN=$(ls dist/horizon-plugin-*.jar | grep -v -- '-plugin\.jar$' | head -1)
+            PLUGIN=$(ls dist/horizon-plugin-*-plugin.jar | head -1)
+            test -f "$MAIN" || { echo "::error::horizon mixin jar missing:"; ls -la dist/ || true; exit 1; }
+            test -f "$PLUGIN" || { echo "::error::horizon paper-half jar missing:"; ls -la dist/ || true; exit 1; }
+            cp "$MAIN" "linearmc-horizon-${{ matrix.mc }}-${PROJ}.jar"
+            cp "$PLUGIN" "linearmc-horizon-${{ matrix.mc }}-${PROJ}-plugin.jar"
+            sha256sum linearmc-horizon-*.jar | tee linearmc-horizon-${{ matrix.mc }}-${PROJ}.sha256
+            gh release upload "$TAG" linearmc-horizon-${{ matrix.mc }}-${PROJ}.jar linearmc-horizon-${{ matrix.mc }}-${PROJ}-plugin.jar linearmc-horizon-${{ matrix.mc }}-${PROJ}.sha256 --repo Ashu11-A/LinearMC --clobber
+            exit 0
+          fi
+          JAR=$(ls dist/*-paperclip-*.jar | head -1)
+          test -f "$JAR" || { echo "::error::paperclip jar missing in artifact:"; ls -la dist/ || true; exit 1; }
+          cp "$JAR" "$ASSET"
+          sha256sum "$ASSET" | tee "$ASSET.sha256"
+          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --repo Ashu11-A/LinearMC --clobber

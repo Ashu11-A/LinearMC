@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java
+@@ -1,16 +1,16 @@
+ package ca.spottedleaf.moonrise.patches.chunk_system.io;
+ 
+ import net.minecraft.nbt.CompoundTag;
+-import net.minecraft.world.level.chunk.storage.RegionFile;
++import net.linear.AbstractRegionFile; // Linear - widened to the shared region-file type
+ import java.io.IOException;
+ 
+ public interface ChunkSystemRegionFileStorage {
+ 
+     public boolean moonrise$doesRegionFileNotExistNoIO(final int chunkX, final int chunkZ);
+ 
+-    public RegionFile moonrise$getRegionFileIfLoaded(final int chunkX, final int chunkZ);
++    public AbstractRegionFile moonrise$getRegionFileIfLoaded(final int chunkX, final int chunkZ);
+ 
+-    public RegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException;
++    public AbstractRegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException;
+ 
+     public MoonriseRegionFileIO.RegionDataController.WriteData moonrise$startWrite(
+             final int chunkX, final int chunkZ, final CompoundTag compound

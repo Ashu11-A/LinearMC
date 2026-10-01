@@ -1,0 +1,44 @@
+name: setup
+description: >
+  Shared env setup for folia-linear CI (build.yml + test.yml).
+  Checks out the supplement repo, installs the Temurin JDK, and enables
+  the Gradle build cache. Owned by the build workflow (G2); test.yml (G3)
+  reuses it verbatim — never duplicate these steps inline.
+
+inputs:
+  java-version:
+    description: Major Java version to install (mirrors top-level JAVA_VERSION env in the workflows).
+    required: false
+    default: '25'
+  distribution:
+    description: JVM distribution for actions/setup-java.
+    required: false
+    default: temurin
+  checkout-path:
+    description: Path to check the supplement repo out at (workflows use 'supplement' so the Folia clone can sit beside it).
+    required: false
+    default: supplement
+  fetch-depth:
+    description: Checkout depth. Keep 1 for build/release speed; pass 0 when the caller needs full history (e.g. test.yml discover doing a PR base diff).
+    required: false
+    default: '1'
+
+outputs: {}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout supplement (this repo)
+      uses: actions/checkout@v5
+      with:
+        path: ${{ inputs.checkout-path }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+
+    - name: Set up Java (Temurin)
+      uses: actions/setup-java@v5
+      with:
+        distribution: ${{ inputs.distribution }}
+        java-version: ${{ inputs.java-version }}
+
+    - name: Gradle cache
+      uses: gradle/actions/setup-gradle@v4

@@ -1,0 +1,11 @@
+{
+    "required": true,
+    "package": "io.linearmc.horizon.mixins",
+    "compatibilityLevel": "JAVA_25",
+    "mixins": [
+        "RegionFileStorageMixin"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}

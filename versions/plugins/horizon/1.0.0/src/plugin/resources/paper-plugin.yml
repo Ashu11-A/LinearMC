@@ -1,0 +1,28 @@
+name: "LinearMC"
+description: "Linear-format region compression via Horizon mixins"
+main: "io.linearmc.horizon.LinearPlugin"
+bootstrapper: "io.linearmc.horizon.LinearBootstrapper"
+api-version: "26.3"
+version: "1.0.0"
+# Required: the Paper half loads via --add-plugin on Folia runtimes, and
+# Folia refuses plugins without this flag (observed: "not marked as
+# supporting Folia", LinearMC v1.0.0 rejected on Folia 1.21.11).
+# Both spellings: kebab-case is the documented key; camelCase is what
+# Folia 1.21.11-14's Configurate-mapped PaperPluginMeta actually reads
+# (verified: zero references to "folia-supported" in folia-1.21.11.jar;
+# only the `foliaSupported` field exists). Unknown keys are ignored.
+folia-supported: true
+foliaSupported: true
+permissions:
+  linear.command.linear:
+    description: "Base permission for /linear"
+    default: op
+  linear.command.linearstats:
+    description: "Permission for /linearstats and /linear stats"
+    default: op
+  linear.command.convert:
+    description: "Permission for /linear convert"
+    default: op
+  linear.command.queue:
+    description: "Permission for /linear queue"
+    default: op

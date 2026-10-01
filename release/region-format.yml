@@ -1,0 +1,20 @@
+global:
+  region-format:
+    linear:
+      flush-frequency: 10
+      flush-max-threads: 1
+      compression-workers: 0
+      long-distance-matching: 0
+      log-flush-batches: false
+world-defaults:
+  region-format:
+    format: LINEAR
+    linear:
+      compression-level: 6
+      crash-on-broken-symlink: true
+per-world-example:
+  region-format:
+    format: ANVIL
+    linear:
+      compression-level: 6
+      crash-on-broken-symlink: true

@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/MinecraftServer.java
+
+Ported from the Folia feature stack (minecraft-0017-Linear-save-drain.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1012,6 +1012,14 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             level.save(null, flush, SharedConstants.DEBUG_DONT_SAVE_WORLD || level.noSave && !force, close); // Paper - add close param
+             result = true;
+         }
++        // Linear - stop drain (finding F fix): the close=true path skips
++        // chunkSource.save, and Folia/Moonrise never flush or close vanilla
++        // storages, so force-drain every tracked linear folder here. Runs on
++        // server stop (saveAllChunks(..., close=true)) and explicit close-saves.
++        // Idempotent, never throws.
++        if (close) {
++            net.linear.LinearFlushCoordinator.evictAll();
++        }
+ 
+         // Paper - move to saveGlobalData()
+ 

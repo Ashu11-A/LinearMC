@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/level/ServerChunkCache.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch, minecraft-0017-Linear-save-drain.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -215,5 +215,21 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+         this.savedDataStorage = savedDataStorage; // Paper - initialize SavedDataStorage earlier
+         this.ticketStorage = this.savedDataStorage.computeIfAbsent(TicketStorage.TYPE);
++        // Linear - Canvas-native source: WorldConfig.regionFormat (canvas-worlds.yml),
++        // sysprop-first via LinearPolicy (-Dlinearmc.format / -Dlinearmc.compression-level).
++        // The canvas field is already the core enum: no paper-enum mapping needed.
++        final net.linear.RegionFileFormat linearFileFormat = level.canvasConfig().regionFormat.format;
++        final int linearFileLevel = level.canvasConfig().regionFormat.compressionLevel;
++        final boolean linearCrashOnBrokenSymlink = level.canvasConfig().regionFormat.crashOnBrokenSymlink;
++        final String linearSysFormat = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_FORMAT);
++        final String linearSysLevel = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_LEVEL);
++        final net.linear.RegionFileFormat linearFormat = net.linear.config.LinearPolicy.resolveFormatWithOverride(linearSysFormat, linearFileFormat.toString(), net.linear.RegionFileFormat.ANVIL, levelStorage.getDimensionPath(level.dimension()).resolve("region").toString(), levelStorage.getLevelId()); // Linear - runtime override (reverse jobs flip this folder to ANVIL) wins over the file; sysprop still wins overall
++        final int linearCompression = net.linear.config.LinearPolicy.resolveLevel(linearSysLevel, linearFileLevel, 6);
++        if (linearSysFormat != null && !linearFormat.equals(linearFileFormat)) {
++            LOGGER.info(net.linear.config.LinearPolicy.overrideLine(net.linear.config.LinearPolicy.SYSPROP_FORMAT, linearSysFormat, linearFileFormat.toString(), linearFormat.toString(), "server"));
++        }
++        if (linearSysLevel != null && linearCompression != linearFileLevel) {
++            LOGGER.info(net.linear.config.LinearPolicy.overrideLine(net.linear.config.LinearPolicy.SYSPROP_LEVEL, linearSysLevel, String.valueOf(linearFileLevel), String.valueOf(linearCompression), "server"));
++        }
+         this.chunkMap = new ChunkMap(
+             level,
+             levelStorage,
+@@ -233,7 +233,10 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+             overworldDataStorage,
+             this.ticketStorage,
+             viewDistance,
+-            syncWrites
++            syncWrites,
++            linearFormat,
++            linearCompression,
++            linearCrashOnBrokenSymlink
+         );
+         this.lightEngine = this.chunkMap.getLightEngine();
+         this.distanceManager = this.chunkMap.getDistanceManager();
+@@ -472,6 +472,14 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+     public void save(final boolean flushStorage) {
+         // Paper - rewrite chunk system
+         this.chunkMap.saveAllChunks(flushStorage);
++        // Linear - split drain (async split): explicit/stop saves (flushStorage)
++        // stay a synchronous joining forced drain; autosaves submit fire-and-forget
++        // so the tick never blocks. Per-folder failures logged, never thrown.
++        if (flushStorage) {
++            net.linear.LinearFlushCoordinator.flushAllDirty(true);
++        } else {
++            net.linear.LinearFlushCoordinator.flushDirtyAsync(false);
++        }
+     }
+ 
+     @Override

@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
+@@ -17,7 +17,7 @@ import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
+ import net.minecraft.nbt.CompoundTag;
+ import net.minecraft.server.MinecraftServer;
+ import net.minecraft.server.level.ServerLevel;
+-import net.minecraft.world.level.chunk.storage.RegionFile;
++import net.linear.AbstractRegionFile; // Linear - widened to the shared region-file type
+ import net.minecraft.world.level.chunk.storage.RegionFileStorage;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+@@ -1273,9 +1273,16 @@ public final class MoonriseRegionFileIO {
+                 this.regionDataController.finishWrite(this.chunkX, this.chunkZ, writeData);
+                 // Paper start - flush regionfiles on save
+                 if (this.world.paperConfig().chunks.flushRegionsOnSave) {
+-                    final RegionFile regionFile = this.regionDataController.getCache().moonrise$getRegionFileIfLoaded(this.chunkX, this.chunkZ);
++                    final AbstractRegionFile regionFile = this.regionDataController.getCache().moonrise$getRegionFileIfLoaded(this.chunkX, this.chunkZ); // Linear - widened (flush() is on the interface)
++                    // Linear - coordinator-aware batching. Anvil keeps the
++                    // per-write flush() (byte-identical). Linear skips it: the write
++                    // path above already markDirty'd the file, and a per-chunk
++                    // full-file zstd rewrite is write amplification (up to 1024x per
++                    // region per cycle). Durability via RegionFileStorage.flush() ->
++                    // flushDirty() at save-cycle end, bound backpressure, evict().
++                    if (regionFile instanceof net.minecraft.world.level.chunk.storage.RegionFile anvilFile) {
++                        anvilFile.flush();
++                    } // else if Linear: deferred to LinearFlushCoordinator
++                    // else (null): evicted from cache, which should have called flush
+-                    if (regionFile != null) {
+-                        regionFile.flush();
+-                    } // else: evicted from cache, which should have called flush
+                 }
+                 // Paper end - flush regionfiles on save
+@@ -1496,7 +1496,7 @@ public final class MoonriseRegionFileIO {
+ 
+         public static interface IORunnable {
+ 
+-            public void run(final RegionFile regionFile) throws IOException;
++            public void run(final AbstractRegionFile regionFile) throws IOException; // Linear - widened so Linear write-backs typecheck; anvil ChunkBuffer impl updated to match
+ 
+         }
+     }

@@ -1,0 +1,17 @@
+# LinearMC file layer (plugins/LinearMC/config.yml).
+#
+# Precedence: -Dlinearmc.* system properties win over this file, which wins
+# over the shipped defaults. The shipped default format is ANVIL (fail-open:
+# no .linear files are written unless this file or a sysprop opts in).
+# Edits require a restart; nothing here is re-read at runtime.
+region-format:
+  # ANVIL or LINEAR (case-sensitive; unknown values fall back to ANVIL).
+  format: ANVIL
+  linear:
+    compression-level: 6
+    crash-on-broken-symlink: true
+    flush-frequency: 10
+    flush-max-threads: 1
+    compression-workers: 0
+    long-distance-matching: 0
+    log-flush-batches: false

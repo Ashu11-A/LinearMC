@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch, minecraft-0014-Linear-default-format.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
+@@ -61,7 +61,23 @@ public final class EntityDataController extends MoonriseRegionFileIO.RegionDataC
+ 
+         public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
+                                        final boolean dsync) {
+-            super(regionStorageInfo, directory, dsync);
++            this(regionStorageInfo, directory, dsync, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
++        }
++
++        // Linear - format-aware entry point. The outer EntityDataController
++        // constructor is unchanged (it receives the already-built storage); ServerLevel
++        // threads the world format + linear compression through this overload.
++        // Linear - 6-arg overload adds the crash flag; 5-arg delegates with default true.
++        public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
++                                       final boolean dsync, final net.linear.RegionFileFormat format,
++                                       final int linearCompression) {
++            this(regionStorageInfo, directory, dsync, format, linearCompression, true);
++        }
++
++        public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
++                                       final boolean dsync, final net.linear.RegionFileFormat format,
++                                       final int linearCompression, final boolean linearCrashOnBrokenSymlink) {
++            super(regionStorageInfo, directory, dsync, format, linearCompression, linearCrashOnBrokenSymlink);
+         }
+ 
+         @Override

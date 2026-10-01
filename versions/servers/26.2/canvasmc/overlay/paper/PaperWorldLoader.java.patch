@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+
+Ported from the Folia feature stack (paper-0008-Linear-config.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+--- a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
++++ b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+@@ -167,7 +167,8 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
+             primaryLevelData.setModdedInfo(this.server.getServerModName(), this.server.getModdedStatus().shouldReportAsModified());
+         }
+ 
+-        if (this.server.options.has("forceUpgrade")) {
++        // Honor --recreateRegionFiles alongside --forceUpgrade when deciding to run the upgrade path.
++        if (this.server.options.has("forceUpgrade") || this.server.options.has("recreateRegionFiles")) {
+             Main.forceUpgrade(this.server.storageSource, DataFixers.getDataFixer(), this.server.options.has("eraseCache"), () -> true, this.server.registryAccess(), this.server.options.has("recreateRegionFiles"));
+         }
+ 

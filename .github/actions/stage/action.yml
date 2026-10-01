@@ -1,0 +1,202 @@
+name: stage
+description: >
+  Clone the pinned server base and stage the Linear supplement for one
+  versions/servers/<line> x server entry (mirrors scripts/build.sh lines 83-100: clone,
+  pin checkout/verify, patch+test staging, with per-server dir fallback).
+  Stable matrix id `canvas` maps to the `canvasmc/` leg dir (see discover
+  SERVER_DIR_MAP in build.yml); folia leg dir is `folia/`. Owned by the
+  build workflow (G2); test.yml (G3) reuses it verbatim —
+  never duplicate these steps inline.
+
+inputs:
+  version:
+    description: Version folder under versions/ (e.g. '26.1.x'). Comes from the discover matrix (matrix.version). The special value 'all' stages the single versions/*/ entry when the repo holds exactly one (today); with several entries it fails fast so the caller fans out per version instead of silently mixing trees.
+    required: true
+  server:
+    description: "Stable server id from the discover matrix (matrix.server): 'folia', 'canvas' (leg dir versions/servers/<line>/canvasmc/), 'horizon'. Patch staging prefers versions/servers/<line>/<legdir>/patches/ and falls back to the legacy versions/<line>/patches/ while legs migrate."
+    required: false
+    default: folia
+  supplement-dir:
+    description: Path to the already-checked-out supplement repo (must match the setup action's checkout-path).
+    required: false
+    default: supplement
+  folia-dir:
+    description: "Directory to clone the Folia base into (created if missing). Must NOT be named 'folia': paperweight/weaver register nested builds by directory name and a root project named :folia collides with the upstream :folia nested build (applyAllPatches fails)."
+    required: false
+    default: fork
+  include-tests:
+    description: Stage versions/servers/<line>/folia/tests/*.java into the fork test tree. Keep 'true' for any job that compiles or runs tests (build + test jobs); 'false' only for staging dry-checks.
+    required: false
+    default: 'true'
+
+outputs:
+  repo:
+    description: Upstream repo pin (e.g. FOLIA_REPO) read from the leg's upstream pin file.
+    value: ${{ steps.props.outputs.repo }}
+  branch:
+    description: Upstream branch pin read from the leg's upstream pin file.
+    value: ${{ steps.props.outputs.branch }}
+  ref:
+    description: Upstream ref pin (full 40-char sha) read from the leg's upstream pin file.
+    value: ${{ steps.props.outputs.ref }}
+  mc:
+    description: MC_VERSION read from the leg's upstream pin file.
+    value: ${{ steps.props.outputs.mc }}
+  folia-dir:
+    description: Echo of the folia-dir input (the staged Folia checkout path).
+    value: ${{ inputs.folia-dir }}
+  version:
+    description: Resolved version folder (equals the version input, except 'all' resolves to the single versions/*/ entry).
+    value: ${{ steps.props.outputs.version }}
+  server:
+    description: Echo of the server input (the staged server leg).
+    value: ${{ inputs.server }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read upstream pin
+      id: props
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        SERVER: ${{ inputs.server }}
+        SUPPLEMENT_DIR: ${{ inputs.supplement-dir }}
+      run: |
+        if [ "$VERSION" = "all" ]; then
+          # Single-version passthrough (documented 'all' mode): resolve the one
+          # versions/servers/*/ entry so matrix-less callers (test.yml unit job) work.
+          # Multi-version repos must fan out per version (one checkout per line)
+          # instead of sharing a tree -- fail fast with that instruction.
+          mapfile -t FOUND < <(cd "$SUPPLEMENT_DIR/versions/servers" && ls -d */ | tr -d '/')
+          if [ "${#FOUND[@]}" -ne 1 ]; then
+            echo "::error::stage 'all' mode needs exactly one versions/*/ entry (found ${#FOUND[@]}); fan out per version instead."
+            exit 1
+          fi
+          VERSION="${FOUND[0]}"
+          echo "stage: resolved version 'all' -> '$VERSION'"
+        fi
+        # Reorganized layout: server legs live under versions/servers/<line>/
+        # (folia keeps the legacy upstream.properties name; canvas uses
+        # upstream.canvas.properties with CANVAS_ keys; the canvas leg dir
+        # is canvasmc/ but the stable matrix id stays `canvas`). Horizon
+        # pins at versions/plugins/horizon/upstream.horizon.properties.
+        PREFIX="$(echo "$SERVER" | tr 'a-z' 'A-Z')"
+        if [ "$SERVER" = "horizon" ]; then
+          PROPS="$SUPPLEMENT_DIR/versions/plugins/horizon/upstream.horizon.properties"
+        elif [ "$SERVER" = "folia" ]; then
+          PROPS="$SUPPLEMENT_DIR/versions/servers/$VERSION/upstream.properties"
+        else
+          PROPS="$SUPPLEMENT_DIR/versions/servers/$VERSION/upstream.$SERVER.properties"
+        fi
+        test -f "$PROPS" || { echo "::error::Missing $PROPS"; exit 1; }
+        for key in "${PREFIX}_REPO" "${PREFIX}_BRANCH" "${PREFIX}_REF" MC_VERSION; do
+          val=$(grep "^${key}=" "$PROPS" | cut -d= -f2-)
+          test -n "$val" || { echo "::error::$PROPS is missing $key"; exit 1; }
+        done
+        BASE_REF=$(grep "^${PREFIX}_REF=" "$PROPS" | cut -d= -f2-)
+        case "$BASE_REF" in
+          ????????????????????????????????????????) ;;
+          *) echo "::error::$PROPS ${PREFIX}_REF must be a full 40-char sha (got '$BASE_REF')"; exit 1 ;;
+        esac
+        {
+          echo "repo=$(grep "^${PREFIX}_REPO=" "$PROPS" | cut -d= -f2-)"
+          echo "branch=$(grep "^${PREFIX}_BRANCH=" "$PROPS" | cut -d= -f2-)"
+          echo "ref=$BASE_REF"
+          echo "mc=$(grep '^MC_VERSION=' "$PROPS" | cut -d= -f2-)"
+          echo "version=$VERSION"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Clone pinned server base
+      shell: bash
+      env:
+        FOLIA_DIR: ${{ inputs.folia-dir }}
+      run: |
+        git clone --branch ${{ steps.props.outputs.branch }} --single-branch ${{ steps.props.outputs.repo }} "$FOLIA_DIR" \
+          && git -C "$FOLIA_DIR" rev-parse HEAD
+
+    - name: Verify base pin
+      shell: bash
+      env:
+        FOLIA_DIR: ${{ inputs.folia-dir }}
+      run: |
+        HEAD=$(git -C "$FOLIA_DIR" rev-parse HEAD)
+        if [ "$HEAD" != "${{ steps.props.outputs.ref }}" ]; then
+          echo "::warning::Upstream ${{ steps.props.outputs.branch }} moved ($HEAD). Patches target ${{ steps.props.outputs.ref }}; continuing, apply step will prove compatibility."
+        fi
+
+    - name: Stage Linear patches + tests
+      shell: bash
+      env:
+        VERSION: ${{ steps.props.outputs.version }}
+        SERVER: ${{ inputs.server }}
+        SUPPLEMENT_DIR: ${{ inputs.supplement-dir }}
+        FOLIA_DIR: ${{ inputs.folia-dir }}
+        INCLUDE_TESTS: ${{ inputs.include-tests }}
+      run: |
+        # Reorganized LinearMC layout (servers under versions/servers/<line>):
+        # the folia leg stages feature patches pre-apply (paperweight applies
+        # each family in filename-sort order; numbering keeps sort order =
+        # apply order). Other legs stage elsewhere: canvas via the
+        # stage-overlay action AFTER applyAllPatches (generated trees don't
+        # exist yet; leg dir canvasmc/); horizon is a standalone Gradle
+        # project (no fork checkout staging at all).
+        if [ "$SERVER" = "canvas" ]; then
+          echo "stage: canvas leg staged post-apply via stage-overlay (nothing pre-apply)"
+          exit 0
+        fi
+        if [ "$SERVER" = "horizon" ]; then
+          echo "stage: horizon leg needs no fork staging (standalone Gradle project)"
+          exit 0
+        fi
+        PATCHDIR="$SUPPLEMENT_DIR/versions/servers/$VERSION/$SERVER/patches"
+        TESTDIR="$SUPPLEMENT_DIR/versions/servers/$VERSION/$SERVER/tests"
+        HUNK="$SUPPLEMENT_DIR/versions/servers/$VERSION/$SERVER/build-hunk.py"
+        if [ ! -d "$PATCHDIR" ]; then
+          PATCHDIR="$SUPPLEMENT_DIR/versions/$VERSION/patches"
+          TESTDIR="$SUPPLEMENT_DIR/versions/$VERSION/tests"
+          HUNK="$SUPPLEMENT_DIR/versions/$VERSION/build-hunk.py"
+        fi
+        if ! ls "$PATCHDIR"/minecraft-*.patch >/dev/null 2>&1; then
+          echo "::error::stage: no minecraft-*.patch in $PATCHDIR (leg has no pre-apply content)"
+          exit 1
+        fi
+        COMMONDIR="$SUPPLEMENT_DIR/versions/servers/$VERSION/common"
+        if ls "$COMMONDIR"/*.patch >/dev/null 2>&1; then
+          cp "$COMMONDIR"/minecraft-*.patch "$FOLIA_DIR/folia-server/minecraft-patches/features/" 2>/dev/null || true
+          cp "$COMMONDIR"/paper-*.patch "$FOLIA_DIR/folia-server/paper-patches/features/" 2>/dev/null || true
+        fi
+        cp "$PATCHDIR"/minecraft-*.patch "$FOLIA_DIR/folia-server/minecraft-patches/features/"
+        cp "$PATCHDIR"/paper-*.patch    "$FOLIA_DIR/folia-server/paper-patches/features/"
+        # Build-file wiring (test srcDir + zstd dep) uses the paperweight hunk
+        # convention stock git cannot parse -- spliced deterministically,
+        # byte-identical to the proven local build; aborts on upstream drift.
+        python3 "$HUNK" "$FOLIA_DIR/folia-server/build.gradle.kts.patch"
+        # Core sources (single codebase: linear-core owns all net.linear
+        # classes). Folia patches no longer inject net/linear, so without
+        # this copy the fork won't compile. Mirrors the canvas
+        # stage-overlay copy: each module contributes its top-level
+        # net/linear/*.java plus subpackage trees, into the analogous
+        # folia-server java tree (canvas uses
+        # canvas-server/src/main/java/net/linear/).
+        mkdir -p "$FOLIA_DIR/folia-server/src/main/java/net/linear"
+        for m in "$SUPPLEMENT_DIR"/linear-core/*/src/net/linear; do
+          for f in "$m"/*.java; do
+            [ -f "$f" ] || continue
+            cp "$f" "$FOLIA_DIR/folia-server/src/main/java/net/linear/"
+          done
+          for sub in "$m"/*/; do
+            [ -d "$sub" ] || continue
+            subname="$(basename "$sub")"
+            mkdir -p "$FOLIA_DIR/folia-server/src/main/java/net/linear/$subname"
+            for f in "$sub"/*.java; do
+              [ -f "$f" ] || continue
+              cp "$f" "$FOLIA_DIR/folia-server/src/main/java/net/linear/$subname/"
+            done
+          done
+        done
+        if [ "$INCLUDE_TESTS" = "true" ]; then
+          mkdir -p "$FOLIA_DIR/folia-server/src/test/java/net/linear"
+          cp "$TESTDIR"/*.java "$FOLIA_DIR/folia-server/src/test/java/net/linear/"
+        fi
+        git -C "$FOLIA_DIR" status --short | head -n 20

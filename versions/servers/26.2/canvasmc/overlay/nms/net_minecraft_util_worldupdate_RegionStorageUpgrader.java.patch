@@ -1,0 +1,340 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch, minecraft-0014-Linear-default-format.patch, minecraft-0015-Linear-startup-conversion.patch, minecraft-0018-Linear-core-decoupling.patch).
+Hand-resolved 3-way merge (Canvas base + Folia-new); see PORT-PLAN.md. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+--- a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
++++ b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+@@ -26,7 +26,8 @@ import net.minecraft.util.datafix.DataFixTypes;
+ import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.chunk.storage.RecreatingSimpleRegionStorage;
+-import net.minecraft.world.level.chunk.storage.RegionFile;
++import net.linear.AbstractRegionFile; // Linear
++import net.linear.AbstractRegionFileFactory; // Linear
+ import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
+ import net.minecraft.world.level.chunk.storage.SimpleRegionStorage;
+ import net.minecraft.world.level.storage.LevelStorageSource;
+@@ -36,7 +37,9 @@ import org.slf4j.Logger;
+ public class RegionStorageUpgrader {
+     private static final Logger LOGGER = LogUtils.getLogger();
+     private static final String NEW_DIRECTORY_PREFIX = "new_";
+-    private static final Pattern REGEX = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.mca$");
++    // Linear - match both extensions. NOTE the grouping has no spaces:
++    // Kaiiju 0004 shipped "(linear | mca)" which only matches a literal "linear " with trailing space.
++    private static final Pattern REGEX = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
+     private final DataFixer dataFixer;
+     private final UpgradeProgress upgradeProgress;
+     private final String type;
+@@ -108,9 +111,9 @@ public class RegionStorageUpgrader {
+ 
+                     if (this.recreateRegionFiles) {
+                         if (converted) {
+-                            this.onFileFinished(fileToUpgrade.file());
++                            this.onFileFinished(fileToUpgrade); // Linear - record now carries its source path
+                         } else {
+-                            LOGGER.error("Failed to convert region file {}", fileToUpgrade.file().getPath());
++                            LOGGER.error("Failed to convert region file {}", fileToUpgrade.path()); // Linear - path carried by the record
+                         }
+                     }
+                 }
+@@ -137,17 +140,168 @@ public class RegionStorageUpgrader {
+     }
+ 
+     protected final SimpleRegionStorage createStorage(final RegionStorageInfo info, final Path regionFolder) {
+-        return this.recreateRegionFiles
+-            ? new RecreatingSimpleRegionStorage(
++        // Linear - the recreate write side (new_<folder>) honors the world's
++        // configured format without any config lookup (upgraders stay config-free:
++        // no Bukkit.getWorld / paperConfig here). The on-disk set is the signal --
++        // any r.*.linear present means LINEAR, else ANVIL (unchanged). The format flows
++        // via ctor params into the write-side IOWorker/RegionFileStorage, which creates
++        // r.X.Z.<ext> via AbstractRegionFileFactory.
++        final net.linear.RegionFileFormat writeFormat = probeWriteFormat(regionFolder);
++        return (SimpleRegionStorage)(this.recreateRegionFiles            ? new RecreatingSimpleRegionStorage(
+                 info.withTypeSuffix("source"),
+                 regionFolder,
+                 info.withTypeSuffix("target"),
+                 resolveRecreateDirectory(regionFolder),
+                 this.dataFixer,
+                 true,
+-                this.dataFixType
++                this.dataFixType,
++                writeFormat,
++                // Linear - startup conversion level flow (B2; minecraft-0015).
++                // Reference AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL,
++                // never a literal, so B1's tuned default (minecraft-0014, level 6)
++                // flows into the recreate write side. Ordering: this patch
++                // applies AFTER B1's minecraft-0014. Value is 1 until B1 lands,
++                // so behavior is unchanged without it.
++                AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL
+             )
+-            : new SimpleRegionStorage(info, regionFolder, this.dataFixer, true, this.dataFixType);
++            : new SimpleRegionStorage(info, regionFolder, this.dataFixer, true, this.dataFixType));
++    }
++
++    // Linear - config-free format signal. LINEAR worlds carry .linear files
++    // (the offline converter lays them down before any flag flip; see UPGRADE.md),
++    // so one REGEX-matching *.linear file selects the LINEAR write side. Pure-Anvil
++    // folders keep the vanilla ANVIL side. Filesystem signal only.
++    private static net.linear.RegionFileFormat probeWriteFormat(final Path regionFolder) {
++        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(net.linear.RegionFileFormat.LINEAR_EXTENSION));
++        if (files != null) {
++            for (File file : files) {
++                if (REGEX.matcher(file.getName()).matches()) {
++                    return net.linear.RegionFileFormat.LINEAR;
++                }
++            }
++        }
++        return net.linear.RegionFileFormat.ANVIL;
++    }
++
++    // Linear - startup auto-conversion mismatch detector (B2; minecraft-0015).
++    // Pure filesystem, config-free like probeWriteFormat above: true when the
++    // folder holds at least one REGEX-matching .mca file (old-format data the
++    // dual-read path still serves from .mca). The Paper pre-plugin hook calls
++    // this per storage folder (region/, entities/, poi/) and converts only
++    // when the world target (see resolveTargetFormat) is LINEAR.
++    public static boolean needsConversion(final Path regionFolder) {
++        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(net.linear.RegionFileFormat.ANVIL_EXTENSION));
++        if (files == null) {
++            return false;
++        }
++        for (File file : files) {
++            if (REGEX.matcher(file.getName()).matches()) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    // Linear - startup auto-conversion per-world target resolution (B2; minecraft-0015).
++    // Called by the Paper pre-plugin hook with the world folder plus the config
++    // snapshot the caller already read via the Paper configuration API
++    // (level.paperConfig() does not exist yet: WorldConfiguration is created
++    // per ServerLevel AFTER STARTUP plugins, so the hook resolves from config
++    // files, never from a level instance).
++    //
++    // P1 SAFETY INVARIANT (negative assertion): this returns ANVIL for
++    // explicit-ANVIL worlds AND for unset/invalid values (the paper-enum mapper maps
++    // null and anything-but-LINEAR to ANVIL), and the hook converts ONLY when
++    // the returned target is LINEAR. Hence NO explicit-ANVIL path can reach
++    // conversion: dual-read keeps serving those worlds untouched. Only an
++    // explicit LINEAR world config selects LINEAR.
++    public static net.linear.RegionFileFormat resolveTargetFormat(
++        final Path regionFolder,
++        final net.linear.RegionFileFormat configuredFormat
++    ) {
++        // regionFolder identifies the world for log correlation and any future
++        // filesystem signal; the decision itself is config-only (see invariant).
++        // Canvas passes the core enum straight from WorldConfig (Folia maps its
++        // paperConfig enum through its paper-enum mapper instead).
++        return configuredFormat == null ? net.linear.RegionFileFormat.ANVIL : configuredFormat;
++    }
++
++    // Linear - startup auto-conversion entry point (B2; minecraft-0015).
++    // Callable OUTSIDE the --recreateRegionFiles/DFU flow: converts every .mca
++    // file in ONE folder (region/, entities/, or poi/) to LINEAR at the given
++    // compression level, with no DataFixer gymnastics beyond what the shared
++    // recreate machinery already performs.
++    //
++    // B1 DEPENDENCY (ordering: this patch applies AFTER B1's minecraft-0014):
++    // the level flows through AbstractRegionFileFactory.clampCompressionLevel
++    // (single source of truth: never a literal and never a second inline range
++    // check here), so out-of-range values fall back to
++    // DEFAULT_COMPRESSION_LEVEL and B1's tuned default (level 6) reaches the
++    // startup conversion write side unchanged.
++    //
++    // B3 DEPENDENCY (cross-agent contract, signatures fixed): this method is a
++    // thin hop from the boot hook to
++    // net.linear.LinearRegionConverter.convertRegionFolder, which owns the file
++    // work plus the retry machinery (maxAttempts=3 internal). The halt itself
++    // does NOT live in the converter: when a file exhausts retries the
++    // converter throws ConversionProtectionException (carrying the per-file
++    // summary), and the Paper hook (paper-0011) logs the terminal alert and
++    // halts the server before plugins load. Signature and nested
++    // Status/FileResult types stay B3-owned and untouched.
++    public static net.linear.LinearRegionConverter.ConversionSummary convertFolderToLinear(
++        final Path regionFolder,
++        final int compressionLevel,
++        final net.linear.LinearRegionConverter.Listener listener
++    ) throws net.linear.LinearRegionConverter.ConversionProtectionException {
++        // Linear - converter ANVIL-source opens need the NMS-backed opener, and this
++        // choke point (startup + recreate) can run before any RegionFileStorage
++        // exists. Idempotent; mirrors the storage-ctor registration (core owns
++        // dispatch, legs own NMS construction — RegionFile is FQN here since the
++        // widened FileToUpgrade import dropped the NMS RegionFile import).
++        net.linear.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) ->
++            (AbstractRegionFile)(Object) new net.minecraft.world.level.chunk.storage.RegionFile((RegionStorageInfo) info, file, dir, sync));
++        net.linear.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
++        net.linear.LinearRegionConverter.linear$setRegionOpener((file, openFolder, openSync, format, level) ->
++            net.linear.AbstractRegionFileFactory.get(file,
++                new RegionStorageInfo("converter", net.minecraft.world.level.Level.OVERWORLD, "chunk"),
++                openFolder, openSync, level));
++        // Linear - reverse writer injection, same as the storage-ctor seam:
++        // raw NBT from the linear source is enveloped by the NMS sink.
++        net.linear.LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) ->
++            new io.papermc.paper.linear.AnvilChunkSink(file, folder));
++        // Loaded-region exclusion is operator guidance (see storage-ctor seam).
++        // Open-but-clean handles stay undetected; shadow protection is the backstop.
++        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked
++        // proceeds: every Linear write is tracked, so unseen means clean).
++        net.linear.LinearRegionConverter.linear$setReverseSkipPredicate(path -> {
++            try {
++                final Path parent = path.toAbsolutePath().getParent();
++                if (parent == null) {
++                    return true;
++                }
++                return net.linear.LinearFlushCoordinator.isFolderDirty(parent);
++            } catch (RuntimeException skipped) {
++                return true;
++            }
++        });
++        // Linear - forward skip parity: same folder-dirty predicate shape as
++        // reverse beside it, so live converts defer loaded regions instead of
++        // copying files under live writes.
++        // Open-but-clean handles stay undetected; shadow protection is the backstop.
++        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked.
++        net.linear.LinearRegionConverter.linear$setForwardSkipPredicate(path -> {
++            try {
++                final Path parent = path.toAbsolutePath().getParent();
++                if (parent == null) {
++                    return true;
++                }
++                return net.linear.LinearFlushCoordinator.isFolderDirty(parent);
++            } catch (RuntimeException skipped) {
++                return true;
++            }
++        });
++        return net.linear.LinearRegionConverter.convertRegionFolder(
++            regionFolder, AbstractRegionFileFactory.clampCompressionLevel(compressionLevel), listener);
+     }
+ 
+     private List<FileToUpgrade> getFilesToProcess(final RegionStorageInfo info, final Path regionFolder) {
+@@ -162,39 +276,37 @@ public class RegionStorageUpgrader {
+     }
+ 
+     private static List<FileToUpgrade> getAllChunkPositions(final RegionStorageInfo info, final Path regionFolder) {
+-        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".mca"));
++        // Linear - scan both extensions so --upgradeWorld / DFU passes see Linear data.
++        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".mca") || name.endsWith(".linear"));
+         if (files == null) {
+             return List.of();
+         }
+-
+         List<FileToUpgrade> regionFileChunks = Lists.newArrayList();
+-
+         for (File regionFile : files) {
+             Matcher regex = REGEX.matcher(regionFile.getName());
+             if (regex.matches()) {
+                 int xOffset = Integer.parseInt(regex.group(1)) << 5;
+                 int zOffset = Integer.parseInt(regex.group(2)) << 5;
+                 List<ChunkPos> chunkPositions = Lists.newArrayList();
+-
+-                try (RegionFile regionSource = new RegionFile(info, regionFile.toPath(), regionFolder, true)) {
++                // Linear - open in probed format via the factory; enumerate with
++                // hasChunk (doesChunkExist is anvil-only and not in the shared contract).
++                try (AbstractRegionFile regionSource = AbstractRegionFileFactory.get(regionFile.toPath(), info, regionFolder, true, AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL)) {
+                     for (int x = 0; x < 32; x++) {
+                         for (int z = 0; z < 32; z++) {
+                             ChunkPos pos = new ChunkPos(x + xOffset, z + zOffset);
+-                            if (regionSource.doesChunkExist(pos)) {
++                            if (regionSource.hasChunk(net.linear.ChunkKey.of(pos.x(), pos.z()))) {
+                                 chunkPositions.add(pos);
+                             }
+                         }
+                     }
+-
+                     if (!chunkPositions.isEmpty()) {
+-                        regionFileChunks.add(new FileToUpgrade(regionSource, chunkPositions));
++                        regionFileChunks.add(new FileToUpgrade(regionSource, regionFile.toPath(), chunkPositions));
+                     }
+                 } catch (Throwable t) {
+                     LOGGER.error("Failed to read chunks from region file {}", regionFile.toPath(), t);
+                 }
+             }
+         }
+-
+         return regionFileChunks;
+     }
+ 
+@@ -253,20 +365,50 @@ public class RegionStorageUpgrader {
+         return storage.upgradeChunkTag(chunkTag, this.defaultVersion, this.dataFixContextTag, targetVersion);
+     }
+ 
+-    private void onFileFinished(final RegionFile regionFile) {
++    private void onFileFinished(final FileToUpgrade fileToUpgrade) { // Linear - path carried by the record (contract has no getPath)
+         if (this.recreateRegionFiles) {
+             if (this.previousWriteFuture != null) {
+                 this.previousWriteFuture.join();
+             }
++            // Linear - buffered writes materialise the new_<folder> file only
++            // on flush. Persist BEFORE the move,
++            // or the move sees a stale/missing file and close() deletes the work.
++            if (this.storage instanceof RecreatingSimpleRegionStorage recreating) {
++                recreating.synchronizeWriteSide(true).join();
++            }
+ 
+-            Path filePath = regionFile.getPath();
++            Path filePath = fileToUpgrade.path();
+             Path directoryPath = filePath.getParent();
++            // Linear - recreate format: the write side creates in the probed
++            // format, so the new file may carry a different extension than the source
++            // (mca -> linear on a LINEAR world; unchanged on ANVIL). Resolve both:
++            // the forward arm is core-owned (LinearStorageProbe.targetForSource),
++            // the reverse arm stays inline (no core helper covers linear -> mca).
+             Path newFilePath = resolveRecreateDirectory(directoryPath).resolve(filePath.getFileName().toString());
++            Path newLinearPath = net.linear.LinearStorageProbe.targetForSource(newFilePath);
++            Path newAnvilPath = replaceExtension(newFilePath, ".linear", ".mca");
++            Path actualNew = null;
++            if (newFilePath.toFile().exists()) {
++                actualNew = newFilePath;
++            } else if (newLinearPath.toFile().exists()) {
++                actualNew = newLinearPath;
++            } else if (newAnvilPath.toFile().exists()) {
++                actualNew = newAnvilPath;
++            }
+ 
+             try {
+-                if (newFilePath.toFile().exists()) {
+-                    Files.delete(filePath);
+-                    Files.move(newFilePath, filePath);
++                if (actualNew != null) {
++                    Path finalPath = directoryPath.resolve(actualNew.getFileName().toString());
++                    if (!finalPath.equals(filePath)) {
++                        // Extension changed (mca -> linear or reverse): lay down the new
++                        // file, then remove the stale source so no shadow pair remains
++                        // (dual-read prefers .mca and would hide the converted data).
++                        Files.move(actualNew, finalPath);
++                        Files.deleteIfExists(filePath);
++                    } else {
++                        Files.delete(filePath);
++                        Files.move(actualNew, finalPath);
++                    }
+                 } else {
+                     LOGGER.error("Failed to replace an old region file. New file {} does not exist.", newFilePath);
+                 }
+@@ -276,6 +416,18 @@ public class RegionStorageUpgrader {
+         }
+     }
+ 
++    // Linear - reverse extension swap (r.X.Z.linear -> r.X.Z.mca) for the
++    // recreate move. The forward arm (mca -> linear) is core-owned
++    // (LinearStorageProbe.targetForSource, called above); only the reverse
++    // lives here. Returns the input path unchanged when it carries neither extension.
++    private static Path replaceExtension(final Path file, final String from, final String to) {
++        String name = file.getFileName().toString();
++        if (name.endsWith(from)) {
++            return file.resolveSibling(name.substring(0, name.length() - from.length()) + to);
++        }
++        return file;
++    }
++
+     protected static Path resolveRecreateDirectory(final Path directoryPath) {
+         return directoryPath.resolveSibling("new_" + directoryPath.getFileName().toString());
+     }

@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/util/worldupdate/FileToUpgrade.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/util/worldupdate/FileToUpgrade.java b/net/minecraft/util/worldupdate/FileToUpgrade.java
+--- a/net/minecraft/util/worldupdate/FileToUpgrade.java
++++ b/net/minecraft/util/worldupdate/FileToUpgrade.java
+@@ -1,8 +1,12 @@
+ package net.minecraft.util.worldupdate;
+ 
+ import java.util.List;
++import java.nio.file.Path;
++import net.linear.AbstractRegionFile;
+ import net.minecraft.world.level.ChunkPos;
+-import net.minecraft.world.level.chunk.storage.RegionFile;
+ 
+-public record FileToUpgrade(RegionFile file, List<ChunkPos> chunksToUpgrade) {
++// Linear - widened to AbstractRegionFile and carries the source path explicitly,
++// because the shared contract exposes no getPath() and the record may hold a closed file
++// (only the path is used by onFileFinished).
++public record FileToUpgrade(AbstractRegionFile file, Path path, List<ChunkPos> chunksToUpgrade) {
+ }

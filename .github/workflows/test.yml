@@ -1,0 +1,243 @@
+name: test
+
+# Push-health signal: runs on EVERY push (every commit on every branch) plus
+# PRs, so breakage is caught in seconds/minutes without waiting for the slow
+# release pipeline. The release pipeline (build.yml, owned by G2) keeps the
+# expensive jobs: full paperclip build, boot smokes, artifact upload, release
+# attach. This file owns fast validation only: static gates, unit suites,
+# config inventory. See TEST-NOTES.md (staging/wf-test) for the boundary.
+"on":
+  push:
+    branches: ['**']
+  pull_request:
+
+# One run per ref; a newer push cancels the stale run (push-health must track
+# HEAD, never a queue of old commits).
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only: no release writes. The unit/static jobs clone public upstreams
+# and run gradle; nothing here uploads artifacts or attaches release assets
+# (build.yml owns that). Only the default GITHUB_TOKEN is used, implicitly.
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 25
+
+jobs:
+  static:
+    # Fast-first gate (seconds): YAML validity, shell syntax, and the
+    # no-compile preflight gates. unit + config-check only run when this is
+    # green, so a typo never burns gradle minutes.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: YAML validity (workflows + release configs)
+        # No heredocs: step bodies run under plain bash semantics, so every
+        # python fragment is a `python3 -c` one-liner (indented heredocs feed
+        # leading whitespace to the interpreter and raise IndentationError).
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || pip install --quiet pyyaml
+          # Forward-compatible release inventory: the NEW single
+          # release/region-format.yml wins when present, else the 3 current
+          # per-scope files. At least one side must exist.
+          if [ -f release/region-format.yml ]; then
+            RELEASE_FILES="release/region-format.yml"
+          else
+            RELEASE_FILES="release/paper-global.region-format.yml release/paper-world-defaults.region-format.yml release/paper-world.region-format.yml"
+          fi
+          # shellcheck disable=SC2086
+          for f in .github/workflows/*.yml $RELEASE_FILES; do
+            test -f "$f" || { echo "::error::expected YAML file missing: $f"; exit 1; }
+            python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1])); print('YAML parse OK:', sys.argv[1])" "$f"
+          done
+
+      - name: Shell syntax (shellcheck, else bash -n fallback)
+        run: |
+          FILES="scripts/build.sh scripts/new-version.sh scripts/preflight.sh"
+          for f in $FILES; do
+            test -f "$f" || { echo "::error::expected shell file missing: $f"; exit 1; }
+          done
+          if command -v shellcheck >/dev/null 2>&1; then
+            # shellcheck disable=SC2086
+            shellcheck -S warning $FILES
+          else
+            echo "shellcheck not on runner; falling back to bash -n"
+            for f in $FILES; do bash -n "$f" && echo "bash -n OK: $f"; done
+          fi
+
+      - name: Provide Folia base for preflight file gates (shallow)
+        # scripts/preflight.sh's default gates require $FOLIA_DIR to exist
+        # (fork base file presence). A depth-1 single-branch clone satisfies
+        # the file gate in ~seconds; the byte-identical hunk check SKIPs here
+        # (HEAD != FOLIA_REF) and is covered for real in the unit job, which
+        # checks out the exact FOLIA_REF before compiling.
+        run: |
+          PROPS=$(ls versions/servers/*/upstream.properties | head -1)
+          # shellcheck disable=SC1090
+          REPO=$(grep '^FOLIA_REPO=' "$PROPS" | cut -d= -f2-)
+          BRANCH=$(grep '^FOLIA_BRANCH=' "$PROPS" | cut -d= -f2-)
+          git clone --depth 1 --branch "$BRANCH" --single-branch "$REPO" /tmp/folia-linear/folia
+          test -f /tmp/folia-linear/folia/folia-server/build.gradle.kts.patch
+
+      - name: Preflight default (no-compile) gates
+        run: bash scripts/preflight.sh
+
+  unit:
+    # Slower gate (minutes): compile the fork, then run the Linear suites.
+    # Staging (checkout + Folia clone + patch/test staging) goes through G2's
+    # shared composite actions so test.yml and build.yml can never drift.
+    needs: [static]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # One runner per content line (scaffold-only lines have no patches to
+    # stage; add them here when their ports land).
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["26.1.x"]
+    steps:
+      # Assumed G2 contract (see staging/wf-test/DEVIATIONS.md; G2's
+      # ACTIONS-CONTRACT.md was absent when this was written):
+      #   setup: checkout supplement to ./supplement + Temurin Java +
+      #          gradle cache. Input: java-version (default '25').
+      #   stage: clone pinned Folia base per versions/servers/<v>/upstream.properties
+      #          at the exact FOLIA_REF into ./folia, copy minecraft/paper
+      #          patches, run build-hunk.py, copy tests. Input: version.
+      #          Loops internally over every versions/servers/* folder.
+      - name: Checkout (bootstrap for local composite actions below)
+        uses: actions/checkout@v5
+
+      - name: Setup (checkout + Java + gradle cache)
+        uses: ./.github/actions/setup
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Stage patches + tests
+        uses: ./.github/actions/stage
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Set git identity (paperweight applies patches via git am)
+        run: |
+          git config --global user.name "folia-linear-ci"
+          git config --global user.email "folia-linear-ci@users.noreply.github.com"
+
+      - name: Apply patches (paperweight wires test dependencies here)
+        working-directory: fork
+        run: ./gradlew applyAllPatches --stacktrace
+
+      - name: Preflight --compile gate (exact invocation from scripts/preflight.sh)
+        run: bash supplement/scripts/preflight.sh --folia-dir "$GITHUB_WORKSPACE/fork" --compile
+
+      - name: Linear test suites (exact invocation from build.yml's test step)
+        working-directory: fork
+        run: ./gradlew :folia-server:test --tests "net.linear.LinearNmsTestSuite" --stacktrace
+
+  horizon:
+    # Fast gate for the standalone plugin: composite build against
+    # linear-core/ plus the full JUnit suite. Runs on every push so the
+    # plugin can never silently rot while server legs are green.
+    needs: [static]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: supplement/versions/plugins/horizon/1.0.0
+    steps:
+      - name: Checkout (supplement root for the linear-core composite)
+        uses: actions/checkout@v5
+        with:
+          path: supplement
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Plugin build + tests
+        run: ./gradlew build test --stacktrace
+
+  config-check:
+    # Config inventory gate (seconds): proves the release/*.yml set is
+    # coherent — right files, required keys, no stale cross-references.
+    # Inline equivalent of the cfg-test check-config.sh (absent from staging
+    # when this was written); if that script lands, this job should call it.
+    needs: [static]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Config inventory + no-stale-refs
+        # Heredoc-free (see static job comment): one-liner python for the
+        # structured checks, grep for the textual ones.
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || pip install --quiet pyyaml
+          if [ -f release/region-format.yml ]; then
+            FILES="release/region-format.yml"
+          else
+            FILES="release/paper-global.region-format.yml release/paper-world-defaults.region-format.yml release/paper-world.region-format.yml"
+          fi
+          # shellcheck disable=SC2086
+          for f in $FILES; do
+            test -f "$f" || { echo "::error::config-check: missing release file: $f"; exit 1; }
+            if grep -q -e '<<<<<<<' -e '>>>>>>>' "$f"; then
+              echo "::error::config-check: $f contains merge markers"; exit 1
+            fi
+            FMT=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1])).get('region-format', {}).get('format', ''))" "$f")
+            # Single-file layout (post-consolidation): nested sections carry
+            # per-scope values -- world-defaults ships LINEAR/6 (the v1.0.0
+            # default flip), per-world-example is the ANVIL opt-out template.
+            if [ "$(basename "$f")" = "region-format.yml" ]; then
+              WDFMT=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['world-defaults']['region-format']['format'])" "$f")
+              PWFMT=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['per-world-example']['region-format']['format'])" "$f")
+              WDLVL=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['world-defaults']['region-format']['linear']['compression-level'])" "$f")
+              test "$WDFMT" = "LINEAR" \
+                || { echo "::error::config-check: $f world-defaults format='$WDFMT' (want LINEAR)"; exit 1; }
+              test "$PWFMT" = "ANVIL" \
+                || { echo "::error::config-check: $f per-world-example format='$PWFMT' (want ANVIL)"; exit 1; }
+              test "$WDLVL" = "6" \
+                || { echo "::error::config-check: $f world-defaults compression-level='$WDLVL' (want 6)"; exit 1; }
+              echo "OK: $f (world-defaults=LINEAR/6, per-world-example=ANVIL)"
+            else
+            # Per-scope format expectations (grounded in the release files):
+            # per-world must opt in LINEAR, ship-defaults must stay ANVIL,
+            # global intentionally OMITS format (inert defaults, inherits).
+            case "$(basename "$f")" in
+              paper-world.region-format.yml) WANT=LINEAR ;;
+              paper-world-defaults.region-format.yml) WANT=ANVIL ;;
+              *) WANT="" ;;
+            esac
+            if [ -n "$WANT" ]; then
+              test "$FMT" = "$WANT" \
+                || { echo "::error::config-check: $f region-format.format='$FMT' (want $WANT)"; exit 1; }
+            elif [ -n "$FMT" ] && [ "$FMT" != LINEAR ] && [ "$FMT" != ANVIL ]; then
+              echo "::error::config-check: $f region-format.format='$FMT' (want LINEAR|ANVIL when present)"; exit 1
+            fi
+            echo "OK: $f (format=${FMT:-<inherited>})"
+            fi
+            # No-stale-refs: any release/*.yml filename mentioned inside a
+            # config file must exist on disk (catches renames like the
+            # 3-file -> single-file migration leaving dangling pointers).
+            for ref in $(grep -o -E '[A-Za-z0-9_.-]*region-format[A-Za-z0-9_.-]*\.yml' "$f" || true); do
+              test -f "release/$(basename "$ref")" \
+                || { echo "::error::config-check: $f references missing file: $ref"; exit 1; }
+            done
+          done
+          # The 3-file layout must not gain/lose members silently (skipped
+          # once the single-file layout lands).
+          if [ ! -f release/region-format.yml ]; then
+            HAVE=$(ls release/*.region-format.yml | wc -l)
+            test "$HAVE" -eq 3 \
+              || { echo "::error::config-check: expected 3 release/*.region-format.yml, found $HAVE"; exit 1; }
+          fi

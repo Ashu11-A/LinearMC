@@ -1,0 +1,1179 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Linear region format
+
+Adds a Linear region-file format alongside vanilla anvil storage.
+Region files are chosen per storage folder: Linear defers chunk
+writes in memory and persists them on world save, unload, or
+eviction, with broken-symlink guards and oversized-chunk handling
+matching vanilla delete-and-log behavior.
+---
+ ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java |    6 +++---
+ ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java |   19 +++++++++++++------
+ ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java |   18 +++++++++++++++++-
+ ca/spottedleaf/moonrise/patches/chunk_system/storage/ChunkSystemChunkBuffer.java |    4 ++--
+ net/minecraft/server/Main.java                               |   14 +++++++-------
+ net/minecraft/server/level/ChunkMap.java                     |   15 ++++++++++++---
+ net/minecraft/server/level/ServerChunkCache.java             |   10 +++++++++-
+ net/minecraft/server/level/ServerLevel.java                  |    7 ++++++-
+ net/minecraft/util/worldupdate/FileToUpgrade.java            |    8 ++++++--
+ net/minecraft/util/worldupdate/RegionStorageUpgrader.java    |   97 +++++++++++++++++++++++++++++++++++++++++++++++++++---------
+ net/minecraft/world/entity/ai/village/poi/PoiManager.java    |   10 ++++++++--
+ net/minecraft/world/level/chunk/storage/IOWorker.java        |   12 +++++++++++-
+ net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java |   28 +++++++++++++++++++++++++++-
+ net/minecraft/world/level/chunk/storage/RegionFile.java      |   23 ++++++++++++++++++++---
+ net/minecraft/world/level/chunk/storage/RegionFileStorage.java |  248 +++++++++++++++++++++++++++++++++++++++++++++++++-----------
+ net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java |   20 +++++++++++++++++++-
+ 16 files changed, 444 insertions(+), 95 deletions(-)
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java
+index a814512fcfb85312474ae2c2c21443843bf57831..cb41ef48ff55a2052a959314263c4d48e16e9e80 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/ChunkSystemRegionFileStorage.java
+@@ -1,16 +1,16 @@
+ package ca.spottedleaf.moonrise.patches.chunk_system.io;
+ 
+ import net.minecraft.nbt.CompoundTag;
+-import net.minecraft.world.level.chunk.storage.RegionFile;
++import net.linear.AbstractRegionFile; // Linear - widened to the shared region-file type
+ import java.io.IOException;
+ 
+ public interface ChunkSystemRegionFileStorage {
+ 
+     public boolean moonrise$doesRegionFileNotExistNoIO(final int chunkX, final int chunkZ);
+ 
+-    public RegionFile moonrise$getRegionFileIfLoaded(final int chunkX, final int chunkZ);
++    public AbstractRegionFile moonrise$getRegionFileIfLoaded(final int chunkX, final int chunkZ);
+ 
+-    public RegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException;
++    public AbstractRegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException;
+ 
+     public MoonriseRegionFileIO.RegionDataController.WriteData moonrise$startWrite(
+             final int chunkX, final int chunkZ, final CompoundTag compound
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
+index 3bb9b58ee97464687e348e23b99159226415c267..ee2b3f84cc651729899b3d4afcc7780c80884c1a 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
+@@ -17,7 +17,7 @@ import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
+ import net.minecraft.nbt.CompoundTag;
+ import net.minecraft.server.MinecraftServer;
+ import net.minecraft.server.level.ServerLevel;
+-import net.minecraft.world.level.chunk.storage.RegionFile;
++import net.linear.AbstractRegionFile; // Linear - widened to the shared region-file type
+ import net.minecraft.world.level.chunk.storage.RegionFileStorage;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+@@ -1273,9 +1273,16 @@ public final class MoonriseRegionFileIO {
+                 this.regionDataController.finishWrite(this.chunkX, this.chunkZ, writeData);
+                 // Paper start - flush regionfiles on save
+                 if (this.world.paperConfig().chunks.flushRegionsOnSave) {
+-                    final RegionFile regionFile = this.regionDataController.getCache().moonrise$getRegionFileIfLoaded(this.chunkX, this.chunkZ);
++                    final AbstractRegionFile regionFile = this.regionDataController.getCache().moonrise$getRegionFileIfLoaded(this.chunkX, this.chunkZ); // Linear - widened (flush() is on the interface)
++                    // Linear - coordinator-aware batching. Anvil keeps the
++                    // per-write flush() (byte-identical). Linear skips it: the write
++                    // path above already markDirty'd the file, and a per-chunk
++                    // full-file zstd rewrite is write amplification (up to 1024x per
++                    // region per cycle). Durability via RegionFileStorage.flush() ->
++                    // flushDirty() at save-cycle end, bound backpressure, evict().
++                    if (regionFile instanceof net.minecraft.world.level.chunk.storage.RegionFile anvilFile) {
++                        anvilFile.flush();
++                    } // else if Linear: deferred to LinearFlushCoordinator
++                    // else (null): evicted from cache, which should have called flush
+-                    if (regionFile != null) {
+-                        regionFile.flush();
+-                    } // else: evicted from cache, which should have called flush
+                 }
+                 // Paper end - flush regionfiles on save
+@@ -1489,7 +1496,7 @@ public final class MoonriseRegionFileIO {
+ 
+         public static interface IORunnable {
+ 
+-            public void run(final RegionFile regionFile) throws IOException;
++            public void run(final AbstractRegionFile regionFile) throws IOException; // Linear - widened so Linear write-backs typecheck; anvil ChunkBuffer impl updated to match
+ 
+         }
+     }
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
+index 992d19e1b08fa84325e7bb3c3d7d0b9dff4cdd3b..a26c5c71099a6b3cfa219e0438cbadac1cef2e50 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
+@@ -61,7 +61,23 @@ public final class EntityDataController extends MoonriseRegionFileIO.RegionDataC
+ 
+         public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
+                                        final boolean dsync) {
+-            super(regionStorageInfo, directory, dsync);
++            this(regionStorageInfo, directory, dsync, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
++        }
++
++        // Linear - format-aware entry point. The outer EntityDataController
++        // constructor is unchanged (it receives the already-built storage); ServerLevel
++        // threads the world format + linear compression through this overload.
++        // Linear - 6-arg overload adds the crash flag; 5-arg delegates with default true.
++        public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
++                                       final boolean dsync, final net.linear.RegionFileFormat format,
++                                       final int linearCompression) {
++            this(regionStorageInfo, directory, dsync, format, linearCompression, true);
++        }
++
++        public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
++                                       final boolean dsync, final net.linear.RegionFileFormat format,
++                                       final int linearCompression, final boolean linearCrashOnBrokenSymlink) {
++            super(regionStorageInfo, directory, dsync, format, linearCompression, linearCrashOnBrokenSymlink);
+         }
+ 
+         @Override
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/storage/ChunkSystemChunkBuffer.java b/ca/spottedleaf/moonrise/patches/chunk_system/storage/ChunkSystemChunkBuffer.java
+index 51c126735ace8fdde89ad97b5cab62f244212db0..4f1bcc8ec9a72b37f28452f19086561da3b26887 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/storage/ChunkSystemChunkBuffer.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/storage/ChunkSystemChunkBuffer.java
+@@ -1,6 +1,6 @@
+ package ca.spottedleaf.moonrise.patches.chunk_system.storage;
+ 
+-import net.minecraft.world.level.chunk.storage.RegionFile;
++import net.linear.AbstractRegionFile; // Linear - widened to the shared region-file type
+ import java.io.IOException;
+
+ public interface ChunkSystemChunkBuffer {
+@@ -8,5 +8,5 @@ public interface ChunkSystemChunkBuffer {
+
+     public void moonrise$setWriteOnClose(final boolean value);
+
+-    public void moonrise$write(final RegionFile regionFile) throws IOException;
++    public void moonrise$write(final AbstractRegionFile regionFile) throws IOException;
+ }
+diff --git a/net/minecraft/server/Main.java b/net/minecraft/server/Main.java
+index aa15c5c83f04e518c30a9dee7945062099197c25..5bf4a064de041e375a036128c7d7a6a9bc22ae7f 100644
+--- a/net/minecraft/server/Main.java
++++ b/net/minecraft/server/Main.java
+@@ -112,9 +112,12 @@ public class Main {
+             DedicatedServerSettings settings = new DedicatedServerSettings(options); // CraftBukkit - CLI argument support
+             settings.forceSave();
+             // Paper start
++            // Linear - upgrade/recreate path restored.
++            // RegionFileVersion.configure below still runs before boot, so the upgrader
++            // write path recompresses through the selected version (deflate after the
++            // revert flip). PaperWorldLoader.loadInitialWorld performs the upgrade.
+             if (options.has("forceUpgrade") || options.has("recreateRegionFiles")) {
+-                LOGGER.error("World upgrade and region file recreation are not yet implemented in Paper 26.1.");
+-                return;
++                LOGGER.warn("World upgrade and/or region file recreation requested; running upgrade path during boot.");
+             }
+             // Paper end
+             RegionFileVersion.configure(settings.getProperties().regionFileComression);
+@@ -427,10 +430,8 @@ public class Main {
+         final RegistryAccess registryAccess,
+         final boolean recreateRegionFiles
+     ) {
+-        throw new UnsupportedOperationException(
+-            "World upgrade and region file recreation are not yet implemented in Paper 26.1."
+-        );
+-        /*
++        // Linear - un-stubbed (was UnsupportedOperationException). Restores the
++        // vanilla WorldUpgrader loop so --forceUpgrade/--recreateRegionFiles work.
+         LOGGER.info("Forcing world upgrade! {}", storageSource.getLevelId()); // CraftBukkit
+ 
+         try (WorldUpgrader upgrader = new WorldUpgrader(storageSource, fixerUpper, registryAccess, eraseCache, recreateRegionFiles)) {
+@@ -459,6 +460,5 @@ public class Main {
+                 }
+             }
+         }
+-        */
+     }
+ }
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index 0c0775bbb0c0ba0c37d1b884bb106b5250e94750..78afb3d6d57dfdbf64ae1771bf87c5551c59f71f 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -185,14 +185,20 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         final Supplier<SavedDataStorage> overworldDataStorage,
+         final TicketStorage ticketStorage,
+         final int serverViewDistance,
+-        final boolean syncWrites
++        final boolean syncWrites,
++        final net.linear.RegionFileFormat format, // Linear - world region format (wired from world config; ANVIL default at call site)
++        final int linearCompression, // Linear - linear zstd level
++        final boolean linearCrashOnBrokenSymlink // Linear - broken-symlink flag
+     ) {
+         super(
+             new RegionStorageInfo(levelStorage.getLevelId(), level.dimension(), "chunk"),
+             levelStorage.getDimensionPath(level.dimension()).resolve("region"),
+             dataFixer,
+             syncWrites,
+-            DataFixTypes.CHUNK
++            DataFixTypes.CHUNK,
++            format, // Linear
++            linearCompression, // Linear
++            linearCrashOnBrokenSymlink // Linear
+         );
+         Path storageFolder = levelStorage.getDimensionPath(level.dimension());
+         this.storageName = storageFolder.getFileName().toString();
+@@ -228,7 +234,10 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+             syncWrites,
+             registryAccess,
+             level.getServer(),
+-            level
++            level,
++            format, // Linear
++            linearCompression, // Linear
++            linearCrashOnBrokenSymlink // Linear
+         );
+         this.setServerViewDistance(serverViewDistance);
+         this.worldGenContext = new WorldGenContext(level, generator, structureManager, this.lightEngine, null, this::setChunkUnsaved); // Paper - rewrite chunk system
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+index 022593220923b28d61b458bee827d21be4dd2f2c..911d515d5bbde2408edc344bd3199f28c4eed3b8 100644
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -215,5 +215,14 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+          this.savedDataStorage = savedDataStorage; // Paper - initialize SavedDataStorage earlier
+          this.ticketStorage = this.savedDataStorage.computeIfAbsent(TicketStorage.TYPE);
++        // Linear - sysprop-first via LinearPolicy (single owner; file layer stays case-sensitive, per-world scope, default LINEAR).
++        final String linearSysFormat = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_FORMAT);
++        final String linearFileFormat = level.paperConfig().regionFormat.format == null ? null : level.paperConfig().regionFormat.format.toString();
++        final net.linear.RegionFileFormat linearFormat = net.linear.config.LinearPolicy.resolveFormatWithOverride(linearSysFormat, linearFileFormat, net.linear.RegionFileFormat.ANVIL, levelStorage.getDimensionPath(level.dimension()).resolve("region").toString(), levelStorage.getLevelId());
++        if (linearSysFormat != null && !linearSysFormat.trim().equals(String.valueOf(linearFileFormat))) { LOGGER.info(net.linear.config.LinearPolicy.overrideLine(net.linear.config.LinearPolicy.SYSPROP_FORMAT, linearSysFormat, String.valueOf(linearFileFormat), String.valueOf(linearFormat), "world")); }
++        final String linearSysLevel = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_LEVEL);
++        final int linearCompression = net.linear.config.LinearPolicy.resolveLevel(linearSysLevel, level.paperConfig().regionFormat.linear.compressionLevel, 6);
++        if (linearSysLevel != null && !linearSysLevel.trim().equals(String.valueOf(level.paperConfig().regionFormat.linear.compressionLevel))) { LOGGER.info(net.linear.config.LinearPolicy.overrideLine(net.linear.config.LinearPolicy.SYSPROP_LEVEL, linearSysLevel, String.valueOf(level.paperConfig().regionFormat.linear.compressionLevel), String.valueOf(linearCompression), "world")); }
++        final boolean linearCrashOnBrokenSymlink = level.paperConfig().regionFormat.linear.crashOnBrokenSymlink;
+         this.chunkMap = new ChunkMap(
+             level,
+             levelStorage,
+@@ -228,7 +233,10 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+             overworldDataStorage,
+             this.ticketStorage,
+             viewDistance,
+-            syncWrites
++            syncWrites,
++            linearFormat,
++            linearCompression,
++            linearCrashOnBrokenSymlink
+         );
+         this.lightEngine = this.chunkMap.getLightEngine();
+         this.distanceManager = this.chunkMap.getDistanceManager();
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index a51a9e7a0fa5727690046d814eb0b26d5742cd74..023af206c917f8faea4f58291b5f4f6cca12fa4f 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -690,7 +690,11 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             new ca.spottedleaf.moonrise.patches.chunk_system.io.datacontroller.EntityDataController.EntityRegionFileStorage(
+                 new RegionStorageInfo(levelStorage.getLevelId(), dimension, "entities"),
+                 levelStorage.getDimensionPath(dimension).resolve("entities"),
+-                server.forceSynchronousWrites()
++                server.forceSynchronousWrites(),
++                // Linear - sysprop-first via LinearPolicy (file layer case-sensitive, per-world scope, default LINEAR). Runtime override (reverse jobs flip this folder to ANVIL) wins over the file; sysprop still wins overall.
++                net.linear.config.LinearPolicy.resolveFormatWithOverride(System.getProperty(net.linear.config.LinearPolicy.SYSPROP_FORMAT), this.paperConfig().regionFormat.format == null ? null : this.paperConfig().regionFormat.format.toString(), net.linear.RegionFileFormat.ANVIL, levelStorage.getDimensionPath(dimension).resolve("entities").toString(), levelStorage.getLevelId()),
++                net.linear.config.LinearPolicy.resolveLevel(System.getProperty(net.linear.config.LinearPolicy.SYSPROP_LEVEL), this.paperConfig().regionFormat.linear.compressionLevel, 6),
++                this.paperConfig().regionFormat.linear.crashOnBrokenSymlink
+             ),
+             this.chunkTaskScheduler
+         );
+diff --git a/net/minecraft/util/worldupdate/FileToUpgrade.java b/net/minecraft/util/worldupdate/FileToUpgrade.java
+index a7f2cfa9277c898038f6b9e0a3401db51012b64c..fd36d2d4e25b37fa58c641a0a429de0c141202a7 100644
+--- a/net/minecraft/util/worldupdate/FileToUpgrade.java
++++ b/net/minecraft/util/worldupdate/FileToUpgrade.java
+@@ -1,8 +1,12 @@
+ package net.minecraft.util.worldupdate;
+ 
+ import java.util.List;
++import java.nio.file.Path;
++import net.linear.AbstractRegionFile;
+ import net.minecraft.world.level.ChunkPos;
+-import net.minecraft.world.level.chunk.storage.RegionFile;
+ 
+-public record FileToUpgrade(RegionFile file, List<ChunkPos> chunksToUpgrade) {
++// Linear - widened to AbstractRegionFile and carries the source path explicitly,
++// because the shared contract exposes no getPath() and the record may hold a closed file
++// (only the path is used by onFileFinished).
++public record FileToUpgrade(AbstractRegionFile file, Path path, List<ChunkPos> chunksToUpgrade) {
+ }
+diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd28389aa440c 100644
+--- a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
++++ b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+@@ -26,7 +26,8 @@ import net.minecraft.util.datafix.DataFixTypes;
+ import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.chunk.storage.RecreatingSimpleRegionStorage;
+-import net.minecraft.world.level.chunk.storage.RegionFile;
++import net.linear.AbstractRegionFile; // Linear
++import net.linear.AbstractRegionFileFactory; // Linear
+ import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
+ import net.minecraft.world.level.chunk.storage.SimpleRegionStorage;
+ import net.minecraft.world.level.storage.LevelStorageSource;
+@@ -36,7 +37,9 @@ import org.slf4j.Logger;
+ public class RegionStorageUpgrader {
+     private static final Logger LOGGER = LogUtils.getLogger();
+     private static final String NEW_DIRECTORY_PREFIX = "new_";
+-    private static final Pattern REGEX = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.mca$");
++    // Linear - match both extensions. NOTE the grouping has no spaces:
++    // Kaiiju 0004 shipped "(linear | mca)" which only matches a literal "linear " with trailing space.
++    private static final Pattern REGEX = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
+     private final DataFixer dataFixer;
+     private final UpgradeProgress upgradeProgress;
+     private final String type;
+@@ -106,9 +109,9 @@ public class RegionStorageUpgrader {
+ 
+                     if (this.recreateRegionFiles) {
+                         if (converted) {
+-                            this.onFileFinished(fileToUpgrade.file());
++                            this.onFileFinished(fileToUpgrade); // Linear - record now carries its source path
+                         } else {
+-                            LOGGER.error("Failed to convert region file {}", fileToUpgrade.file().getPath());
++                            LOGGER.error("Failed to convert region file {}", fileToUpgrade.path()); // Linear - path carried by the record
+                         }
+                     }
+                 }
+@@ -135,6 +138,13 @@ public class RegionStorageUpgrader {
+     }
+ 
+     protected final SimpleRegionStorage createStorage(final RegionStorageInfo info, final Path regionFolder) {
++        // Linear - the recreate write side (new_<folder>) honors the world's
++        // configured format without any config lookup (upgraders stay config-free:
++        // no Bukkit.getWorld / paperConfig here). The on-disk set is the signal --
++        // any r.*.linear present means LINEAR, else ANVIL (unchanged). The format flows
++        // via ctor params into the write-side IOWorker/RegionFileStorage, which creates
++        // r.X.Z.<ext> via AbstractRegionFileFactory.
++        final net.linear.RegionFileFormat writeFormat = probeWriteFormat(regionFolder);
+         return (SimpleRegionStorage)(this.recreateRegionFiles
+             ? new RecreatingSimpleRegionStorage(
+                 info.withTypeSuffix("source"),
+@@ -143,11 +153,29 @@ public class RegionStorageUpgrader {
+                 resolveRecreateDirectory(regionFolder),
+                 this.dataFixer,
+                 true,
+-                this.dataFixType
++                this.dataFixType,
++                writeFormat,
++                1
+             )
+             : new SimpleRegionStorage(info, regionFolder, this.dataFixer, true, this.dataFixType));
+     }
+ 
++    // Linear - config-free format signal. LINEAR worlds carry .linear files
++    // (the offline converter lays them down before any flag flip; see UPGRADE.md),
++    // so one REGEX-matching *.linear file selects the LINEAR write side. Pure-Anvil
++    // folders keep the vanilla ANVIL side. Filesystem signal only.
++    private static net.linear.RegionFileFormat probeWriteFormat(final Path regionFolder) {
++        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".linear"));
++        if (files != null) {
++            for (File file : files) {
++                if (REGEX.matcher(file.getName()).matches()) {
++                    return net.linear.RegionFileFormat.LINEAR;
++                }
++            }
++        }
++        return net.linear.RegionFileFormat.ANVIL;
++    }
++
+     private List<FileToUpgrade> getFilesToProcess(final RegionStorageInfo info, final Path regionFolder) {
+         List<FileToUpgrade> filesToUpgrade = getAllChunkPositions(info, regionFolder);
+         this.upgradeProgress.addTotalFileFixOperations(filesToUpgrade.size());
+@@ -160,7 +188,8 @@ public class RegionStorageUpgrader {
+     }
+ 
+     private static List<FileToUpgrade> getAllChunkPositions(final RegionStorageInfo info, final Path regionFolder) {
+-        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".mca"));
++        // Linear - scan both extensions so --upgradeWorld / DFU passes see Linear data.
++        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".mca") || name.endsWith(".linear"));
+         if (files == null) {
+             return List.of();
+         } else {
+@@ -173,18 +202,20 @@ public class RegionStorageUpgrader {
+                     int zOffset = Integer.parseInt(regex.group(2)) << 5;
+                     List<ChunkPos> chunkPositions = Lists.newArrayList();
+ 
+-                    try (RegionFile regionSource = new RegionFile(info, regionFile.toPath(), regionFolder, true)) {
++                    // Linear - open in probed format via the factory; enumerate with
++                    // hasChunk (doesChunkExist is anvil-only and not in the shared contract).
++                    try (AbstractRegionFile regionSource = AbstractRegionFileFactory.get(regionFile.toPath(), info, regionFolder, true, 1)) {
+                         for (int x = 0; x < 32; x++) {
+                             for (int z = 0; z < 32; z++) {
+                                 ChunkPos pos = new ChunkPos(x + xOffset, z + zOffset);
+-                                if (regionSource.doesChunkExist(pos)) {
++                                if (regionSource.hasChunk(pos)) {
+                                     chunkPositions.add(pos);
+                                 }
+                             }
+                         }
+ 
+                         if (!chunkPositions.isEmpty()) {
+-                            regionFileChunks.add(new FileToUpgrade(regionSource, chunkPositions));
++                            regionFileChunks.add(new FileToUpgrade(regionSource, regionFile.toPath(), chunkPositions));
+                         }
+                     } catch (Throwable var18) {
+                         LOGGER.error("Failed to read chunks from region file {}", regionFile.toPath(), var18);
+@@ -251,20 +282,48 @@ public class RegionStorageUpgrader {
+         return storage.upgradeChunkTag(chunkTag, this.defaultVersion, this.dataFixContextTag, targetVersion);
+     }
+ 
+-    private void onFileFinished(final RegionFile regionFile) {
++    private void onFileFinished(final FileToUpgrade fileToUpgrade) { // Linear - path carried by the record (contract has no getPath)
+         if (this.recreateRegionFiles) {
+             if (this.previousWriteFuture != null) {
+                 this.previousWriteFuture.join();
+             }
++            // Linear - buffered writes materialise the new_<folder> file only
++            // on flush. Persist BEFORE the move,
++            // or the move sees a stale/missing file and close() deletes the work.
++            if (this.storage instanceof RecreatingSimpleRegionStorage recreating) {
++                recreating.synchronizeWriteSide(true).join();
++            }
+ 
+-            Path filePath = regionFile.getPath();
++            Path filePath = fileToUpgrade.path();
+             Path directoryPath = filePath.getParent();
++            // Linear - recreate format: the write side creates in the probed
++            // format, so the new file may carry a different extension than the source
++            // (mca -> linear on a LINEAR world; unchanged on ANVIL). Resolve both.
+             Path newFilePath = resolveRecreateDirectory(directoryPath).resolve(filePath.getFileName().toString());
++            Path newLinearPath = replaceExtension(newFilePath, ".mca", ".linear");
++            Path newAnvilPath = replaceExtension(newFilePath, ".linear", ".mca");
++            Path actualNew = null;
++            if (newFilePath.toFile().exists()) {
++                actualNew = newFilePath;
++            } else if (newLinearPath.toFile().exists()) {
++                actualNew = newLinearPath;
++            } else if (newAnvilPath.toFile().exists()) {
++                actualNew = newAnvilPath;
++            }
+ 
+             try {
+-                if (newFilePath.toFile().exists()) {
+-                    Files.delete(filePath);
+-                    Files.move(newFilePath, filePath);
++                if (actualNew != null) {
++                    Path finalPath = directoryPath.resolve(actualNew.getFileName().toString());
++                    if (!finalPath.equals(filePath)) {
++                        // Extension changed (mca -> linear or reverse): lay down the new
++                        // file, then remove the stale source so no shadow pair remains
++                        // (dual-read prefers .mca and would hide the converted data).
++                        Files.move(actualNew, finalPath);
++                        Files.deleteIfExists(filePath);
++                    } else {
++                        Files.delete(filePath);
++                        Files.move(actualNew, finalPath);
++                    }
+                 } else {
+                     LOGGER.error("Failed to replace an old region file. New file {} does not exist.", newFilePath);
+                 }
+@@ -274,6 +333,16 @@ public class RegionStorageUpgrader {
+         }
+     }
+ 
++    // Linear - swap a region-file extension (r.X.Z.mca <-> r.X.Z.linear).
++    // Returns the input path unchanged when it carries neither extension.
++    private static Path replaceExtension(final Path file, final String from, final String to) {
++        String name = file.getFileName().toString();
++        if (name.endsWith(from)) {
++            return file.resolveSibling(name.substring(0, name.length() - from.length()) + to);
++        }
++        return file;
++    }
++
+     protected static Path resolveRecreateDirectory(final Path directoryPath) {
+         return directoryPath.resolveSibling("new_" + directoryPath.getFileName().toString());
+     }
+diff --git a/net/minecraft/world/entity/ai/village/poi/PoiManager.java b/net/minecraft/world/entity/ai/village/poi/PoiManager.java
+index 1d47a897c912a2aae5938beade092829bff18993..ab87afd13310dd9a56a6f6ebabf9f96666773615 100644
+--- a/net/minecraft/world/entity/ai/village/poi/PoiManager.java
++++ b/net/minecraft/world/entity/ai/village/poi/PoiManager.java
+@@ -181,10 +181,16 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> im
+         final boolean sync,
+         final RegistryAccess registryAccess,
+         final ChunkIOErrorReporter errorReporter,
+-        final LevelHeightAccessor levelHeightAccessor
++        final LevelHeightAccessor levelHeightAccessor,
++        final net.linear.RegionFileFormat format, // Linear - threaded from ChunkMap (world config)
++        final int linearCompression, // Linear - linear zstd level
++        final boolean linearCrashOnBrokenSymlink // Linear - broken-symlink flag
+     ) {
+         super(
+-            new SimpleRegionStorage(info, folder, fixerUpper, sync, DataFixTypes.POI_CHUNK),
++            // Linear - format-aware storage. Note 26.1.2 PoiManager HAS-A
++            // SimpleRegionStorage (built here), so no SectionStorage
++            // constructor change is needed.
++            new SimpleRegionStorage(info, folder, fixerUpper, sync, DataFixTypes.POI_CHUNK, format, linearCompression, linearCrashOnBrokenSymlink),
+             PoiSection.Packed.CODEC,
+             PoiSection::pack,
+             PoiSection.Packed::unpack,
+diff --git a/net/minecraft/world/level/chunk/storage/IOWorker.java b/net/minecraft/world/level/chunk/storage/IOWorker.java
+index 7adb4be57bd9fdc9980b5b7e91e9d9ca4d24a726..dc6608874d77c42f79e68bb5720c2f19c1c309f6 100644
+--- a/net/minecraft/world/level/chunk/storage/IOWorker.java
++++ b/net/minecraft/world/level/chunk/storage/IOWorker.java
+@@ -37,7 +37,17 @@ public class IOWorker implements AutoCloseable, ChunkScanAccess {
+     private static final int REGION_CACHE_SIZE = 1024;
+ 
+     protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync) {
+-        this.storage = new RegionFileStorage(info, dir, sync);
++        this(info, dir, sync, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
++    }
++
++    // Linear - format-aware entry point (called by the SimpleRegionStorage overload).
++    // Linear - 6-arg overload adds the crash flag; 5-arg delegates with default true.
++    protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync, final net.linear.RegionFileFormat format, final int linearCompression) {
++        this(info, dir, sync, format, linearCompression, true);
++    }
++
++    protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync, final net.linear.RegionFileFormat format, final int linearCompression, final boolean linearCrashOnBrokenSymlink) {
++        this.storage = new RegionFileStorage(info, dir, sync, format, linearCompression, linearCrashOnBrokenSymlink);
+         this.consecutiveExecutor = new PriorityConsecutiveExecutor(IOWorker.Priority.values().length, Util.ioPool(), "IOWorker-" + info.type());
+     }
+ 
+diff --git a/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
+index 39901c7795fbf5cdbc1c5fe1a471faa956ed34db..b8bdbcad5d31639a4b1089ce1e747c0b6c465bb7 100644
+--- a/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
+@@ -22,10 +22,28 @@ public class RecreatingSimpleRegionStorage extends SimpleRegionStorage {
+         final DataFixer fixerUpper,
+         final boolean syncWrites,
+         final DataFixTypes dataFixType
++    ) {
++        this(readInfo, readFolder, writeInfo, writeFolder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
++    }
++
++    // Linear - format-aware entry point for --recreate. The write side
++    // (new_<folder>) inherits the world's configured format via ctor params
++    // (RegionStorageInfo/storage flow, never Bukkit lookups). LINEAR creates
++    // r.X.Z.linear via AbstractRegionFileFactory; ANVIL (default) is unchanged.
++    public RecreatingSimpleRegionStorage(
++        final RegionStorageInfo readInfo,
++        final Path readFolder,
++        final RegionStorageInfo writeInfo,
++        final Path writeFolder,
++        final DataFixer fixerUpper,
++        final boolean syncWrites,
++        final DataFixTypes dataFixType,
++        final net.linear.RegionFileFormat writeFormat,
++        final int linearCompression
+     ) {
+         super(readInfo, readFolder, fixerUpper, syncWrites, dataFixType);
+         this.writeFolder = writeFolder;
+-        this.writeWorker = new IOWorker(writeInfo, writeFolder, syncWrites);
++        this.writeWorker = new IOWorker(writeInfo, writeFolder, syncWrites, writeFormat, linearCompression);
+     }
+ 
+     @Override
+@@ -33,6 +51,14 @@ public class RecreatingSimpleRegionStorage extends SimpleRegionStorage {
+         return this.writeWorker.store(pos, supplier);
+     }
+ 
++    // Linear - persist the write side (new_<folder>) to disk. Linear
++    // buffers chunk bytes in RAM (dirty flag) and only materialises the file
++    // on flush; without this, onFileFinished would move a stale/missing file.
++    // Called by RegionStorageUpgrader.onFileFinished after joining pending writes.
++    public CompletableFuture<Void> synchronizeWriteSide(final boolean flush) {
++        return this.writeWorker.synchronize(flush);
++    }
++
+     @Override
+     public void close() throws IOException {
+         super.close();
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFile.java b/net/minecraft/world/level/chunk/storage/RegionFile.java
+index e077797cefffcb9db627cab12c7d88245e5baa69..70bed27e7f4d319fb318f854b51ca0be5ad37753 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFile.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFile.java
+@@ -23,7 +23,7 @@ import net.minecraft.world.level.ChunkPos;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+ 
+-public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemRegionFile { // Paper - rewrite chunk system
++public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemRegionFile, net.linear.AbstractRegionFile { // Paper - rewrite chunk system // Linear - anvil side of the AbstractRegionFile duality
+     private static final Logger LOGGER = LogUtils.getLogger();
+     public static final int MAX_CHUNK_SIZE = 500 * 1024 * 1024; // Paper - don't write garbage data to disk if writing serialization fails
+     private static final int SECTOR_BYTES = 4096;
+@@ -778,6 +778,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         this.file.force(true);
+     }
+ 
++    @Override // Linear - satisfies AbstractRegionFile.clear
+     public void clear(final ChunkPos pos) throws IOException {
+         int offsetIndex = getOffsetIndex(pos);
+         int offset = this.offsets.get(offsetIndex);
+@@ -790,7 +791,8 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         }
+     }
+ 
+-    protected synchronized void write(final ChunkPos pos, final ByteBuffer data) throws IOException {
++    @Override // Linear - widened protected -> public to satisfy AbstractRegionFile.write
++    public synchronized void write(final ChunkPos pos, final ByteBuffer data) throws IOException {
+         int offsetIndex = getOffsetIndex(pos);
+         int offset = this.offsets.get(offsetIndex);
+         int sectorNumber = getSectorNumber(offset);
+@@ -860,10 +862,25 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         return this.offsets.get(getOffsetIndex(pos));
+     }
+ 
++    @Override // Linear - satisfies AbstractRegionFile.hasChunk (existing method, annotation only)
+     public boolean hasChunk(final ChunkPos pos) {
+         return this.getOffset(pos) != 0;
+     }
+ 
++    // Linear start - AbstractRegionFile dirty-flag contract. Anvil writes are
++    // synchronous (sectors + header hit the FileChannel inside write()), so there is
++    // never deferred state to flush; Linear is the only implementation
++    // for which these return/track anything.
++    @Override
++    public boolean isMarkedToSave() {
++        return false;
++    }
++
++    @Override
++    public void clearMarkedToSave() {
++    }
++    // Linear end
++
+     private static int getOffsetIndex(final ChunkPos pos) {
+         return pos.getRegionLocalX() + pos.getRegionLocalZ() * 32;
+     }
+@@ -908,7 +925,7 @@ public class RegionFile implements AutoCloseable, ca.spottedleaf.moonrise.patche
+         }
+
+         @Override
+-        public final void moonrise$write(final RegionFile regionFile) throws IOException {
++        public final void moonrise$write(final net.linear.AbstractRegionFile regionFile) throws IOException { // Linear - widened to the shared region-file type
+             regionFile.write(this.pos, ByteBuffer.wrap(this.buf, 0, this.count));
+         }
+         // Paper end - rewrite chunk system
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+index eae4963b6d18c5f92871477b93f81c2c79331cd9..63abf1eadd70a7db3a9c4508218059496e2d4fbf 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+@@ -1,9 +1,11 @@
+ package net.minecraft.world.level.chunk.storage;
+ 
+ import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
++import java.io.ByteArrayOutputStream;
+ import java.io.DataInputStream;
+ import java.io.DataOutputStream;
+ import java.io.IOException;
++import java.nio.ByteBuffer;
+ import java.nio.file.Path;
+ import net.minecraft.SharedConstants;
+ import net.minecraft.nbt.CompoundTag;
+@@ -12,17 +14,33 @@ import net.minecraft.nbt.NbtIo;
+ import net.minecraft.nbt.StreamTagVisitor;
+ import net.minecraft.util.ExceptionCollector;
+ import net.minecraft.util.FileUtil;
++import net.minecraft.util.profiling.jfr.JvmProfiler;
+ import net.minecraft.world.level.ChunkPos;
++import net.linear.AbstractRegionFile;
++import net.linear.AbstractRegionFileFactory;
++import net.linear.LinearFlushCoordinator;
++import net.linear.RegionFileFormat;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise.patches.chunk_system.io.ChunkSystemRegionFileStorage { // Paper - rewrite chunk system
+     private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger(); // Paper
+     public static final String ANVIL_EXTENSION = ".mca";
++    public static final String LINEAR_EXTENSION = ".linear"; // Linear
+     private static final int MAX_CACHE_SIZE = 256;
+-    public final Long2ObjectLinkedOpenHashMap<RegionFile> regionCache = new Long2ObjectLinkedOpenHashMap<>();
++    // Linear - cache widened from RegionFile to AbstractRegionFile so one cache
++    // holds both anvil and Linear files (Moonrise seam
++    // types in ChunkSystemRegionFileStorage/MoonriseRegionFileIO are widened to match).
++    public final Long2ObjectLinkedOpenHashMap<AbstractRegionFile> regionCache = new Long2ObjectLinkedOpenHashMap<>();
+     private final RegionStorageInfo info;
+     private final Path folder;
+     private final boolean sync;
++    // Linear - per-storage output format. Defaults to ANVIL
++    // so every pre-existing construction site keeps vanilla behavior until configured.
++    // Linear - added linearCrashOnBrokenSymlink (world key
++    // region-format.linear.crash-on-broken-symlink, default true) for the guard.
++    public final RegionFileFormat format;
++    public final int compressionLevel;
++    public final boolean linearCrashOnBrokenSymlink;
+ 
+     // Paper start - recalculate region file headers
+     private final boolean isChunkData;
+@@ -30,7 +48,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     @Nullable
+     public static ChunkPos getRegionFileCoordinates(Path file) {
+         String fileName = file.getFileName().toString();
+-        if (!fileName.startsWith("r.") || !fileName.endsWith(".mca")) {
++        if (!fileName.startsWith("r.") || (!fileName.endsWith(ANVIL_EXTENSION) && !fileName.endsWith(LINEAR_EXTENSION))) { // Linear - accept .linear
+             return null;
+         }
+ 
+@@ -54,8 +72,8 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     private static final int REGION_SHIFT = 5;
+     private static final int MAX_NON_EXISTING_CACHE = 1024 * 4;
+     private final it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet nonExistingRegionFiles = new it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet();
+-    private static String getRegionFileName(final int chunkX, final int chunkZ) {
+-        return "r." + (chunkX >> REGION_SHIFT) + "." + (chunkZ >> REGION_SHIFT) + ".mca";
++    private static String getRegionFileName(final int chunkX, final int chunkZ, final RegionFileFormat format) { // Linear - per-format extension (was hardcoded .mca)
++        return "r." + (chunkX >> REGION_SHIFT) + "." + (chunkZ >> REGION_SHIFT) + AbstractRegionFileFactory.extensionFor(format);
+     }
+ 
+     private boolean doesRegionFilePossiblyExist(final long position) {
+@@ -83,6 +101,29 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             }
+         }
+     }
++    // Linear broken-symlink guard (correct-by-construction).
++    // Requires the Linear dispatch fields:
++    //   public final RegionFileFormat format;
++    //   public final boolean linearCrashOnBrokenSymlink;
++    // and import of RegionFileFormat (constants ANVIL, LINEAR).
++    // The guard below uses enum identity comparison; a String
++    // comparison would always be true and would disable the guard,
++    // so the one-line fix marked below is the only change needed.
++    private void guardAgainstBrokenSymlinks(Path path) throws java.io.IOException {
++        if (!this.linearCrashOnBrokenSymlink) return;
++        // Linear guard fix: enum identity comparison (a String comparison
++        //   if (!this.format.equals("LINEAR")) return;
++        // would always be true (an enum never equals a String) and disable
++        // the guard. Correct form:
++        if (this.format != RegionFileFormat.LINEAR) return;
++        if (!java.nio.file.Files.isSymbolicLink(path)) return;
++        Path link = java.nio.file.Files.readSymbolicLink(path);
++        if (!java.nio.file.Files.exists(link) || !java.nio.file.Files.isReadable(link)) {
++            LOGGER.error("Linear region file {} is a broken symbolic link, crashing to prevent data loss", path);
++            net.minecraft.server.MinecraftServer.getServer().halt(false);
++            throw new java.io.IOException("Linear region file " + path + " is a broken symbolic link, crashing to prevent data loss");
++        }
++    }
+ 
+     @Override
+     public final boolean moonrise$doesRegionFileNotExistNoIO(final int chunkX, final int chunkZ) {
+@@ -90,15 +131,15 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     }
+ 
+     @Override
+-    public synchronized final RegionFile moonrise$getRegionFileIfLoaded(final int chunkX, final int chunkZ) {
++    public synchronized final AbstractRegionFile moonrise$getRegionFileIfLoaded(final int chunkX, final int chunkZ) { // Linear - widened with cache
+         return this.regionCache.getAndMoveToFirst(ChunkPos.pack(chunkX >> REGION_SHIFT, chunkZ >> REGION_SHIFT));
+     }
+ 
+     @Override
+-    public synchronized final RegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException {
++    public synchronized final AbstractRegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException { // Linear - widened + dual-read probe
+         final long key = ChunkPos.pack(chunkX >> REGION_SHIFT, chunkZ >> REGION_SHIFT);
+ 
+-        RegionFile ret = this.regionCache.getAndMoveToFirst(key);
++        AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key);
+         if (ret != null) {
+             return ret;
+         }
+@@ -113,9 +154,16 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             this.regionCache.removeLast().close();
+         }
+ 
+-        final Path regionPath = this.folder.resolve(getRegionFileName(chunkX, chunkZ));
+-
+-        if (!java.nio.file.Files.exists(regionPath)) {
++        // Linear - dual-read probe: .mca preferred, else .linear. The negative cache
++        // stays keyed by region long and now means "neither extension exists".
++        final Path anvilPath = this.folder.resolve(getRegionFileName(chunkX, chunkZ, RegionFileFormat.ANVIL));
++        final Path linearPath = this.folder.resolve(getRegionFileName(chunkX, chunkZ, RegionFileFormat.LINEAR));
++        final Path regionPath;
++        if (java.nio.file.Files.exists(anvilPath)) {
++            regionPath = anvilPath;
++        } else if (java.nio.file.Files.exists(linearPath)) {
++            regionPath = linearPath;
++        } else {
+             this.markNonExisting(key);
+             return null;
+         }
+@@ -124,7 +172,8 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+         FileUtil.createDirectoriesSafe(this.folder);
+ 
+-        ret = new RegionFile(this.info, regionPath, this.folder, this.sync);
++        this.guardAgainstBrokenSymlinks(regionPath); // Linear - existingOnly probe call site
++        ret = AbstractRegionFileFactory.get(regionPath, this.info, this.folder, this.sync, this.compressionLevel); // Linear - open in probed format
+ 
+         this.regionCache.putAndMoveToFirst(key, ret);
+ 
+@@ -143,11 +192,45 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         }
+ 
+         final ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+-        final RegionFile regionFile = this.getRegionFile(pos);
+-
++        final AbstractRegionFile regionFile = this.getRegionFile(pos);
++
++        // Linear start - dispatch on capability, not concrete type: anvil (and any
++        // future ChunkSystemRegionFile) keeps the zero-copy streaming path; Linear goes
++        // through the shared contract only (buffered NBT bytes, write deferred to finishWrite).
++        if (!(regionFile instanceof ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemRegionFile chunkSystemFile)) {
++            // note: not required to keep regionfile loaded after this call, as the write param takes a regionfile as input
++            // (and, the regionfile parameter is unused for writing until the write call)
++            final ByteArrayOutputStream linearBuffer = new ByteArrayOutputStream(8096);
++            final DataOutputStream linearOut = new DataOutputStream(linearBuffer);
++            NbtIo.write(compound, linearOut);
++            linearOut.close();
++            final byte[] linearBytes = linearBuffer.toByteArray();
++            // Linear - linear oversize pre-check. Ownership split:
++            // LinearRegionFile.write() enforces the cap invariant (throws); this
++            // site decides behavior (DELETE + log, anvil parity). Early return
++            // matters: throwing later in finishWrite sets failedWrite and retries
++            // forever via scheduleWriteCompress (MoonriseRegionFileIO.runWriteIO).
++            if (linearBytes.length > net.linear.LinearRegionFile.MAX_CHUNK_SIZE) {
++                final int maxSize = net.linear.LinearRegionFile.MAX_CHUNK_SIZE / (1024 * 1024);
++                LOGGER.error("Chunk at (" + chunkX + "," + chunkZ + ") in regionfile '" + this.folder.resolve(getRegionFileName(chunkX, chunkZ, this.format)) + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
++                return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData(
++                    compound, ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData.WriteResult.DELETE,
++                    null, null
++                );
++            }
++            JvmProfiler.INSTANCE.onRegionFileWrite(this.info, pos, RegionFileVersion.DEFAULT, linearBytes.length); // Linear - linear has no RegionFileVersion; report DEFAULT for JFR continuity
++            return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData(
++                compound, ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData.WriteResult.WRITE,
++                linearOut, (final AbstractRegionFile file) -> {
++                    file.write(pos, ByteBuffer.wrap(linearBytes));
++                    LinearFlushCoordinator.forFolder(this.folder).markDirty(file);
++                }
++            );
++        }
++        // Linear end
+         // note: not required to keep regionfile loaded after this call, as the write param takes a regionfile as input
+         // (and, the regionfile parameter is unused for writing until the write call)
+-        final ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData writeData = ((ca.spottedleaf.moonrise.patches.chunk_system.storage.ChunkSystemRegionFile)regionFile).moonrise$startWrite(compound, pos);
++        final ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData writeData = chunkSystemFile.moonrise$startWrite(compound, pos);
+ 
+         try { // Paper - implement RegionFileSizeException
+         try {
+@@ -160,7 +243,8 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             // note: it's OK if close() is called, as close() here will not issue a write to the RegionFile
+             // see startWrite
+             final int maxSize = RegionFile.MAX_CHUNK_SIZE / (1024 * 1024);
+-            LOGGER.error("Chunk at (" + chunkX + "," + chunkZ + ") in regionfile '" + regionFile.getPath().toString() + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
++            final String regionName = regionFile instanceof RegionFile anvilFile ? anvilFile.getPath().toString() : regionFile.toString(); // Linear - getPath is anvil-only
++            LOGGER.error("Chunk at (" + chunkX + "," + chunkZ + ") in regionfile '" + regionName + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
+             return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData(
+                 compound, ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData.WriteResult.DELETE,
+                 null, null
+@@ -177,8 +261,10 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     ) throws IOException {
+         final ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+         if (writeData.result() == ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData.WriteResult.DELETE) {
+-            final RegionFile regionFile = this.moonrise$getRegionFileIfExists(chunkX, chunkZ);
++            final AbstractRegionFile regionFile = this.moonrise$getRegionFileIfExists(chunkX, chunkZ);
+             if (regionFile != null) {
++                // Linear - interface default clear: anvil deletes sectors, Linear clears
++                // the slot (Linear override) or falls back to write-empty (absent on re-read).
+                 regionFile.clear(pos);
+             } // else: didn't exist
+ 
+@@ -192,18 +278,18 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     public final ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData moonrise$readData(
+         final int chunkX, final int chunkZ
+     ) throws IOException {
+-        final RegionFile regionFile = this.moonrise$getRegionFileIfExists(chunkX, chunkZ);
++        final AbstractRegionFile regionFile = this.moonrise$getRegionFileIfExists(chunkX, chunkZ);
+ 
+         final DataInputStream input = regionFile == null ? null : regionFile.getChunkDataInputStream(new ChunkPos(chunkX, chunkZ));
+ 
+         if (input == null) {
+             return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData(
+-                ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData.ReadResult.NO_DATA, null, null, regionFile == null ? 0 : regionFile.getRecalculateCount() // Paper - Attempt to recalculate regionfile header if it is corrupt
++                ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData.ReadResult.NO_DATA, null, null, regionFile instanceof RegionFile anvilFile ? anvilFile.getRecalculateCount() : 0 // Paper - Attempt to recalculate regionfile header if it is corrupt // Linear - linear has no recalc counter
+             );
+         }
+ 
+         final ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData ret = new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData(
+-            ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData.ReadResult.HAS_DATA, input, null, regionFile.getRecalculateCount() // Paper - Attempt to recalculate regionfile header if it is corrupt
++            ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData.ReadResult.HAS_DATA, input, null, regionFile instanceof RegionFile anvilFile ? anvilFile.getRecalculateCount() : 0 // Paper - Attempt to recalculate regionfile header if it is corrupt // Linear - linear has no recalc counter
+         );
+ 
+         if (!(input instanceof ca.spottedleaf.moonrise.patches.chunk_system.util.stream.ExternalChunkStreamMarker)) {
+@@ -219,7 +305,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         }
+ 
+         return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData(
+-            ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData.ReadResult.SYNC_READ, null, syncRead, regionFile.getRecalculateCount() // Paper - Attempt to recalculate regionfile header if it is corrupt
++            ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData.ReadResult.SYNC_READ, null, syncRead, regionFile instanceof RegionFile anvilFile ? anvilFile.getRecalculateCount() : 0 // Paper - Attempt to recalculate regionfile header if it is corrupt // Linear - linear has no recalc counter
+         );
+     }
+ 
+@@ -237,15 +323,20 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+             final ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+             final ChunkPos headerChunkPos = SerializableChunkData.getChunkCoordinate(ret);
+-            final RegionFile regionFile = this.getRegionFile(pos);
++            final AbstractRegionFile regionFile = this.getRegionFile(pos);
++            // Linear start - header recalculation is an anvil-only recovery path;
++            // Linear payloads carry no sector header to rebuild.
++            if (!(regionFile instanceof RegionFile anvilFile)) {
++                return ret;
++            }
+ 
+-            if (regionFile.getRecalculateCount() != readData.recalculateCount()) {
++            if (anvilFile.getRecalculateCount() != readData.recalculateCount()) {
+                 return null;
+             }
+ 
+             if (!headerChunkPos.equals(pos)) {
+-                LOGGER.error("Attempting to read chunk data at " + pos + " but got chunk data for " + headerChunkPos + " instead! Attempting regionfile recalculation " + regionFile.getPath().toAbsolutePath());
+-                if (regionFile.recalculateHeader()) {
++                LOGGER.error("Attempting to read chunk data at " + pos + " but got chunk data for " + headerChunkPos + " instead! Attempting regionfile recalculation " + anvilFile.getPath().toAbsolutePath());
++                if (anvilFile.recalculateHeader()) {
+                     return null;
+                 }
+ 
+@@ -255,25 +346,40 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+             return ret;
+             // Paper end - Attempt to recalculate regionfile header if it is corrupt
++            // Linear end
+         } finally {
+             readData.input().close();
+         }
+     }
+     // Paper end - rewrite chunk system
+     // Paper start - rewrite chunk system
+-    public RegionFile getRegionFile(ChunkPos chunkcoordintpair) throws IOException {
++    public AbstractRegionFile getRegionFile(ChunkPos chunkcoordintpair) throws IOException { // Linear - widened with cache
+         return this.getRegionFile(chunkcoordintpair, false);
+     }
+     // Paper end - rewrite chunk system
+ 
+     protected RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync) { // Paper - protected
++        this(info, folder, sync, RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
++    }
++
++    // Linear - format-aware entry point. RegionStorageInfo is deliberately
++    // left unchanged (Paper's dfuType hack + record shape); format rides alongside it.
++    // Linear - 6-arg overload adds the crash flag; 5-arg delegates with default true.
++    protected RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync, final RegionFileFormat format, final int compressionLevel) {
++        this(info, folder, sync, format, compressionLevel, true);
++    }
++
++    protected RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync, final RegionFileFormat format, final int compressionLevel, final boolean linearCrashOnBrokenSymlink) {
++        this.format = format;
++        this.compressionLevel = compressionLevel;
++        this.linearCrashOnBrokenSymlink = linearCrashOnBrokenSymlink;
+         this.folder = folder;
+         this.sync = sync;
+         this.info = info;
+         this.isChunkData = info.dfuType()[0] == net.minecraft.util.datafix.DataFixTypes.CHUNK; // Paper - recalculate region file headers
+     }
+ 
+-    @org.jetbrains.annotations.Contract("_, false -> !null") private @Nullable RegionFile getRegionFile(final ChunkPos pos, boolean existingOnly) throws IOException { // CraftBukkit
++    @org.jetbrains.annotations.Contract("_, false -> !null") private @Nullable AbstractRegionFile getRegionFile(final ChunkPos pos, boolean existingOnly) throws IOException { // CraftBukkit // Linear - widened
+         // Paper start - rewrite chunk system
+         if (existingOnly) {
+             return this.moonrise$getRegionFileIfExists(pos.x(), pos.z());
+@@ -281,7 +387,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         synchronized (this) {
+             final long key = ChunkPos.pack(pos.x() >> REGION_SHIFT, pos.z() >> REGION_SHIFT);
+ 
+-            RegionFile ret = this.regionCache.getAndMoveToFirst(key);
++            AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key);
+             if (ret != null) {
+                 return ret;
+             }
+@@ -292,13 +398,15 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+                 this.regionCache.removeLast().close();
+             }
+ 
+-            final Path regionPath = this.folder.resolve(getRegionFileName(pos.x(), pos.z()));
++            // Linear - create in the storage's configured format (default ANVIL).
++            final Path regionPath = this.folder.resolve(getRegionFileName(pos.x(), pos.z(), this.format));
+ 
+             this.createRegionFile(key);
+ 
+             FileUtil.createDirectoriesSafe(this.folder);
+ 
+-            ret = new RegionFile(this.info, regionPath, this.folder, this.sync);
++            this.guardAgainstBrokenSymlinks(regionPath); // Linear - write-path creation call site
++            ret = AbstractRegionFileFactory.get(regionPath, this.info, this.folder, this.sync, this.compressionLevel); // Linear - factory dispatch
+ 
+             this.regionCache.putAndMoveToFirst(key, ret);
+ 
+@@ -346,20 +454,39 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+     public @Nullable CompoundTag read(final ChunkPos pos) throws IOException {
+         // CraftBukkit start - SPIGOT-5680: There's no good reason to preemptively create files on read, save that for writing
+-        RegionFile region = this.getRegionFile(pos, true);
++        AbstractRegionFile region = this.getRegionFile(pos, true);
+         if (region == null) {
+             return null;
+         }
+         // CraftBukkit end
++        // Linear start - Linear has no oversized sidecars and no recalculable header,
++        // so it takes a direct NBT path; the anvil body below is unchanged.
++        if (!(region instanceof RegionFile anvil)) {
++            try (DataInputStream regionChunkInputStream = region.getChunkDataInputStream(pos)) {
++                if (regionChunkInputStream == null) {
++                    return null;
++                }
++                CompoundTag tag = NbtIo.read(regionChunkInputStream);
++                if (this.isChunkData) {
++                    ChunkPos headerChunkPos = SerializableChunkData.getChunkCoordinate(tag);
++                    if (!headerChunkPos.equals(pos)) {
++                        net.minecraft.server.MinecraftServer.LOGGER.error("Attempting to read chunk data at " + pos + " but got chunk data for " + headerChunkPos + " instead! Linear region files cannot be recalculated, regenerating chunk " + pos);
++                        return null;
++                    }
++                }
++                return tag;
++            }
++        }
++        // Linear end
+         // Paper start
+-        if (region.isOversized(pos.x(), pos.z())) {
+-            printOversizedLog("Loading Oversized Chunk!", region.getPath(), pos.x(), pos.z());
+-            return readOversizedChunk(region, pos);
++        if (anvil.isOversized(pos.x(), pos.z())) {
++            printOversizedLog("Loading Oversized Chunk!", anvil.getPath(), pos.x(), pos.z());
++            return readOversizedChunk(anvil, pos);
+         }
+         // Paper end
+ 
+         CompoundTag var4;
+-        try (DataInputStream regionChunkInputStream = region.getChunkDataInputStream(pos)) {
++        try (DataInputStream regionChunkInputStream = anvil.getChunkDataInputStream(pos)) {
+             if (regionChunkInputStream == null) {
+                 return null;
+             }
+@@ -369,11 +496,11 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             if (this.isChunkData) {
+                 ChunkPos headerChunkPos = SerializableChunkData.getChunkCoordinate(var4);
+                 if (!headerChunkPos.equals(pos)) {
+-                    net.minecraft.server.MinecraftServer.LOGGER.error("Attempting to read chunk data at " + pos + " but got chunk data for " + headerChunkPos + " instead! Attempting regionfile recalculation for regionfile " + region.getPath().toAbsolutePath());
+-                    if (region.recalculateHeader()) {
++                    net.minecraft.server.MinecraftServer.LOGGER.error("Attempting to read chunk data at " + pos + " but got chunk data for " + headerChunkPos + " instead! Attempting regionfile recalculation for regionfile " + anvil.getPath().toAbsolutePath());
++                    if (anvil.recalculateHeader()) {
+                         return this.read(pos);
+                     }
+-                    net.minecraft.server.MinecraftServer.LOGGER.error("Can't recalculate regionfile header, regenerating chunk " + pos + " for " + region.getPath().toAbsolutePath());
++                    net.minecraft.server.MinecraftServer.LOGGER.error("Can't recalculate regionfile header, regenerating chunk " + pos + " for " + anvil.getPath().toAbsolutePath());
+                     return null;
+                 }
+             }
+@@ -385,7 +512,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+     public void scanChunk(final ChunkPos pos, final StreamTagVisitor scanner) throws IOException {
+         // CraftBukkit start - SPIGOT-5680: There's no good reason to preemptively create files on read, save that for writing
+-        RegionFile region = this.getRegionFile(pos, true);
++        AbstractRegionFile region = this.getRegionFile(pos, true); // Linear - widened (scan path is format-agnostic)
+         if (region == null) {
+             return;
+         }
+@@ -400,7 +527,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+     public void write(final ChunkPos pos, final @Nullable CompoundTag value) throws IOException { // Paper - rewrite chunk system - public
+         if (!SharedConstants.DEBUG_DONT_SAVE_WORLD) {
+-            RegionFile region = this.getRegionFile(pos, value == null); // CraftBukkit // Paper - rewrite chunk system
++            AbstractRegionFile region = this.getRegionFile(pos, value == null); // CraftBukkit // Paper - rewrite chunk system // Linear - widened
+             // Paper start - rewrite chunk system
+             if (region == null) {
+                 // if the RegionFile doesn't exist, no point in deleting from it
+@@ -408,21 +535,43 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             }
+             // Paper end - rewrite chunk system
+             if (value == null) {
+-                region.clear(pos);
+-            } else {
++                region.clear(pos); // Linear - interface default: anvil deletes sectors, linear clears the slot
++            } else if (region instanceof RegionFile anvil) {
+                 // Paper - Only write if successful
+-                DataOutputStream output = region.getChunkDataOutputStream(pos);
++                DataOutputStream output = anvil.getChunkDataOutputStream(pos);
+                 try { // Paper - Only write if successful
+                     NbtIo.write(value, output);
+-                    region.setOversized(pos.x(), pos.z(), false); // Paper - We don't do this anymore, mojang stores differently, but clear old meta flag if it exists to get rid of our own meta file once last oversized is gone
++                    anvil.setOversized(pos.x(), pos.z(), false); // Paper - We don't do this anymore, mojang stores differently, but clear old meta flag if it exists to get rid of our own meta file once last oversized is gone
+                     // Paper start - don't write garbage data to disk if writing serialization fails
+                     output.close();
+                 } catch (final RegionFileSizeException ex) {
+-                    region.clear(pos);
++                    anvil.clear(pos);
+                     final int maxSize = RegionFile.MAX_CHUNK_SIZE / (1024 * 1024);
+-                    LOGGER.error("Chunk at (" + pos.x() + "," + pos.z() + ") in regionfile '" + region.getPath().toString() + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
++                    LOGGER.error("Chunk at (" + pos.x() + "," + pos.z() + ") in regionfile '" + anvil.getPath().toString() + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
+                     // Paper end - don't write garbage data to disk if writing serialization fails
+                 }
++            } else {
++                // Linear - Linear path (contract only): raw NBT bytes buffered in
++                // memory; durability via the per-world LinearFlushCoordinator.
++                ByteArrayOutputStream linearBuffer = new ByteArrayOutputStream(8096);
++                try (DataOutputStream output = new DataOutputStream(linearBuffer)) {
++                    NbtIo.write(value, output);
++                }
++                byte[] linearBytes = linearBuffer.toByteArray();
++                // Linear - same pre-check as the Moonrise path above;
++                // vanilla parity is delete + log (cf. the anvil
++                // catch(RegionFileSizeException) arm). The slot clear persists on
++                // the next flushDirty()/eviction (deferred linear durability).
++                if (linearBytes.length > net.linear.LinearRegionFile.MAX_CHUNK_SIZE) {
++                    region.clear(pos);
++                    final int maxSize = net.linear.LinearRegionFile.MAX_CHUNK_SIZE / (1024 * 1024);
++                    LOGGER.error("Chunk at (" + pos.x() + "," + pos.z() + ") in regionfile '" + this.folder.resolve(getRegionFileName(pos.x(), pos.z(), this.format)) + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
++                    LinearFlushCoordinator.forFolder(this.folder).markDirty(region);
++                } else {
++                    JvmProfiler.INSTANCE.onRegionFileWrite(this.info, pos, RegionFileVersion.DEFAULT, linearBytes.length);
++                    region.write(pos, ByteBuffer.wrap(linearBytes));
++                    LinearFlushCoordinator.forFolder(this.folder).markDirty(region);
++                }
+             }
+         }
+     }
+@@ -431,8 +580,9 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     public void close() throws IOException {
+         // Paper start - rewrite chunk system
+         synchronized (this) {
++            try {
+             final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
+-            for (final RegionFile regionFile : this.regionCache.values()) {
++            for (final AbstractRegionFile regionFile : this.regionCache.values()) {
+                 try {
+                     regionFile.close();
+                 } catch (final IOException ex) {
+@@ -440,6 +590,9 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+                 }
+             }
+             exceptionCollector.throwIfPresent();
++            } finally {
++                LinearFlushCoordinator.evict(this.folder); // Linear - per-world eviction; flushes stragglers then drops the registry entry
++            }
+         }
+         // Paper end - rewrite chunk system
+     }
+@@ -447,8 +600,9 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     public void flush() throws IOException {
+         // Paper start - rewrite chunk system
+         synchronized (this) {
++            LinearFlushCoordinator.forFolder(this.folder).flushDirty(); // Linear - persist deferred Linear writes first (driven by Moonrise save path, no extra threads)
+             final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
+-            for (final RegionFile regionFile : this.regionCache.values()) {
++            for (final AbstractRegionFile regionFile : this.regionCache.values()) {
+                 try {
+                     regionFile.flush();
+                 } catch (final IOException ex) {
+diff --git a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
+index 6d954064f409ddd2cb7cfd0d0c428ac186f5ca4d..22de1ddb80b52d994a0a7ed0145975fe02f17650 100644
+--- a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
++++ b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
+@@ -33,11 +33,29 @@ public class SimpleRegionStorage implements ca.spottedleaf.moonrise.patches.chun
+ 
+     public SimpleRegionStorage(
+         final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType
++    ) {
++        this(info, folder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
++    }
++
++    // Linear - format-aware entry point. ChunkMap/PoiManager thread the world
++    // format + linear compression through here into IOWorker/RegionFileStorage.
++    // RegionStorageInfo itself is unchanged (Paper dfuType hack + record shape).
++    // Linear - 7-arg overload adds the crash flag; 6-arg delegates with default true.
++    public SimpleRegionStorage(
++        final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType,
++        final net.linear.RegionFileFormat format, final int linearCompression
++    ) {
++        this(info, folder, fixerUpper, syncWrites, dataFixType, format, linearCompression, true);
++    }
++
++    public SimpleRegionStorage(
++        final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType,
++        final net.linear.RegionFileFormat format, final int linearCompression, final boolean linearCrashOnBrokenSymlink
+     ) {
+         info.dfuType()[0] = dataFixType; // Paper - crazy hack to indicate what type the region file is
+         this.fixerUpper = fixerUpper;
+         this.dataFixType = dataFixType;
+-        this.storage = new IOWorker(info, folder, syncWrites).storage; // Paper - rewrite chunk system
++        this.storage = new IOWorker(info, folder, syncWrites, format, linearCompression, linearCrashOnBrokenSymlink).storage; // Paper - rewrite chunk system // Linear - format
+     }
+ 
+     public boolean isOldChunkAround(final ChunkPos pos, final int range) {

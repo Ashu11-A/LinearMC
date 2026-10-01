@@ -1,0 +1,13 @@
+# linearmc.at — access wideners.
+#
+# Runtime entry (listed in horizon.plugin.json "wideners") + binary merge
+# ATs cover our @Shadow needs. Deliberately NOT wired as build source ATs
+# (proven unnecessary; JST source transform was CI-flaky).
+#
+# Only what the mixins @Shadow from private scope:
+# RegionFileStorage.folder (private final) + REGION_SHIFT (private static
+# final). Everything else uses public/protected members; no method widening
+# is needed because the plugin subclasses rather than re-signatures.
+# Syntax: <visibility>[+f|-f] <FQCN> <field/method descriptor>
+public net.minecraft.world.level.chunk.storage.RegionFileStorage folder
+public-f net.minecraft.world.level.chunk.storage.RegionFileStorage REGION_SHIFT

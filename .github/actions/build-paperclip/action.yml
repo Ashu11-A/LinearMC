@@ -1,0 +1,32 @@
+name: build-paperclip
+description: >
+  Compile one fork leg and produce its paperclip jar via the proven set:
+  compileJava + compileTestJava + the Linear NMS suite + createPaperclipJar.
+  The full upstream `./gradlew build` is deliberately NOT run here (upstream
+  suites are not Linear's gate; unit gates live in test.yml) — this keeps the
+  release path at ~3.5min instead of ~5min+. Owned by the build workflow (G2).
+
+inputs:
+  module:
+    description: Gradle module to build (folia-server / canvas-server). Comes from the layout step.
+    required: true
+  fork-dir:
+    description: Directory holding the applied fork checkout.
+    required: false
+    default: fork
+
+runs:
+  using: composite
+  steps:
+    - name: Build paperclip jar (proven set)
+      shell: bash
+      env:
+        MODULE: ${{ inputs.module }}
+        FORK_DIR: ${{ inputs.fork-dir }}
+      run: |
+        cd "$FORK_DIR"
+        ./gradlew "${MODULE}:compileJava" "${MODULE}:compileTestJava" --stacktrace
+        # Same Linear gate test.yml runs (not the upstream suites).
+        ./gradlew "${MODULE}:test" --tests 'net.linear.LinearNmsTestSuite' --rerun-tasks --stacktrace
+        ./gradlew "${MODULE}:createPaperclipJar" --stacktrace
+        ls -la "${MODULE}/build/libs/" | grep -i paperclip

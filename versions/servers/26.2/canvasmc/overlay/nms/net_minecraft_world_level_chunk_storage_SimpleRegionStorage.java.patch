@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
+
+Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch, minecraft-0014-Linear-default-format.patch).
+Hunks kept in stack-apply order. Reconcile against Canvas base
+patches touching this file before staging (see PORT-PLAN.md).
+---
+diff --git a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
+--- a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
++++ b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
+@@ -33,11 +33,29 @@ public class SimpleRegionStorage implements ca.spottedleaf.moonrise.patches.chun
+ 
+     public SimpleRegionStorage(
+         final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType
++    ) {
++        this(info, folder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
++    }
++
++    // Linear - format-aware entry point. ChunkMap/PoiManager thread the world
++    // format + linear compression through here into IOWorker/RegionFileStorage.
++    // RegionStorageInfo itself is unchanged (Paper dfuType hack + record shape).
++    // Linear - 7-arg overload adds the crash flag; 6-arg delegates with default true.
++    public SimpleRegionStorage(
++        final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType,
++        final net.linear.RegionFileFormat format, final int linearCompression
++    ) {
++        this(info, folder, fixerUpper, syncWrites, dataFixType, format, linearCompression, true);
++    }
++
++    public SimpleRegionStorage(
++        final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType,
++        final net.linear.RegionFileFormat format, final int linearCompression, final boolean linearCrashOnBrokenSymlink
+     ) {
+         info.dfuType()[0] = dataFixType; // Paper - crazy hack to indicate what type the region file is
+         this.fixerUpper = fixerUpper;
+         this.dataFixType = dataFixType;
+-        this.storage = new IOWorker(info, folder, syncWrites).storage; // Paper - rewrite chunk system
++        this.storage = new IOWorker(info, folder, syncWrites, format, linearCompression, linearCrashOnBrokenSymlink).storage; // Paper - rewrite chunk system // Linear - format
+     }
+ 
+     public boolean isOldChunkAround(final ChunkPos pos, final int range) {

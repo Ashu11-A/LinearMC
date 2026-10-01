@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Mon, 29 Sep 2026 00:00:00 -0300
+Subject: [PATCH] LinearMC: io/papermc/paper/threadedregions/RegionShutdownThread.java (Linear-only)
+
+Post-apply overlay (see versions/26.1.x/canvas/OVERLAY.md): applies onto the
+weaver-applied tree, AFTER upstream's own RegionShutdownThread patch, so the
+Canvas region-threading hunks are already present and must NOT be duplicated
+here. Contains only the Linear stop drain (0017, same wording as the Folia
+leg): evictAll + shutdownFlushPool between stopServer() and the Canvas
+savePlayers block.
+---
+diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/papermc/paper/threadedregions/RegionShutdownThread.java
+--- a/io/papermc/paper/threadedregions/RegionShutdownThread.java
++++ b/io/papermc/paper/threadedregions/RegionShutdownThread.java
+@@ -264,7 +264,17 @@ public class RegionShutdownThread extends ca.spottedleaf.moonrise.common.util.Ti
+         }
+
+         MinecraftServer.getServer().stopServer(); // stop part 1: most logic, kicking players, plugins, etc
++        // Linear - stop drain (finding F fix, v4): force-drain every tracked linear
++        // folder NOW, while regions/coordinators are fully populated. The per-region
++        // saveRegionChunks path below observes zero regions post-halt (its loop body
++        // never runs), so it cannot be relied on. Idempotent, never throws.
++        net.linear.LinearFlushCoordinator.evictAll();
++        // Linear - production pool shutdown (async split): the joining stop drain
++        // above already forced every tracked folder, so clean stops lose nothing.
++        // shutdown() (never shutdownNow) lets an in-flight tmp-write complete its
++        // image rewrite; never throws. B-I1 0012 API, reconcile on landing.
++        net.linear.LinearFlushCoordinator.shutdownFlushPool();
+         // Canvas start - region threading
+         // this.playerList.removeAll(this.isRestarting); // Paper
+         // this.getConnection().handleAllDisconnections(); // Paper
+         this.savePlayers();
