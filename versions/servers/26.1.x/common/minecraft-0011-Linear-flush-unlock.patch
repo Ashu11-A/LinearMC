@@ -129,7 +129,7 @@ index 2eeefe3..797b594 100644
          // Paper end - rewrite chunk system
      }
  
-@@ -623,35 +641,68 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -623,39 +641,68 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      @Override
      public void close() throws IOException {
          // Paper start - rewrite chunk system
@@ -185,6 +185,10 @@ index 2eeefe3..797b594 100644
 -                    regionFile.flush();
 -                } catch (final IOException ex) {
 -                    exceptionCollector.add(ex);
+-                }
+-            }
+-
+-            exceptionCollector.throwIfPresent();
 -                }
 +            snapshot = new java.util.ArrayList<>(this.regionCache.values());
 +        }
