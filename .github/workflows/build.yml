@@ -337,10 +337,11 @@ jobs:
         # Exact-match key only (NO restore-keys): a stale tree with different
         # patches would silently skip patch application. Miss => the
         # clone/stage/apply steps below rebuild it and the save step stores it.
+        # The key hashes the staging actions too: stage code shapes the tree.
         uses: actions/cache/restore@v4
         with:
           path: fork
-          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**') }}
+          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**', '.github/actions/**') }}
 
       - name: Validate fork cache hit
         if: matrix.server != 'horizon' && steps.fork-cache.outputs.cache-hit == 'true'
@@ -390,7 +391,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: fork
-          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**') }}
+          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**', '.github/actions/**') }}
 
       - name: Build paperclip jar (proven set)
         if: matrix.server != 'horizon'

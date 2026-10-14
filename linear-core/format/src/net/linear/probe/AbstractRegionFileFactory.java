@@ -4,8 +4,6 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;
 import net.linear.AbstractRegionFile;
-import net.linear.BufferedLinearRegionFile;
-import net.linear.LinearRegionFile;
 import net.linear.RegionFileFormat;
 
 /**
