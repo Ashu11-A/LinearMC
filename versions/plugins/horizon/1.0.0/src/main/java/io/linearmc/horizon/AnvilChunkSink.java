@@ -11,6 +11,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.storage.RegionFile;
 import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
+import net.linear.compression.LinearEnvelopeCodec;
 
 /**
  * NMS anvil write side of reverse ({@code .linear} to {@code .mca})

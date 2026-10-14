@@ -9,7 +9,7 @@ import java.nio.file.Path;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.linear.LinearFlushCoordinator;
-import net.linear.LinearStorageProbe;
+import net.linear.probe.LinearStorageProbe;
 import net.linear.RegionFileFormat;
 import net.linear.config.LinearFileConfig;
 import net.minecraft.world.level.chunk.storage.RegionFile;

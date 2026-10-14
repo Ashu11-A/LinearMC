@@ -2,7 +2,7 @@ package io.linearmc.horizon;
 
 import java.nio.file.Path;
 
-import net.linear.AbstractRegionFileFactory;
+import net.linear.probe.AbstractRegionFileFactory;
 import net.linear.BufferedLinearRegionFile;
 import net.linear.LinearFlushCoordinator;
 import net.linear.LinearRegionConverter;
@@ -42,24 +42,24 @@ public class LinearPlugin extends JavaPlugin {
         // mixin targets on this enable thread, so steady-state region/tick
         // threads never pay class-load, nested-jar read, native-extract, or
         // Mixin/transform costs. Missing classes are skipped, never fatal.
-        final net.linear.LinearWarmup.Result warmed = net.linear.LinearWarmup.touch(
+        final net.linear.probe.LinearWarmup.Result warmed = net.linear.probe.LinearWarmup.touch(
             LinearPlugin.class,
             "net.linear.RegionFileFormat",
             "net.linear.ChunkKey",
             "net.linear.AbstractRegionFile",
-            "net.linear.AbstractRegionFileFactory",
-            "net.linear.LinearStorageProbe",
-            "net.linear.LinearFolderNames",
-            "net.linear.LinearWarmup",
+            "net.linear.probe.AbstractRegionFileFactory",
+            "net.linear.probe.LinearStorageProbe",
+            "net.linear.probe.LinearFolderNames",
+            "net.linear.probe.LinearWarmup",
             "net.linear.LinearRegionFile",
-            "net.linear.ZstdChunkCodec",
-            "net.linear.LinearDirectStreams",
-            "net.linear.LinearEnvelopeCodec",
-            "net.linear.LinearWritePath",
-            "net.linear.BufferedRegionOutput",
+            "net.linear.compression.ZstdChunkCodec",
+            "net.linear.io.LinearDirectStreams",
+            "net.linear.compression.LinearEnvelopeCodec",
+            "net.linear.io.LinearWritePath",
+            "net.linear.buffered.BufferedRegionOutput",
             "net.linear.LinearFlushCoordinator",
             "net.linear.LinearRegionTimings",
-            "net.linear.FlushReports",
+            "net.linear.flush.FlushReports",
             "net.linear.FlushEvent",
             "net.linear.LinearRegionConverter",
             "net.linear.config.LinearPolicy",
@@ -88,18 +88,18 @@ public class LinearPlugin extends JavaPlugin {
             "io.linearmc.horizon.HorizonBufferedRegionFile",
             "io.linearmc.horizon.ChunkPosCoords",
             "net.linear.BufferedLinearRegionFile",
-            "net.linear.LinearBucketReader",
-            "net.linear.LinearBucketWriter",
-            "net.linear.LinearBucketGrid",
+            "net.linear.bucket.LinearBucketReader",
+            "net.linear.bucket.LinearBucketWriter",
+            "net.linear.probe.LinearBucketGrid",
             "net.linear.LinearImplementation",
-            "net.linear.LinearXxHash64",
+            "net.linear.compression.LinearXxHash64",
             "io.linearmc.horizon.AnvilChunkSink",
             "io.linearmc.horizon.LinearCommand",
             "io.linearmc.horizon.LinearStatsCommand",
             "io.linearmc.horizon.LinearFormatPolicy",
             "net.minecraft.world.level.chunk.storage.RegionFileStorage",
             "net.minecraft.world.level.chunk.storage.RegionFile");
-        final boolean natives = net.linear.ZstdChunkCodec.warmup();
+        final boolean natives = net.linear.compression.ZstdChunkCodec.warmup();
         getLogger().info("LinearMC: warmed " + warmed.loaded() + " classes"
             + " (" + warmed.skipped() + " skipped) in " + warmed.millis() + "ms"
             + ", natives " + (natives ? "ready" : "lazy"));
@@ -191,7 +191,7 @@ public class LinearPlugin extends JavaPlugin {
             return thread;
         });
         this.drainService.scheduleWithFixedDelay(
-            () -> net.linear.FlushReports.FolderDrain.onSave(false),
+            () -> net.linear.flush.FlushReports.FolderDrain.onSave(false),
             heartbeatSeconds, heartbeatSeconds, java.util.concurrent.TimeUnit.SECONDS);
         getLogger().info("LinearMC: flush heartbeat every " + heartbeatSeconds + "s (async, age-gated)");
         // The /linear queue is in-memory only: name the restart drop on every
@@ -219,7 +219,7 @@ public class LinearPlugin extends JavaPlugin {
             this.drainService = null;
         }
         try {
-            net.linear.FlushReports.FolderDrain.onServerStop();
+            net.linear.flush.FlushReports.FolderDrain.onServerStop();
         } catch (RuntimeException e) {
             getLogger().warning("LinearMC: stop drain failed: " + String.valueOf(e.getMessage()));
         }

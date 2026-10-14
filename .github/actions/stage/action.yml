@@ -180,9 +180,13 @@ runs:
         # folia-server java tree (canvas uses
         # canvas-server/src/main/java/net/linear/).
         mkdir -p "$FOLIA_DIR/folia-server/src/main/java/net/linear"
-        for m in "$SUPPLEMENT_DIR"/linear-core/*/src/net/linear; do
+        # Absolute paths: the subshell cd below would otherwise redirect a
+        # relative FOLIA_DIR (e.g. "fork") into the module dir.
+        SUP_ABS="$(cd "$SUPPLEMENT_DIR" && pwd)"
+        FORK_ABS="$(cd "$FOLIA_DIR" && pwd)"
+        for m in "$SUP_ABS"/linear-core/*/src/net/linear; do
           (cd "$m" && find . -name '*.java' | while IFS= read -r f; do
-            dest="$FOLIA_DIR/folia-server/src/main/java/net/linear/${f#./}"
+            dest="$FORK_ABS/folia-server/src/main/java/net/linear/${f#./}"
             mkdir -p "$(dirname "$dest")"
             cp "$f" "$dest"
           done)

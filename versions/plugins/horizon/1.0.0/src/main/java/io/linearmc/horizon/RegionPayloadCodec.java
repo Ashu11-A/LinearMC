@@ -2,7 +2,7 @@ package io.linearmc.horizon;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import net.linear.LinearEnvelopeCodec;
+import net.linear.compression.LinearEnvelopeCodec;
 
 /**
  * Backward-compatible alias for {@link LinearEnvelopeCodec}.
