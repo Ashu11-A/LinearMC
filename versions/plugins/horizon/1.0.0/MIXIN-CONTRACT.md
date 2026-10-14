@@ -24,18 +24,18 @@ in `upstream.horizon-<mc>.properties`):
 
 | Selector | Target method | 26.1.2 | 26.2 | 26.3 |
 | --- | --- | --- | --- | --- |
-| `getRegionFileName` overwrite | Region file naming routine | verified | PENDING | verified |
-| Create-path redirect | Region file creation routine | verified | PENDING | verified |
-| Exists-path redirect | Exists/read/write creation site | verified | PENDING | verified |
-| `close` tail inject | Region storage close routine | verified | PENDING | verified |
-| `flush` head inject | Region storage flush routine | verified | PENDING | verified |
-| Folder / shift shadows | Region storage folder, info, sync fields; region coordinate shift | verified | PENDING | verified |
+| `getRegionFileName` overwrite | Region file naming routine | verified | verified | verified |
+| Create-path redirect | Region file creation routine | verified | verified | verified |
+| Exists-path redirect | Exists/read/write creation site | verified | verified | verified |
+| `close` tail inject | Region storage close routine | verified | verified | verified |
+| `flush` head inject | Region storage flush routine | verified | verified | verified |
+| Folder / shift shadows | Region storage folder, info, sync fields; region coordinate shift | verified | verified | verified |
 
 26.1.2 and 26.3 verified by `javap` against the dev bundles plus the
 reflection patcher check (`MixinDescriptorsTest#mixinTargetsExistInThisBundle`,
-run per bundle in the `test.yml` matrix). 26.2 stays PENDING until that
-matrix goes green there; selectors are `defaultRequire`, so a miss fails
-the boot loudly instead of silently.
+run per bundle in the `test.yml` matrix); 26.2 verified by that same matrix
+run. Selectors are `defaultRequire`, so any future miss fails the boot
+loudly instead of silently.
 
 Retired selectors, kept for provenance only:
 
