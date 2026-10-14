@@ -331,7 +331,7 @@ if [ -f "$SUPPLEMENT_DIR/docs/configuration.md" ] && [ -f "$HORIZON_CFG" ]; then
   while IFS= read -r full_key; do
     [ -n "$full_key" ] || continue
     leaf="${full_key##*.}"
-    if grep -qE "^[[:space:]]*$leaf[[:space:]]*:" "$HORIZON_CFG"; then
+    if grep -qE "^[[:space:]]*${leaf}[[:space:]]*:" "$HORIZON_CFG"; then
       ok "leg parity config key: $leaf"
     else
       nope "leg parity config key missing from Horizon template: $full_key (leaf $leaf:)"
