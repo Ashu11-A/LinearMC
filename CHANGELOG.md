@@ -2,18 +2,18 @@
 
 Tags are project versions (`v1.0.0`, `v1.1.0`, `v1.1.1`, `v1.1.2`). Each release attaches one jar
 per matrix leg: fork legs are named `linearmc-<server>-<mcversion>-<project>.jar`
-(e.g. `linearmc-folia-26.1.2-1.0.0.jar`), the Horizon plugin is
-`linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`
-(e.g. `linearmc-horizon-1.0.0-26.3-1.0.0.jar`).
+(e.g. `linearmc-folia-26.1.2-1.0.0.jar`); the Horizon plugin ships one jar
+for every supported MC line, `linearmc-horizon-<pluginver>-<project>.jar`
+(e.g. `linearmc-horizon-1.0.0-1.0.0.jar`), built against the oldest bundle
+with `api-version` set to its major.minor.
 
 ## v1.1.2
 
-### Horizon plugin parity + multi-MC (26.1.2 / 26.2 / 26.3)
+### Horizon plugin parity, one jar for 26.1–26.3
 
 The Horizon plugin lagged the server legs: five `config.yml` keys existed
 in its template but did nothing, and its internal version sat at `1.0.0`
-under `v1.1.x` tags. This release closes the gap and builds one plugin jar
-per MC line.
+under `v1.1.x` tags. This release closes the gap and proves every MC line.
 
 - **Wired settings:** `flush-max-threads`, `flush-frequency` (coordinator
   age gate; the heartbeat already followed the file),
@@ -26,23 +26,23 @@ per MC line.
 - **Version follows the tag:** the Gradle project version, `paper-plugin.yml`
   and `horizon.plugin.json` stamp `LINEARMC_PROJECT_VERSION` at build time
   (tag builds; local builds keep `1.0.0-SNAPSHOT`).
-- **One jar per MC:** new pins `upstream.horizon-26.1.properties`
-  (`26.1.2.build.74-stable`) and `upstream.horizon-26.2.properties`
-  (`26.2.build.133-stable`); the 26.3 pin is untouched. Assets are named
-  `linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`, so this release
-  carries `linearmc-horizon-1.0.0-26.1.2-1.1.2.jar`,
-  `linearmc-horizon-1.0.0-26.2-1.1.2.jar` and
-  `linearmc-horizon-1.0.0-26.3-1.1.2.jar` next to the four fork jars.
-  `api-version` is substituted per MC at build time.
+- **One jar for all MC lines:** the shipped jar builds against the oldest
+  bundle (`26.1.2.build.74-stable`, `api-version: 26.1`) and loads on
+  26.1–26.3 — the six NMS contact points are identical across those
+  bundles (verified by `javap`), and the plugin only uses API present in
+  the oldest one. No per-MC assets.
+- **Per-bundle proof:** `test.yml` runs the full plugin build + unit suite
+  against every pinned bundle (26.1.2, 26.2, 26.3), including a reflection
+  patcher check that every mixin selector target exists in that bundle's
+  NMS. The unit-test plugin harness is version-proofed too (no
+  `JavaPlugin` ctor, whose 26.1/26.2 shape needs a live server).
 - **Move-together rule:** new `CONTRIBUTING.md` section requires every
   surface change (commands, config keys, `linear$` seams) to land on all
   legs in the same change; `scripts/preflight.sh` gate `4b` enforces the
   config-key and seam halves mechanically.
-- **Known limits:** mixin selectors are verified against the pinned Horizon
-  ref on 26.3 only; 26.1/26.2 stay PENDING in `MIXIN-CONTRACT.md` until the
-  first green per-MC build retraces them (selectors are `defaultRequire`,
-  so a miss fails the boot loudly instead of silently). The `v1.1.0`/`v1.1.1`
-  Horizon assets are unchanged history.
+- **Known limits:** the `v1.1.0`/`v1.1.1` Horizon assets are unchanged
+  history; fork-leg jars in this release are behaviorally identical
+  rebuilds (the only core delta is additive config API no fork leg calls).
 
 ## v1.1.1
 

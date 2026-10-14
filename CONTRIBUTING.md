@@ -142,8 +142,8 @@ workflow and `preflight.sh`:
    to the GitHub release: fork legs as
    `linearmc-<server>-<mcversion>-<project>.jar` (so `v1.0.0` with `26.1.x`
    at MC `26.1.2` ships `linearmc-folia-26.1.2-1.0.0.jar`), the Horizon
-   plugin as `linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`
-   (e.g. `linearmc-horizon-1.0.0-26.3-1.0.0.jar`).
+   plugin as `linearmc-horizon-<pluginver>-<project>.jar`
+   (e.g. `linearmc-horizon-1.0.0-1.0.0.jar`, one jar for every MC line).
 Update `CHANGELOG.md` in the same change that introduces the behaviour, not
 at tag time.
 

@@ -20,7 +20,7 @@ Referenced but not included:
 
 | Artifact | Where |
 | --- | --- |
-| Paperclip jar | Built locally, or `linearmc-<server>-<mcversion>-<project>.jar` from the GitHub release for a project `v*` tag (the Horizon plugin is `linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`) |
+| Paperclip jar | Built locally, or `linearmc-<server>-<mcversion>-<project>.jar` from the GitHub release for a project `v*` tag (the Horizon plugin is `linearmc-horizon-<pluginver>-<project>.jar`, one jar for every MC line) |
 | Tree converter | `convert.py`, modes `mca2linear`, `linear2mca`, `verify`. Not part of this repository |
 
 ## 2. Version pins
@@ -132,8 +132,8 @@ legs are named `linearmc-<server>-<mcversion>-<project>.jar` (so a
 `linearmc-folia-26.1.2-1.0.0.jar`; a future `26.2.x` line at MC
 `26.2.1` would add `linearmc-folia-26.2.1-1.0.0.jar` to the same
 release), the Horizon plugin is
-`linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`. Deploy the jar
-matching your server line and MC.
+`linearmc-horizon-<pluginver>-<project>.jar` (loads on every supported MC
+line). Deploy the jar matching your server line.
 
 To release only some folders (a fix that applies to one line), dispatch the
 workflow manually on the tag with the `versions` input:

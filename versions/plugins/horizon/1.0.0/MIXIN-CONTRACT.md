@@ -18,18 +18,24 @@ Current proven trace, bytecode verified on the dev bundle:
 | Access wideners | Build access entries | Replaces access transformer entries |
 | Format mapping | Local format policy | Server has no paper region format type, so mapping lives in plugin policy with an owned factory fork |
 
-Per-MC retrace (HORIZON_REF `31d1a1b7`; pins in `versions/plugins/horizon/upstream.horizon[-<mc>].properties`):
+Per-MC retrace (HORIZON_REF `31d1a1b7`; build pin in
+`versions/plugins/horizon/upstream.horizon.properties`, per-bundle test pins
+in `upstream.horizon-<mc>.properties`):
 
-| Selector | Target method | 26.3 | 26.1 | 26.2 |
+| Selector | Target method | 26.1.2 | 26.2 | 26.3 |
 | --- | --- | --- | --- | --- |
-| `getRegionFileName` overwrite | Region file naming routine | verified | PENDING | PENDING |
-| Create-path redirect | Region file creation routine | verified | PENDING | PENDING |
-| Exists-path redirect | Exists/read/write creation site | verified | PENDING | PENDING |
-| `close` tail inject | Region storage close routine | verified | PENDING | PENDING |
-| `flush` head inject | Region storage flush routine | verified | PENDING | PENDING |
-| Folder / shift shadows | Region storage folder, info, sync fields; region coordinate shift | verified | PENDING | PENDING |
+| `getRegionFileName` overwrite | Region file naming routine | verified | PENDING | verified |
+| Create-path redirect | Region file creation routine | verified | PENDING | verified |
+| Exists-path redirect | Exists/read/write creation site | verified | PENDING | verified |
+| `close` tail inject | Region storage close routine | verified | PENDING | verified |
+| `flush` head inject | Region storage flush routine | verified | PENDING | verified |
+| Folder / shift shadows | Region storage folder, info, sync fields; region coordinate shift | verified | PENDING | verified |
 
-26.3 verified per the trace above (bytecode verified on the 26.3 dev bundle). 26.1/26.2 stay PENDING until the first green per-MC build retraces them; the two-site shape (create + exists paths, audited against 26.1.2-shaped storage) is already handled, not yet proven.
+26.1.2 and 26.3 verified by `javap` against the dev bundles plus the
+reflection patcher check (`MixinDescriptorsTest#mixinTargetsExistInThisBundle`,
+run per bundle in the `test.yml` matrix). 26.2 stays PENDING until that
+matrix goes green there; selectors are `defaultRequire`, so a miss fails
+the boot loudly instead of silently.
 
 Retired selectors, kept for provenance only:
 

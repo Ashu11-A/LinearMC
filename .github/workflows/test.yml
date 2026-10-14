@@ -140,13 +140,45 @@ jobs:
         working-directory: fork
         run: ./gradlew :folia-server:test --tests "net.linear.LinearNmsTestSuite" --stacktrace
 
+  horizon-pins:
+    # Fans out the TEST-ONLY pins (versions/plugins/horizon/
+    # upstream.horizon-<mc>.properties) into a per-bundle matrix. The build
+    # pin (unsuffixed, oldest bundle) is already compiled + tested by the
+    # release pipeline and the single-jar build, so the matrix covers the
+    # remaining lines. Adding another supported MC line = adding another
+    # suffixed pin file; no workflow edit needed.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      count: ${{ steps.set-matrix.outputs.count }}
+    steps:
+      - name: Checkout (pin source)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Read horizon test pins
+        id: set-matrix
+        run: |
+          MATRIX=$(python3 -c "import glob,json; out=[]; [out.append({'mc': kv['MC_VERSION'], 'bundle': kv['HORIZON_DEV_BUNDLE']}) for p in sorted(glob.glob('versions/plugins/horizon/upstream.horizon-*.properties')) for kv in [dict(l.strip().split('=', 1) for l in open(p) if l.strip() and not l.startswith('#') and '=' in l)]]; print(json.dumps({'include': out}, separators=(',', ':')))")
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          COUNT=$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])['include']))" "$MATRIX")
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "horizon test matrix: $MATRIX"
+
   horizon:
-    # Fast gate for the standalone plugin: composite build against
-    # linear-core/ plus the full JUnit suite. Runs on every push so the
-    # plugin can never silently rot while server legs are green.
-    needs: [static]
+    # Per-bundle gate for the standalone plugin: build against each pinned
+    # dev bundle plus the full JUnit suite, including the reflection patcher
+    # check (mixin targets must exist in every bundle). Runs on every push
+    # so the plugin can never silently rot while server legs are green.
+    needs: [static, horizon-pins]
+    if: needs.horizon-pins.outputs.count != '0'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.horizon-pins.outputs.matrix) }}
     defaults:
       run:
         working-directory: supplement/versions/plugins/horizon/1.0.0
@@ -162,7 +194,14 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      - name: Plugin build + tests
+      - name: Pin dev bundle for MC ${{ matrix.mc }}
+        run: |
+          PIN="${{ matrix.bundle }}"
+          test -n "$PIN" || { echo "::error::matrix.bundle is empty (horizon-pins must read HORIZON_DEV_BUNDLE)"; exit 1; }
+          sed -i -E "s|paperweight\.paperDevBundle\(\"[^\"]+\"\)|paperweight.paperDevBundle(\"$PIN\")|" build.gradle.kts
+          grep -F "paperDevBundle(\"$PIN\")" build.gradle.kts
+
+      - name: Plugin build + tests (MC ${{ matrix.mc }})
         run: ./gradlew build test --stacktrace
 
   config-check:
