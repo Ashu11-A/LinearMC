@@ -1,5 +1,7 @@
 package net.linear.config;
 
+import net.linear.LinearBucketGrid;
+import net.linear.LinearImplementation;
 import net.linear.RegionFileFormat;
 
 /**
@@ -11,10 +13,14 @@ import net.linear.RegionFileFormat;
  */
 public final class LinearPolicy {
 
-    /** Sysprop selecting the world format ({@code ANVIL} or {@code LINEAR}). */
+    /** Sysprop selecting the world format ({@code ANVIL}, {@code LINEAR} or {@code B_LINEAR}). */
     public static final String SYSPROP_FORMAT = "linearmc.format";
     /** Sysprop overriding the zstd compression level (1..22). */
     public static final String SYSPROP_LEVEL = "linearmc.compression-level";
+    /** Sysprop selecting the linear write implementation ({@code V1}, {@code V2}, {@code V3}). */
+    public static final String SYSPROP_IMPLEMENTATION = "linearmc.implementation";
+    /** Sysprop selecting the bucket grid size ({@code 1}, {@code 2}, {@code 4}, {@code 8}, {@code 16}, {@code 32}). */
+    public static final String SYSPROP_GRID_SIZE = "linearmc.grid-size";
 
     /** Shipped default: new writes are Linear (see release/region-format.yml). */
     public static final RegionFileFormat DEFAULT_FORMAT = RegionFileFormat.LINEAR;
@@ -44,11 +50,11 @@ public final class LinearPolicy {
     }
 
     /**
-     * File layer: accepts only the exact strings {@code "ANVIL"} and
-     * {@code "LINEAR"} (case-sensitive, after trimming). {@code null} or
-     * anything else yields {@code defaultValue}, mirroring
-     * docs/configuration.md: the comparison is case-sensitive so lowercase
-     * {@code linear} is unknown.
+     * File layer: accepts only the exact strings {@code "ANVIL"},
+     * {@code "LINEAR"} and {@code "B_LINEAR"} (case-sensitive, after
+     * trimming). {@code null} or anything else yields {@code defaultValue},
+     * mirroring docs/configuration.md: the comparison is case-sensitive so
+     * lowercase {@code linear} is unknown.
      */
     public static RegionFileFormat resolveFileFormat(String fileValue, RegionFileFormat defaultValue) {
         if (fileValue != null) {
@@ -58,6 +64,9 @@ public final class LinearPolicy {
             }
             if ("LINEAR".equals(trimmed)) {
                 return RegionFileFormat.LINEAR;
+            }
+            if ("B_LINEAR".equals(trimmed)) {
+                return RegionFileFormat.B_LINEAR;
             }
         }
         return defaultValue;
@@ -211,7 +220,7 @@ public final class LinearPolicy {
 
     /** File fallback: unknown {@code format:} value (byte-exact with docs). */
     public static String unknownFormatMessage() {
-        return "[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL.";
+        return "[region-format] Unknown region format, expected ANVIL, LINEAR or B_LINEAR. Falling back to ANVIL.";
     }
 
     /** File fallback: out-of-range or unparseable compression level. Unifies to 6. */
@@ -236,5 +245,81 @@ public final class LinearPolicy {
     public static String badLdmMessage(Object offending) {
         return "[region-format] linear.long-distance-matching must be >= 0, got " + offending
                 + ". Falling back to 0.";
+    }
+
+    /**
+     * Implementation selector for the bucketed layout ({@code V1}, {@code V2},
+     * {@code V3}). Case-insensitive; {@code null}/unknown yields V1 so writers
+     * stay on the reference format unless configured. Read path accepts all
+     * versions regardless.
+     */
+    public static LinearImplementation resolveImplementation(String value) {
+        LinearImplementation parsed = LinearImplementation.fromString(value);
+        return parsed != null ? parsed : LinearImplementation.V1;
+    }
+
+    /**
+     * Sysprop wins over the file value, which wins over V1: trimmed
+     * case-insensitive parse; blank/unparsable sysprop falls through to the
+     * file value like BOGUS (never straight to the default).
+     */
+    public static LinearImplementation resolveImplementation(String syspropValue, String fileValue) {
+        if (syspropValue != null) {
+            String trimmed = syspropValue.trim();
+            if (!trimmed.isEmpty()) {
+                LinearImplementation parsed = LinearImplementation.fromString(trimmed);
+                if (parsed != null) {
+                    return parsed;
+                }
+            }
+            return resolveImplementation(fileValue);
+        }
+        return resolveImplementation(fileValue);
+    }
+
+    /** Shipped default bucket grid size (DivineMC-compatible). */
+    public static final int DEFAULT_GRID_SIZE = 8;
+
+    /**
+     * Grid-size selector ({@code 1}, {@code 2}, {@code 4}, {@code 8},
+     * {@code 16}, {@code 32}). Sysprop wins over the file value, which wins
+     * over {@link #DEFAULT_GRID_SIZE}; unparsable or off-whitelist values
+     * fall through file-then-default the same way levels do.
+     */
+    public static int resolveGridSize(String syspropValue, Integer fileValue) {
+        if (syspropValue != null) {
+            String trimmed = syspropValue.trim();
+            if (!trimmed.isEmpty()) {
+                try {
+                    int parsed = Integer.parseInt(trimmed);
+                    if (LinearBucketGrid.isValid(parsed)) {
+                        return parsed;
+                    }
+                } catch (NumberFormatException bad) {
+                    // fall through to the file value
+                }
+            }
+            return fileGridOrDefault(fileValue);
+        }
+        return fileGridOrDefault(fileValue);
+    }
+
+    private static int fileGridOrDefault(Integer fileValue) {
+        if (fileValue != null && LinearBucketGrid.isValid(fileValue)) {
+            return fileValue;
+        }
+        return DEFAULT_GRID_SIZE;
+    }
+
+    /** File fallback: unknown linear implementation value (warn + V1). */
+    public static String badImplementationMessage(Object offending) {
+        return "[region-format] linear.implementation must be V1, V2 or V3, got " + offending
+                + ". Falling back to V1.";
+    }
+
+    /** File fallback: off-whitelist grid size (warn + 8). */
+    public static String badGridSizeMessage(Object offending) {
+        return "[region-format] linear.grid-size must be one of 1, 2, 4, 8, 16, 32, got " + offending
+                + ". Falling back to 8.";
     }
 }

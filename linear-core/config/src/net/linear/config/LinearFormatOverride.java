@@ -5,10 +5,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Runtime format override per storage scope (usually world name or folder
- * key). Lets a running server flip a world between LINEAR and ANVIL without
- * a restart — used by reverse (linear to anvil) convert jobs so new writes
- * land in {@code .mca} while unconverted {@code .linear} files keep serving
- * reads through dual-read until each file validates and is deleted.
+ * key). Lets a running server flip a world between the linear family and
+ * ANVIL without a restart — used by reverse (linear to anvil) convert jobs
+ * so new writes land in {@code .mca} while unconverted {@code .linear} /
+ * {@code .b_linear} files keep serving reads through triple-read until each
+ * file validates and is deleted.
  *
  * <p>Precedence at NMS resolution sites (legs consult this between sysprop
  * and file): sysprop wins, then this override, then the file value, then
@@ -23,14 +24,16 @@ public final class LinearFormatOverride {
 
     /**
      * Sets the effective format for {@code scope}, returning the previous
-     * raw value (null when none). Only exact {@code ANVIL}/{@code LINEAR}
-     * (case-insensitive) are stored; anything else clears the scope.
+     * raw value (null when none). Only exact {@code ANVIL}/{@code LINEAR}/
+     * {@code B_LINEAR} (case-insensitive) are stored; anything else clears
+     * the scope.
      */
     public static String set(String scope, String format) {
         if (scope == null) {
             throw new IllegalArgumentException("scope must not be null");
         }
-        if (format == null || (!format.equalsIgnoreCase("ANVIL") && !format.equalsIgnoreCase("LINEAR"))) {
+        if (format == null || (!format.equalsIgnoreCase("ANVIL") && !format.equalsIgnoreCase("LINEAR")
+                && !format.equalsIgnoreCase("B_LINEAR"))) {
             return OVERRIDES.remove(scope);
         }
         return OVERRIDES.put(scope, format.toUpperCase(java.util.Locale.ROOT));

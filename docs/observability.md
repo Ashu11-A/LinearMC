@@ -63,7 +63,7 @@ When a startup property overrides the file config, the server logs which value w
 
 The same family of lines reports bad file values and their fallbacks:
 
-- "[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL."
+- "[region-format] Unknown region format, expected ANVIL, LINEAR or B_LINEAR. Falling back to ANVIL."
 - "[region-format] linear.compression-level must be 1-22, got 99. Falling back to 6."
 
 The absence of any "[region-format]" line at boot is the healthy case: file values were valid and no startup override was set.
@@ -72,7 +72,7 @@ The absence of any "[region-format]" line at boot is the healthy case: file valu
 
 | Log line | Meaning | What to do |
 | --- | --- | --- |
-| "[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL." | The "format:" value was misspelled or had the wrong case; that world runs on Anvil | Fix the spelling and case, then restart |
+| "[region-format] Unknown region format, expected ANVIL, LINEAR or B_LINEAR. Falling back to ANVIL." | The "format:" value was misspelled or had the wrong case; that world runs on Anvil | Fix the spelling and case, then restart |
 | "[region-format] linear.compression-level must be 1-22, got 99. Falling back to 6." | Level out of range; the server runs at level 6 | Set a level from 1 to 22, then restart |
 | "Failed to flush linear region file for folder `<dir>`, will retry on next save" | A flush failed; the file stays dirty and is retried on the next save | Check disk space, inodes, and directory permissions; if it repeats every save, stop and roll back |
 | "Linear region file `<path>` is a broken symbolic link, crashing to prevent data loss" | A Linear path is a dangling symlink; the server halted rather than treat the region as missing | Restore or repoint the symlink, then boot |

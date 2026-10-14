@@ -30,6 +30,12 @@ Record a baseline with `du -sb region poi entities` plus counts of `*.mca` files
 
 Flip at most one world, then restart and watch the log. Soak at least one full save cycle and one more restart. Linear files update on the save rhythm and the restart proves they reopen. Only then move to the next world, leaving the busiest worlds for last.
 
+## Choosing V1, V2, or B_LINEAR
+
+Stay on V1 unless you have a reason to move. It is the default writer, the reference format, and the cheapest to reason about. Pick V2 for busy survival worlds where smaller rewrites matter; it writes the same `.linear` files in buckets, DivineMC-compatible. Pick B_LINEAR for write-heavy worlds where you want the extra crash window of the swap file; expect a longer shutdown drain and never split a `.b_linear` master from its `.swp` sibling. Readers accept every version, so worlds on different versions share one server, and `/linear convert` moves a world later (V2 files rewrite as V1 only if you set the implementation back).
+
+Select per world in the config (`region-format.linear.implementation: V1|V2|V3`, `grid-size` for V2/V3) or for the whole server on the Java line (`-Dlinearmc.implementation=V2 -Dlinearmc.grid-size=8`, `-Dlinearmc.format=B_LINEAR` for the buffered tier). The flag beats the config when valid; a misspelled flag hands back to the config. Restart after changing either, then confirm with `/linearstats` and one save cycle plus restart before moving on.
+
 ## Monitoring
 
 After each save cycle and restart, check that new `r.X.Z.linear` files exist and grow. Use `ls <world>/region/*.linear | wc -l` and `du -sb` before and after a save. Stock software never creates that extension, so growth proves Linear writes are landing.
@@ -42,7 +48,7 @@ Check `/linearstats` with no arguments. It needs the permission `linear.command.
 
 Warning-only config lines mean the world booted but not as intended. Fix the spelling in the YAML:
 
-- `[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL.` The format value is misspelled or wrong case, for example lowercase `linear`. The world is running Anvil.
+- `[region-format] Unknown region format, expected ANVIL, LINEAR or B_LINEAR. Falling back to ANVIL.` The format value is misspelled or wrong case, for example lowercase `linear`. The world is running Anvil.
 - `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 6.` The level is out of range and the server runs at 6.
 - `[region-format] linear.flush-frequency must be >= 1, got <v>. Falling back to 10.` The interval is below 1 and the server runs at 10.
 

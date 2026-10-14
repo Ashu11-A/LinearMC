@@ -1,5 +1,6 @@
 package io.linearmc.horizon.mixins;
 
+import io.linearmc.horizon.HorizonBufferedRegionFile;
 import io.linearmc.horizon.HorizonLinearRegionFile;
 import io.linearmc.horizon.LinearFormatPolicy;
 import java.io.IOException;
@@ -43,7 +44,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class RegionFileStorageMixin {
 
     private static final Pattern REGION_NAME =
-        Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
+        Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear|b_linear)$");
 
     @Shadow
     @Final
@@ -88,8 +89,8 @@ public abstract class RegionFileStorageMixin {
      *   sectors, {@code Negative position}, and header-rewriting data loss.
      *   Never assume one site again — re-audit on new server shapes.</li>
      * </ul>
-     * Extension dispatch, dual-read probe (.mca preferred, .linear
-     * fallback), LINEAR-only symlink guard.
+     * Extension dispatch, triple-read probe (.mca, then .linear, then
+     * .b_linear), linear-family symlink guard.
      */
     private RegionFile linear$openProbed(
         final RegionStorageInfo openInfo,
@@ -104,63 +105,123 @@ public abstract class RegionFileStorageMixin {
             this.folder != null ? this.folder.toString() : null);
         final int level = LinearFileConfig.resolveLevel();
         final String name = regionPath.getFileName().toString();
+        if (name.endsWith(RegionFileFormat.B_LINEAR_EXTENSION)) {
+            if (configured == RegionFileFormat.ANVIL && !Files.exists(regionPath)) {
+                // Reverse override (buffered mirror of the .linear path
+                // below): retarget the missing .b_linear name to its .mca
+                // sibling so new writes land in .mca.
+                final String mcaName = name.substring(0,
+                    name.length() - RegionFileFormat.B_LINEAR_EXTENSION.length())
+                    + RegionFileFormat.ANVIL_EXTENSION;
+                final Path mcaPath = regionPath.resolveSibling(mcaName);
+                this.linear$guardSymlink(mcaPath, configured);
+                return new RegionFile(openInfo, mcaPath, openFolder, openSync);
+            }
+            if (!Files.exists(regionPath)) {
+                // Family switch (LINEAR -> B_LINEAR): an existing .linear
+                // sibling keeps serving instead of starting a fresh
+                // .b_linear beside it.
+                final int[] coords = linear$regionCoords(name);
+                final Path folder = openFolder != null ? openFolder : regionPath.getParent();
+                if (coords != null && folder != null) {
+                    final Path sibling =
+                        LinearStorageProbe.siblingIfProbed(folder, coords[0], coords[1]);
+                    if (sibling != null) {
+                        this.linear$guardSymlink(sibling, configured);
+                        return new HorizonLinearRegionFile(sibling, level);
+                    }
+                }
+            }
+            this.linear$guardSymlink(regionPath, configured);
+            return new HorizonBufferedRegionFile(regionPath, level);
+        }
         if (name.endsWith(RegionFileFormat.LINEAR_EXTENSION)) {
             if (configured == RegionFileFormat.ANVIL && !Files.exists(regionPath)) {
                 // Reverse override: the name was computed from the stale file
                 // value, but the effective format is ANVIL — retarget the
                 // missing .linear name to its .mca sibling so new writes
                 // land in .mca. Existing .linear files below keep serving
-                // reads through dual-read.
+                // reads through triple-read.
                 final String mcaName = name.substring(0,
                     name.length() - RegionFileFormat.LINEAR_EXTENSION.length())
                     + RegionFileFormat.ANVIL_EXTENSION;
                 final Path mcaPath = regionPath.resolveSibling(mcaName);
-                this.linear$guardSymlink(mcaPath);
+                this.linear$guardSymlink(mcaPath, configured);
                 return new RegionFile(openInfo, mcaPath, openFolder, openSync);
             }
-            this.linear$guardSymlink(regionPath);
+            if (!Files.exists(regionPath)) {
+                // Family switch (B_LINEAR -> LINEAR): an existing .b_linear
+                // sibling keeps serving instead of starting a fresh
+                // .linear beside it.
+                final int[] coords = linear$regionCoords(name);
+                final Path folder = openFolder != null ? openFolder : regionPath.getParent();
+                if (coords != null && folder != null) {
+                    final Path bufferedSibling =
+                        LinearStorageProbe.bufferedSiblingIfProbed(folder, coords[0], coords[1]);
+                    if (bufferedSibling != null) {
+                        this.linear$guardSymlink(bufferedSibling, configured);
+                        return new HorizonBufferedRegionFile(bufferedSibling, level);
+                    }
+                }
+            }
+            this.linear$guardSymlink(regionPath, configured);
             return new HorizonLinearRegionFile(regionPath, level);
         }
         if (!Files.exists(regionPath)) {
-            // Dual-read probe: an .mca that was never written falls back to
-            // its .linear sibling; a brand-new region honors the configured
-            // format even if the requested name disagrees (config changed
-            // since the name was computed). Both decisions are core-owned.
+            // Triple-read probe: an .mca that was never written falls back to
+            // its .linear, then .b_linear sibling; a brand-new region honors
+            // the configured format even if the requested name disagrees
+            // (config changed since the name was computed). Both decisions
+            // are core-owned.
             final int[] coords = linear$regionCoords(name);
             final Path folder = openFolder != null ? openFolder : regionPath.getParent();
             if (coords != null && folder != null) {
                 final Path sibling =
                     LinearStorageProbe.siblingIfProbed(folder, coords[0], coords[1]);
                 if (sibling != null) {
-                    this.linear$guardSymlink(sibling);
+                    this.linear$guardSymlink(sibling, configured);
                     return new HorizonLinearRegionFile(sibling, level);
+                }
+                final Path bufferedSibling =
+                    LinearStorageProbe.bufferedSiblingIfProbed(folder, coords[0], coords[1]);
+                if (bufferedSibling != null) {
+                    this.linear$guardSymlink(bufferedSibling, configured);
+                    return new HorizonBufferedRegionFile(bufferedSibling, level);
                 }
                 if (LinearStorageProbe.shouldUseLinear(folder, coords[0], coords[1], configured)) {
                     final Path target = LinearStorageProbe.targetForSource(regionPath);
-                    this.linear$guardSymlink(target);
+                    this.linear$guardSymlink(target, configured);
                     return new HorizonLinearRegionFile(target, level);
+                }
+                if (LinearStorageProbe.shouldUseBuffered(folder, coords[0], coords[1], configured)) {
+                    final Path target = LinearStorageProbe.bufferedTargetForSource(regionPath);
+                    this.linear$guardSymlink(target, configured);
+                    return new HorizonBufferedRegionFile(target, level);
                 }
             } else {
                 // Unparseable name (never produced by getRegionFileName):
                 // legacy extension-swap probe, fail-open to vanilla.
                 final Path sibling = LinearStorageProbe.targetForSource(regionPath);
                 if (Files.exists(sibling)) {
-                    this.linear$guardSymlink(sibling);
+                    this.linear$guardSymlink(sibling, configured);
                     return new HorizonLinearRegionFile(sibling, level);
                 }
             }
         } else {
-            this.linear$guardSymlink(regionPath);
+            this.linear$guardSymlink(regionPath, configured);
         }
         return new RegionFile(openInfo, regionPath, openFolder, openSync);
     }
 
-    /** LINEAR-only broken-symlink guard (throws; never halts a shared server). */
-    private void linear$guardSymlink(final Path path) throws IOException {
-        final RegionFileFormat effective = LinearFormatPolicy.resolveEffectiveFormat(
-            LinearFormatPolicy.fileFormat(),
-            this.folder != null ? this.folder.toString() : null);
-        if (LinearStorageProbe.shouldRefuseSymlink(effective, path)) {
+    /**
+     * Linear-family broken-symlink guard (throws; never halts a shared
+     * server). Takes the already-resolved effective format so the guard can
+     * never disagree with the dispatch decision above (same scopes, same
+     * value — a scope mismatch here once meant the guard and the opener
+     * could pick different formats for one path).
+     */
+    private void linear$guardSymlink(final Path path, final RegionFileFormat configured) throws IOException {
+        if (LinearStorageProbe.shouldRefuseSymlink(configured, path)) {
             throw new IOException("LinearMC: refusing broken region symlink: " + path);
         }
     }

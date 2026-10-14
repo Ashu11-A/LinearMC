@@ -13,7 +13,7 @@ savePlayers block.
 diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/papermc/paper/threadedregions/RegionShutdownThread.java
 --- a/io/papermc/paper/threadedregions/RegionShutdownThread.java
 +++ b/io/papermc/paper/threadedregions/RegionShutdownThread.java
-@@ -264,7 +264,17 @@ public class RegionShutdownThread extends ca.spottedleaf.moonrise.common.util.Ti
+@@ -264,6 +264,21 @@ public class RegionShutdownThread extends ca.spottedleaf.moonrise.common.util.Ti
          }
 
          MinecraftServer.getServer().stopServer(); // stop part 1: most logic, kicking players, plugins, etc
@@ -21,6 +21,11 @@ diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/pap
 +        // folder NOW, while regions/coordinators are fully populated. The per-region
 +        // saveRegionChunks path below observes zero regions post-halt (its loop body
 +        // never runs), so it cannot be relied on. Idempotent, never throws.
++        // Shutdown mode first: post-halt saves re-dirty hundreds of files at
++        // once — per-mark victim batches would serialize multi-second
++        // rebuilds behind the saves. Track-only from here; the tail forced
++        // barriers (parallel floor) persist everything once.
++        net.linear.LinearFlushCoordinator.linear$beginShutdown();
 +        net.linear.LinearFlushCoordinator.evictAll();
 +        // Linear - production pool shutdown (async split): the joining stop drain
 +        // above already forced every tracked folder, so clean stops lose nothing.

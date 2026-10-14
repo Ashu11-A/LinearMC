@@ -90,6 +90,25 @@ public final class LinearFlushCoordinator {
     private static int FLUSH_POOL_THREADS = 0;
     // Test-only override (null = read the registered supplier).
     private static volatile Integer FLUSH_THREADS_OVERRIDE_FOR_TESTS = null;
+    // Test-only override for the forced-drain floor (null = core default).
+    private static volatile Integer FORCED_THREADS_OVERRIDE_FOR_TESTS = null;
+    /**
+     * Linear - shutdown mode: set once from the server stop barrier before
+     * the final drains. While set, markDirty only tracks (never spawns
+     * pressure/age victim batches): post-halt saves re-dirty hundreds of
+     * files at once, and per-mark single-file drains would serialize
+     * multi-second B_LINEAR rebuilds behind the shutdown saves — exactly the
+     * ~90 s stall measured live. The tail forced barrier (parallel floor)
+     * persists everything once. Idempotent; cleared by test reset.
+     */
+    private static volatile boolean SHUTDOWN_MODE = false;
+
+    /** Stop-barrier hook: defer all hygiene drains to the final forced drain. */
+    public static void linear$beginShutdown() {
+        // Terminal-only: server stop is process-terminal (fresh JVM next boot;
+        // same static-lifecycle class as BY_FOLDER). Test reset clears it.
+        SHUTDOWN_MODE = true;
+    }
     // Adapter-registered live readers (defaults = old null-config fallbacks:
     // 1 thread = serial, 10 s frequency). Suppliers keep runtime-reload
     // semantics: the adapter lambda reads live config on every call.
@@ -194,6 +213,13 @@ public final class LinearFlushCoordinator {
         LinearFlushCoordinator coordinator = BY_FOLDER.remove(key(folder));
         if (coordinator != null) {
             coordinator.flushDirty(true);
+            // Terminal-race net: a write landing between the snapshot-clear
+            // and the tail requeue check re-marks after the drain. Bounded
+            // re-passes persist it (no live writers remain at evict time, so
+            // two extra passes always converge; normal case skips via isEmpty).
+            for (int i = 0; i < 2 && !coordinator.isEmpty(); i++) {
+                coordinator.flushDirty(true);
+            }
             coordinator.recordEvict(); // Linear: evict count (lock-free)
         }
     }
@@ -231,6 +257,10 @@ public final class LinearFlushCoordinator {
         for (LinearFlushCoordinator coordinator : all) {
             try {
                 coordinator.flushDirty(true);
+                // Same terminal-race net as evict(): bounded re-passes.
+                for (int i = 0; i < 2 && !coordinator.isEmpty(); i++) {
+                    coordinator.flushDirty(true);
+                }
                 coordinator.recordEvict();
             } catch (RuntimeException e) {
                 LOGGER.error("Failed to evict linear folder {}", coordinator.folder, e);
@@ -270,6 +300,27 @@ public final class LinearFlushCoordinator {
         FLUSH_THREADS_OVERRIDE_FOR_TESTS = threads;
     }
 
+    /**
+     * Linear - thread floor for forced drains (explicit save, eviction,
+     * shutdown barriers): per-file flushes are independent and the pooled
+     * path is the tested one, while serial shutdown rebuilds of hundreds of
+     * multi-MB masters cost minutes. Periodic age-gated saves keep the
+     * configured value (default 1) so gameplay never sees an IO storm.
+     * Test override wins (null clears).
+     */
+    static int linear$forcedThreadsFloor() {
+        Integer override = FORCED_THREADS_OVERRIDE_FOR_TESTS;
+        if (override != null) {
+            return override;
+        }
+        return Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 4));
+    }
+
+    /** Test-only: forces the forced-drain floor (null clears back to default). */
+    static void linear$setForcedThreadsForTests(Integer threads) {
+        FORCED_THREADS_OVERRIDE_FOR_TESTS = threads;
+    }
+
     /** Test-only: shuts the shared pool down and clears the overrides. */
     static void linear$resetFlushPoolForTests() {
         synchronized (FLUSH_POOL_LOCK) {
@@ -280,6 +331,8 @@ public final class LinearFlushCoordinator {
             }
             FLUSH_THREADS_OVERRIDE_FOR_TESTS = null;
         }
+        FORCED_THREADS_OVERRIDE_FOR_TESTS = null;
+        SHUTDOWN_MODE = false;
         FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS = null;
         CACHED_FLUSH_FREQUENCY_NANOS_FOR_DIRTY = 10_000_000_000L;
         CACHED_FLUSH_FREQUENCY_AT_NANOS = 0L;
@@ -709,7 +762,7 @@ public final class LinearFlushCoordinator {
                 this.dirty.put(file, now);
             }
             // Repeat marks: no reorder, no timestamp refresh (first-dirty wins).
-            if (this.dirty.size() > MAX_DIRTY) {
+            if (!SHUTDOWN_MODE && this.dirty.size() > MAX_DIRTY) {
                 java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> it =
                     this.dirty.entrySet().iterator();
                 AbstractRegionFile eldest = it.next().getKey();
@@ -718,7 +771,7 @@ public final class LinearFlushCoordinator {
                 // can never miss the batch in flight.
                 drain = linear$createFlushTask(Collections.singletonList(eldest));
                 it.remove();
-            } else if (frequencyNanos > 0L && !this.dirty.isEmpty()) {
+            } else if (!SHUTDOWN_MODE && frequencyNanos > 0L && !this.dirty.isEmpty()) {
                 // Opportunistic age flush (head only, one file per call).
                 java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> head =
                     this.dirty.entrySet().iterator();
@@ -799,6 +852,8 @@ public final class LinearFlushCoordinator {
         }
         // Linear - <=1 keeps the pre-patch serial loop
         // byte-identical (no pool, no futures, no extra branches in the loop).
+        // Applies to periodic saves at flush-max-threads 1; forced drains go
+        // through linear$flushSnapshot below (parallel floor).
         // Linear - minecraft-0019: missing bridge call site.
         // Fires LinearRegionFlushCompletedEvent right after flushDirty drains,
         // via the Paper sync overload (no Plugin on this NMS path; autosave +
@@ -807,66 +862,7 @@ public final class LinearFlushCoordinator {
         final long batchStartNanos = System.nanoTime();
         final int filesAttempted = snapshot.size();
         try {
-            final int threads = linear$resolveFlushThreads();
-            if (threads <= 1 || snapshot.size() <= 1) {
-                for (AbstractRegionFile file : snapshot) {
-                    this.flushOne(file);
-                }
-                return;
-            }
-            // Parallel path (>1): ONE shared pool, caller participates as a worker
-            // and joins before returning (durability barrier). NOT invokeAll
-            // (cancels tasks on interrupt, truncating the barrier); individual
-            // Future.get preserves every task. flushOne already records failures,
-            // so ExecutionException needs no extra counting, just barrier progress.
-            final java.util.concurrent.ExecutorService pool;
-            try {
-                pool = linear$sharedPool(threads);
-            } catch (RuntimeException | Error fallback) {
-                // Pool-create fallback (Error included): run serially inline
-                // so durability is not lost.
-                for (AbstractRegionFile file : snapshot) {
-                    this.flushOne(file);
-                }
-                return;
-            }
-            final java.util.List<java.util.concurrent.Future<?>> futures =
-                new java.util.ArrayList<>(snapshot.size() - 1);
-            for (int i = 1; i < snapshot.size(); i++) {
-                final AbstractRegionFile f = snapshot.get(i);
-                try {
-                    futures.add(pool.submit(() -> {
-                        this.flushOne(f);
-                        return null;
-                    }));
-                } catch (RuntimeException | Error submitFailed) {
-                    // Queue/reject fallback (Error included): run inline so
-                    // durability is not lost.
-                    this.flushOne(f);
-                }
-            }
-            // Caller work: first file inline (participation).
-            this.flushOne(snapshot.get(0));
-            boolean interrupted = false;
-            for (java.util.concurrent.Future<?> fut : futures) {
-                while (true) {
-                    try {
-                        fut.get();
-                        break;
-                    } catch (InterruptedException ie) {
-                        // Do NOT cancel others (invokeAll would); keep waiting so
-                        // the barrier is not truncated, re-interrupt at the end.
-                        interrupted = true;
-                    } catch (java.util.concurrent.ExecutionException ee) {
-                        break;
-                    } catch (RuntimeException re) {
-                        break;
-                    }
-                }
-            }
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
+            this.linear$flushSnapshot(snapshot, force);
         } finally {
             final long elapsedMicros = (System.nanoTime() - batchStartNanos) / 1000L;
             linear$notifyFlushSync(key(this.folder), filesAttempted, elapsedMicros);
@@ -894,15 +890,105 @@ public final class LinearFlushCoordinator {
         return new java.util.ArrayList<>(this.dirty.keySet());
     }
 
+    /**
+     * Linear - shared fan-out for an already-detached snapshot. Used by
+     * {@link #flushDirty} (forced branch) and by leg-owned storage loops:
+     * serial when single-threaded or trivially small, else ONE shared pool
+     * with caller participation and join-before-return (durability barrier).
+     * NOT invokeAll (cancels tasks on interrupt, truncating the barrier);
+     * individual Future.get preserves every task. Pool-create/queue failures
+     * fall back to inline, never dropped. Files re-dirtied mid-flush are
+     * requeued by {@code flushOne}, never lost.
+     *
+     * @param snapshot detached file list (already untracked; this method
+     *     never touches the dirty set)
+     * @param forceBarrier true for barrier drains (explicit save, eviction,
+     *     shutdown): applies the forced-threads floor; false keeps the
+     *     configured serial default for periodic saves
+     */
+    public void linear$flushSnapshot(java.util.List<AbstractRegionFile> snapshot, boolean forceBarrier) {
+        final int threads = forceBarrier
+            ? Math.max(linear$resolveFlushThreads(), linear$forcedThreadsFloor())
+            : linear$resolveFlushThreads();
+        if (threads <= 1 || snapshot.size() <= 1) {
+            for (AbstractRegionFile file : snapshot) {
+                this.flushOne(file);
+            }
+            return;
+        }
+        // Parallel path (>1): ONE shared pool, caller participates as a worker
+        // and joins before returning (durability barrier). flushOne already
+        // records failures, so ExecutionException needs no extra counting,
+        // just barrier progress.
+        final java.util.concurrent.ExecutorService pool;
+        try {
+            pool = linear$sharedPool(threads);
+        } catch (RuntimeException | Error fallback) {
+            // Pool-create fallback (Error included): run serially inline
+            // so durability is not lost.
+            for (AbstractRegionFile file : snapshot) {
+                this.flushOne(file);
+            }
+            return;
+        }
+        final java.util.List<java.util.concurrent.Future<?>> futures =
+            new java.util.ArrayList<>(snapshot.size() - 1);
+        for (int i = 1; i < snapshot.size(); i++) {
+            final AbstractRegionFile f = snapshot.get(i);
+            try {
+                futures.add(pool.submit(() -> {
+                    this.flushOne(f);
+                    return null;
+                }));
+            } catch (RuntimeException | Error submitFailed) {
+                // Queue/reject fallback (Error included): run inline so
+                // durability is not lost.
+                this.flushOne(f);
+            }
+        }
+        // Caller work: first file inline (participation).
+        this.flushOne(snapshot.get(0));
+        boolean interrupted = false;
+        for (java.util.concurrent.Future<?> fut : futures) {
+            while (true) {
+                try {
+                    fut.get();
+                    break;
+                } catch (InterruptedException ie) {
+                    // Do NOT cancel others (invokeAll would); keep waiting so
+                    // the barrier is not truncated, re-interrupt at the end.
+                    interrupted = true;
+                } catch (java.util.concurrent.ExecutionException ee) {
+                    break;
+                } catch (RuntimeException re) {
+                    break;
+                }
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private void flushOne(AbstractRegionFile file) {
         boolean ok = false;
+        boolean requeueClean = false;
         try {
             if (file.isMarkedToSave()) {
                 file.flush();
             }
-            // Cleared only after a successful flush; a write racing between
-            // flush() and clear re-marks the file and is picked up next pass.
-            file.clearMarkedToSave();
+            if (file.isMarkedToSave()) {
+                // Re-dirtied during flush (write landed after the snapshot):
+                // the new writes are NOT in the persisted image, so requeue
+                // for the next pass instead of dropping them.
+                requeueClean = true;
+            }
+            // No trailing clearMarkedToSave(): every in-repo implementation
+            // (LinearRegionFile, BufferedLinearRegionFile, test stubs) clears
+            // its own flag when it snapshots, so a coordinator-side clear can
+            // only wipe a write that landed after the check — the exact race
+            // above. Files conforming to the old leave-set convention stay
+            // marked and are requeued below (reflushed next save, never lost).
             ok = true;
         } catch (Throwable ex) {
             // Throwable (not just Exception): an Error mid-batch must count
@@ -918,11 +1004,14 @@ public final class LinearFlushCoordinator {
             // Linear: last-success timestamp (lock-free max).
             this.lastFlushSuccessNanos.accumulate(System.nanoTime());
         }
-        if (!ok) {
+        if (!ok || requeueClean) {
             // Re-queue (bounded) so a transient failure is retried instead of
             // silently dropping durability. The flag was NOT cleared above,
             // so no data is lost even if the re-queue itself overflows.
-            // First-dirty ordering: keep original timestamp when present.
+            // Timestamp is flush-completion time (first-dirty age is already
+            // spent); a retry therefore waits a full frequency interval.
+            // requeueClean (flushed but re-dirtied mid-flush) rejoins without
+            // a failure count: the flush itself succeeded.
             synchronized (this) {
                 if (this.dirty.size() < MAX_DIRTY * 2) {
                     this.dirty.putIfAbsent(file, System.nanoTime());

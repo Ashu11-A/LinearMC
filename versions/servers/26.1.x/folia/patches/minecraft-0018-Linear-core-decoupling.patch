@@ -59,7 +59,7 @@ index 28268de..4d54c2a 100644
  
          if (input == null) {
              return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData(
-@@ -405,6 +406,93 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -405,6 +406,94 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
          this.sync = sync;
          this.info = info;
          this.isChunkData = info.dfuType()[0] == net.minecraft.util.datafix.DataFixTypes.CHUNK; // Paper - recalculate region file headers
@@ -74,6 +74,7 @@ index 28268de..4d54c2a 100644
 +    private static void linear$wireCoreSeams() {
 +        AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) -> (AbstractRegionFile)(Object) new RegionFile((RegionStorageInfo) info, file, dir, sync));
 +        AbstractRegionFileFactory.linear$setLinearOpener(LinearRegionFile::new);
++        AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
 +        net.linear.LinearFlushCoordinator.linear$setFlushThreadsSupplier(() -> {
 +            io.papermc.paper.configuration.GlobalConfiguration cfg =
 +                io.papermc.paper.configuration.GlobalConfiguration.get();
@@ -152,7 +153,7 @@ index 28268de..4d54c2a 100644
 +    // Linear - reverse sink lives in the top-level LinearAnvilSink (same package,
 +    // same directory); registered above and visible to the upgrader trigger too.
 
-      @org.jetbrains.annotations.Contract("_, false -> !null") private @Nullable AbstractRegionFile getRegionFile(final ChunkPos pos, boolean existingOnly) throws IOException { // CraftBukkit // Linear - widened
+     @org.jetbrains.annotations.Contract("_, false -> !null") private @Nullable AbstractRegionFile getRegionFile(final ChunkPos pos, boolean existingOnly) throws IOException { // CraftBukkit // Linear - widened
 @@ -508,7 +616,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
          // Linear start - Linear has no oversized sidecars and no recalculable header,
          // so it takes a direct NBT path; the anvil body below is unchanged.
@@ -331,7 +332,7 @@ diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/min
 index e2b7c67..cc09e27 100644
 --- a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
 +++ b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
-@@ -256,6 +256,50 @@ public class RegionStorageUpgrader {
+@@ -256,6 +256,51 @@ public class RegionStorageUpgrader {
          final int compressionLevel,
          final net.linear.LinearRegionConverter.Listener listener
      ) throws net.linear.LinearRegionConverter.ConversionProtectionException {
@@ -341,6 +342,7 @@ index e2b7c67..cc09e27 100644
 +        // (fail-loud defaults otherwise). Idempotent; mirrors the storage-ctor registration.
 +        net.linear.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) -> (net.linear.AbstractRegionFile)(Object) new net.minecraft.world.level.chunk.storage.RegionFile((net.minecraft.world.level.chunk.storage.RegionStorageInfo) info, file, dir, sync));
 +        net.linear.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
++        net.linear.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
 +        net.linear.LinearRegionConverter.linear$setRegionOpener((file, openFolder, openSync, format, level) ->
 +            net.linear.AbstractRegionFileFactory.get(file,
 +                new RegionStorageInfo("converter", net.minecraft.world.level.Level.OVERWORLD, "chunk"),

@@ -3,6 +3,7 @@ package io.linearmc.horizon;
 import java.nio.file.Path;
 
 import net.linear.AbstractRegionFileFactory;
+import net.linear.BufferedLinearRegionFile;
 import net.linear.LinearFlushCoordinator;
 import net.linear.LinearRegionConverter;
 import net.linear.LinearRegionFile;
@@ -66,7 +67,14 @@ public class LinearPlugin extends JavaPlugin {
             "net.linear.command.CommandSender",
             "net.linear.command.StatsProvider",
             "io.linearmc.horizon.HorizonLinearRegionFile",
+            "io.linearmc.horizon.HorizonBufferedRegionFile",
             "io.linearmc.horizon.ChunkPosCoords",
+            "net.linear.BufferedLinearRegionFile",
+            "net.linear.LinearBucketReader",
+            "net.linear.LinearBucketWriter",
+            "net.linear.LinearBucketGrid",
+            "net.linear.LinearImplementation",
+            "net.linear.LinearXxHash64",
             "io.linearmc.horizon.AnvilChunkSink",
             "io.linearmc.horizon.LinearCommand",
             "io.linearmc.horizon.LinearStatsCommand",
@@ -86,6 +94,11 @@ public class LinearPlugin extends JavaPlugin {
             getConfig().isInt("region-format.linear.compression-level")
                 ? getConfig().getInt("region-format.linear.compression-level")
                 : null);
+        LinearFileConfig.setFileWriterValues(
+            getConfig().getString("region-format.linear.implementation", null),
+            getConfig().isInt("region-format.linear.grid-size")
+                ? getConfig().getInt("region-format.linear.grid-size")
+                : null);
         // Wire the core construction seam: anvil opens go through the
         // HorizonAnvilRegionFile adapter (composition over vanilla
         // RegionFile, mirroring the fork legs where RegionFile implements
@@ -94,6 +107,7 @@ public class LinearPlugin extends JavaPlugin {
             (info, file, dir, sync) -> new HorizonAnvilRegionFile(
                 (RegionStorageInfo) info, file, dir, sync));
         AbstractRegionFileFactory.linear$setLinearOpener(LinearRegionFile::new);
+        AbstractRegionFileFactory.linear$setBufferedOpener(BufferedLinearRegionFile::new);
         // Converter opens run before any world storage exists (startup and
         // recreate triggers): the converter RegionOpener mirrors the
         // storage-ctor registration so conversion storage opens resolve here.
@@ -115,17 +129,53 @@ public class LinearPlugin extends JavaPlugin {
         // default (fail-open). Only "LINEAR" enables Linear; anything else
         // (unset/unknown) falls back to ANVIL, level 1..22 else 6.
         final RegionFileFormat format = LinearFileConfig.resolveFormat();
-        final boolean linear = format == RegionFileFormat.LINEAR;
+        final boolean linearFamily = RegionFileFormat.isLinearFamily(format);
         final int level = LinearFileConfig.resolveLevel();
-        getLogger().info("LinearMC: format=" + (linear ? "LINEAR" : "ANVIL") + " level=" + level
-                + " (set -Dlinearmc.format=LINEAR to enable)");
-        if (!linear) {
-            getLogger().warning("LinearMC: format is ANVIL — no .linear files will be written.");
+        getLogger().info("LinearMC: format=" + format + " level=" + level
+            + " implementation=" + LinearFileConfig.resolveImplementation()
+            + " grid-size=" + LinearFileConfig.resolveGridSize()
+            + " (set -Dlinearmc.format=LINEAR to enable)");
+        if (!linearFamily) {
+            getLogger().warning("LinearMC: format is ANVIL — no .linear/.b_linear files will be written.");
         }
         LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_FORMAT)
             .ifPresent(getLogger()::info);
         LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_LEVEL)
             .ifPresent(getLogger()::info);
+        LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_IMPLEMENTATION)
+            .ifPresent(getLogger()::info);
+        LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_GRID_SIZE)
+            .ifPresent(getLogger()::info);
+        // Durability heartbeat: the storage flush/close paths on this server
+        // line cannot be trusted to run (verified live: neither fires for
+        // region files), so durability must not depend on them. A repeating
+        // async drain persists age-gated files on the flush-frequency rhythm
+        // without ever blocking the tick, and the stop barrier below forces
+        // everything out. Without this, live writes would sit in RAM until
+        // process death.
+        final int heartbeatSeconds = Math.max(1, getConfig().getInt("region-format.linear.flush-frequency", 10));
+        // One daemon thread for the whole server (never the Bukkit
+        // scheduler: region-threaded lines throw UnsupportedOperationException
+        // on async timers). Age-gated background drain only; the tick and
+        // explicit saves never block on it.
+        // Defensive: Bukkit guarantees onDisable between enables, but never
+        // leak a thread if this instance is ever re-enabled without one.
+        if (this.drainService != null) {
+            try {
+                this.drainService.shutdownNow();
+            } catch (RuntimeException ignored) {
+            }
+            this.drainService = null;
+        }
+        this.drainService = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread thread = new Thread(r, "linearmc-flush-heartbeat");
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.drainService.scheduleWithFixedDelay(
+            () -> net.linear.FlushReports.FolderDrain.onSave(false),
+            heartbeatSeconds, heartbeatSeconds, java.util.concurrent.TimeUnit.SECONDS);
+        getLogger().info("LinearMC: flush heartbeat every " + heartbeatSeconds + "s (async, age-gated)");
         // The /linear queue is in-memory only: name the restart drop on every
         // boot so operators re-issue converts instead of assuming they resume.
         getLogger().info(JobQueue.droppedByRestartLine(0));
@@ -133,6 +183,28 @@ public class LinearPlugin extends JavaPlugin {
         this.registerCommand("linear", "Linear region tools (stats, convert, queue)", command);
         this.registerCommand(
             "linearstats", "Shows Linear region timing stats", new LinearStatsCommand(this));
+    }
+
+    /** Heartbeat service for the flush drain (shut down on disable). */
+    private java.util.concurrent.ScheduledExecutorService drainService;
+
+    @Override
+    public void onDisable() {
+        // Stop barrier: stop the heartbeat, then force every dirty file to
+        // disk and shut the shared pool down. A clean stop loses nothing,
+        // even though storage close() never runs on this line.
+        if (this.drainService != null) {
+            try {
+                this.drainService.shutdownNow();
+            } catch (RuntimeException ignored) {
+            }
+            this.drainService = null;
+        }
+        try {
+            net.linear.FlushReports.FolderDrain.onServerStop();
+        } catch (RuntimeException e) {
+            getLogger().warning("LinearMC: stop drain failed: " + String.valueOf(e.getMessage()));
+        }
     }
 
     /**

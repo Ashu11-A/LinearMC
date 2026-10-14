@@ -46,10 +46,14 @@ public class ConverterMirrorTest {
     @After
     public void restoreDefaultSeams() {
         LinearRegionConverter.linear$setRegionOpener((file, folder, sync, format, level) -> {
+            String name = file.getFileName().toString();
+            if (name.endsWith(RegionFileFormat.B_LINEAR_EXTENSION)) {
+                return new BufferedLinearRegionFile(file, level);
+            }
             if (format == null || format == RegionFileFormat.LINEAR) {
                 return new LinearRegionFile(file, level);
             }
-            throw new IOException("No RegionOpener registered for non-LINEAR open: " + file);
+            throw new IOException("No RegionOpener registered for non-linear open: " + file);
         });
         LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) -> {
             throw new IOException("no ChunkSinkOpener registered for " + file);

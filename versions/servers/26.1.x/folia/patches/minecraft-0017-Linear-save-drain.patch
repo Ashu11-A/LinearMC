@@ -24,6 +24,11 @@ index f2208bc..c0cce95 100644
 +        // folder NOW, while regions/coordinators are fully populated. The per-region
 +        // saveRegionChunks path below observes zero regions post-halt (its loop body
 +        // never runs), so it cannot be relied on. Idempotent, never throws.
++        // Shutdown mode first: post-halt saves re-dirty hundreds of files at
++        // once — per-mark victim batches would serialize multi-second
++        // rebuilds behind the saves. Track-only from here; the tail forced
++        // barriers (parallel floor) persist everything once.
++        net.linear.LinearFlushCoordinator.linear$beginShutdown();
 +        net.linear.LinearFlushCoordinator.evictAll();
 +        // Linear - production pool shutdown (async split): the joining stop drain
 +        // above already forced every tracked folder, so clean stops lose nothing.

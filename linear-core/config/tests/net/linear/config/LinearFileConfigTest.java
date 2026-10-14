@@ -19,8 +19,11 @@ public class LinearFileConfigTest {
     @After
     public void clearState() {
         LinearFileConfig.setFileValues(null, null);
+        LinearFileConfig.setFileWriterValues(null, null);
         System.clearProperty(LinearPolicy.SYSPROP_FORMAT);
         System.clearProperty(LinearPolicy.SYSPROP_LEVEL);
+        System.clearProperty(LinearPolicy.SYSPROP_IMPLEMENTATION);
+        System.clearProperty(LinearPolicy.SYSPROP_GRID_SIZE);
     }
 
     @Test
@@ -88,6 +91,19 @@ public class LinearFileConfigTest {
     }
 
     @Test
+    public void overrideLinesForWriterKnobs() {
+        LinearFileConfig.setFileWriterValues("V1", 8);
+        System.setProperty(LinearPolicy.SYSPROP_IMPLEMENTATION, "V3");
+        System.setProperty(LinearPolicy.SYSPROP_GRID_SIZE, "16");
+        assertTrue(LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_IMPLEMENTATION).isPresent());
+        assertTrue(LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_GRID_SIZE).isPresent());
+        assertTrue(LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_IMPLEMENTATION).get()
+            .contains("V3"));
+        assertTrue(LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_GRID_SIZE).get().contains("16"));
+        assertFalse(LinearFileConfig.overrideLineIfNeeded("linearmc.unknown").isPresent());
+    }
+
+    @Test
     public void overrideLineAbsentWhenSameOrUnset() {
         // No sysprop -> absent.
         LinearFileConfig.setFileValues("ANVIL", 6);
@@ -106,5 +122,39 @@ public class LinearFileConfigTest {
 
         // Unknown key -> absent even when sysprops are set.
         assertFalse(LinearFileConfig.overrideLineIfNeeded("linearmc.unknown").isPresent());
+    }
+
+    @Test
+    public void bufferedFormatResolves() {
+        assertEquals(RegionFileFormat.B_LINEAR, LinearPolicy.resolveFileFormat("B_LINEAR", RegionFileFormat.ANVIL));
+        assertEquals(RegionFileFormat.ANVIL, LinearPolicy.resolveFileFormat("b_linear", RegionFileFormat.ANVIL));
+        assertEquals(RegionFileFormat.B_LINEAR,
+            LinearPolicy.resolveFormat("B_LINEAR", null, RegionFileFormat.ANVIL));
+        LinearFileConfig.setFileValues("B_LINEAR", 6);
+        assertEquals(RegionFileFormat.B_LINEAR, LinearFileConfig.resolveFormat());
+    }
+
+    @Test
+    public void implementationSyspropOverFileOverDefault() {
+        assertEquals(net.linear.LinearImplementation.V1, LinearFileConfig.resolveImplementation());
+        LinearFileConfig.setFileWriterValues("V3", null);
+        assertEquals(net.linear.LinearImplementation.V3, LinearFileConfig.resolveImplementation());
+        System.setProperty(LinearPolicy.SYSPROP_IMPLEMENTATION, "V2");
+        assertEquals(net.linear.LinearImplementation.V2, LinearFileConfig.resolveImplementation());
+        System.setProperty(LinearPolicy.SYSPROP_IMPLEMENTATION, "BOGUS");
+        assertEquals(net.linear.LinearImplementation.V3, LinearFileConfig.resolveImplementation());
+    }
+
+    @Test
+    public void gridSizeWhitelistAndPrecedence() {
+        assertEquals(8, LinearFileConfig.resolveGridSize());
+        LinearFileConfig.setFileWriterValues(null, 16);
+        assertEquals(16, LinearFileConfig.resolveGridSize());
+        LinearFileConfig.setFileWriterValues(null, 7);
+        assertEquals(8, LinearFileConfig.resolveGridSize());
+        System.setProperty(LinearPolicy.SYSPROP_GRID_SIZE, "4");
+        assertEquals(4, LinearFileConfig.resolveGridSize());
+        System.setProperty(LinearPolicy.SYSPROP_GRID_SIZE, "9");
+        assertEquals(8, LinearFileConfig.resolveGridSize());
     }
 }

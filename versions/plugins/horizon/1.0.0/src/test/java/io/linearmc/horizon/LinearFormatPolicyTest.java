@@ -18,6 +18,11 @@ public class LinearFormatPolicyTest {
     @AfterEach
     public void clearFileValues() {
         LinearFormatPolicy.setFileValues(null, null);
+        LinearFormatPolicy.setFileWriterValues(null, null);
+        System.clearProperty(LinearPolicy.SYSPROP_FORMAT);
+        System.clearProperty(LinearPolicy.SYSPROP_LEVEL);
+        System.clearProperty(LinearPolicy.SYSPROP_IMPLEMENTATION);
+        System.clearProperty(LinearPolicy.SYSPROP_GRID_SIZE);
         LinearFormatOverride.clear("world");
         LinearFormatOverride.clear("/srv/world/region");
     }
@@ -68,5 +73,26 @@ public class LinearFormatPolicyTest {
             "9", 3, LinearFormatPolicy.FALLBACK_LEVEL));
         assertEquals(3, LinearFormatPolicy.resolveLevel(
             "bogus", 3, LinearFormatPolicy.FALLBACK_LEVEL));
+    }
+
+    @Test
+    public void bufferedFormatResolves() {
+        assertEquals(RegionFileFormat.B_LINEAR, LinearFormatPolicy.resolveFormat("B_LINEAR"));
+        assertEquals(RegionFileFormat.B_LINEAR, LinearPolicy.resolveFormat("B_LINEAR", null,
+            LinearPolicy.FALLBACK_FORMAT));
+        assertEquals(true, RegionFileFormat.isLinearFamily(RegionFileFormat.B_LINEAR));
+    }
+
+    @Test
+    public void writerValuesResolve() {
+        assertEquals(net.linear.LinearImplementation.V1, LinearFormatPolicy.resolveImplementation());
+        assertEquals(8, LinearFormatPolicy.resolveGridSize());
+        LinearFormatPolicy.setFileWriterValues("V3", 16);
+        assertEquals(net.linear.LinearImplementation.V3, LinearFormatPolicy.resolveImplementation());
+        assertEquals(16, LinearFormatPolicy.resolveGridSize());
+        LinearFormatPolicy.setFileWriterValues("bogus", 7);
+        assertEquals(net.linear.LinearImplementation.V1, LinearFormatPolicy.resolveImplementation());
+        assertEquals(8, LinearFormatPolicy.resolveGridSize());
+        LinearFormatPolicy.setFileWriterValues(null, null);
     }
 }

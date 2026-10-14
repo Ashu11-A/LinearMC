@@ -14,10 +14,11 @@ point for the server-internal save path alongside the async one.
 Plus the /linear command tree (stats/convert/queue/help) as a thin Paper
 leg over command: stats reuses the byte-exact linearstats panel,
 convert plans by default and runs --execute on a daemon
-worker behind a quiesce gate (both directions via core JobRunner),
+worker behind a quiesce gate (both directions via core JobRunner, plus
+explicit --from/--to/--grid any-to-any on the same worker),
 queue mutates the in-memory JobQueue singleton.
 ---
- .../paper/command/CommandLinear.java          | 391 +++++++++++++++++++++++++++++++++++++
+ .../paper/command/CommandLinear.java          | 488 +++++++++++++++++++++++++++++++++++++
  .../paper/command/CommandLinearStats.java     | 152 ++++++++++++++++++
  .../papermc/paper/command/PaperCommands.java  |   2 ++
  .../LinearRegionFlushCompletedEvent.java      | 123 +++++++++
@@ -25,7 +26,7 @@ queue mutates the in-memory JobQueue singleton.
  .../paper/linear/LinearFolderNames.java       |  41 +++
  .../io/papermc/paper/linear/LinearStats.java  | 155 +++++++++++
  .../LinearRegionFlushCompletedEvent.java      |   94 +++++++
- 8 files changed, 1087 insertions(+)
+ 8 files changed, 1184 insertions(+)
  create mode 100644 src/main/java/io/papermc/paper/command/CommandLinear.java
  create mode 100644 src/main/java/io/papermc/paper/command/CommandLinearStats.java
  create mode 100644 src/main/java/io/papermc/paper/event/linear/LinearRegionFlushCompletedEvent.java
@@ -217,7 +218,7 @@ new file mode 100644
 index 000000000..7c1e5a9b2
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/command/CommandLinear.java
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,609 @@
 +package io.papermc.paper.command;
 +
 +import java.io.File;
@@ -285,7 +286,11 @@ index 000000000..7c1e5a9b2
 + *
 + * <p>Dry-run only plans (candidate echo, nothing converted).
 + * Both directions {@code --execute} run on the worker via core
-+ * {@code JobRunner} (direction switch owned by core).</p>
++ * {@code JobRunner} (direction switch owned by core). Explicit any-to-any
++ * jobs ({@code --from/--to/--grid --execute}, the only way Pumpkin migrates)
++ * submit through the same executor and run on the same worker;
++ * {@code JobRunner} routes them via {@code from/to}, so the same quiesce
++ * gate and per-file folder-dirty skip apply.</p>
 + */
 +public class CommandLinear extends Command {
 +
@@ -297,6 +302,16 @@ index 000000000..7c1e5a9b2
 +
 +    /** Stats pull-through: coordinator snapshots (zero new storage, no threads). */
 +    private static final StatsProvider STATS = LinearFlushCoordinator::snapshots;
++
++    /**
++     * Pumpkin rule, surfaced on {@code /linear help} beside the core help
++     * text: Pumpkin migrates explicit-only and startup never rewrites
++     * Pumpkin files.
++     */
++    private static final String PUMPKIN_RULE_LINE =
++        "Pumpkin (.linear wire-2) migrates explicit-only:"
++        + " /linear convert <world> --from pumpkin --to <target> --execute;"
++        + " startup never rewrites Pumpkin files.";
 +
 +    /**
 +     * Dedicated single-thread convert worker (daemon, never the tick thread).
@@ -336,7 +351,13 @@ index 000000000..7c1e5a9b2
 +        if (action instanceof LinearAction.ConvertAction convert) {
 +            return this.executeConvert(sender, convert);
 +        }
++        if (action instanceof LinearAction.ExplicitConvertAction explicit) {
++            return this.executeExplicitConvert(sender, explicit);
++        }
 +        this.executor.execute(adapt(sender), action);
++        if (action instanceof LinearAction.HelpAction) {
++            sender.sendMessage(PUMPKIN_RULE_LINE);
++        }
 +        return true;
 +    }
 +
@@ -380,6 +401,50 @@ index 000000000..7c1e5a9b2
 +        return true;
 +    }
 +
++    /**
++     * Explicit any-to-any convert submit (core-owned) plus leg execution.
++     * Mirrors {@link #executeConvert}: the executor enforces permissions,
++     * enqueues exactly one job (legacy placeholder direction for display
++     * plus explicit {@code from/to/grid} routing) and messages the sender;
++     * the new job is found by queue diff (nothing new means denied: fail
++     * closed, no launch). Dry-run echoes candidates like legacy (same echo
++     * path with {@code --from} filtering, nothing converted); {@code --execute}
++     * reaches the same background quiesce-gated worker (core {@code JobRunner}
++     * routes explicit jobs via {@code from/to}, so the folder-dirty per-file
++     * skip applies exactly as for legacy jobs).
++     */
++    private boolean executeExplicitConvert(@NotNull CommandSender sender, @NotNull LinearAction.ExplicitConvertAction explicit) {
++        final Set<UUID> before = jobIds();
++        this.executor.execute(adapt(sender), explicit);
++        final ConvertJob job = newJobSince(before);
++        if (job == null) {
++            return true;
++        }
++        if (explicit.dryRun()) {
++            echoExplicitCandidates(sender, explicit.world(), explicit.from(), explicit.to());
++            return true;
++        }
++        final World world = Bukkit.getWorld(explicit.world());
++        if (world == null) {
++            final String unknown = "Unknown world '" + explicit.world() + "'.";
++            job.start();
++            job.fail(unknown);
++            sender.sendMessage(unknown);
++            return true;
++        }
++        final Path worldFolder = world.getWorldFolder().toPath();
++        final String sysLevel = System.getProperty(LinearPolicy.SYSPROP_LEVEL);
++        final int level = LinearPolicy.resolveLevel(
++            sysLevel, explicit.level(), net.linear.RegionFileFormat.DEFAULT_COMPRESSION_LEVEL);
++        if (sysLevel != null && level != explicit.level()) {
++            sender.sendMessage(LinearPolicy.overrideLine(LinearPolicy.SYSPROP_LEVEL, sysLevel,
++                String.valueOf(explicit.level()), String.valueOf(level), "global"));
++        }
++        sender.sendMessage(net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
++        CONVERT_EXECUTOR.execute(() -> runConvert(sender, job, level, worldFolder, explicit.world(), explicit.threads()));
++        return true;
++    }
++
 +    /** Snapshot of queued job ids (single-threaded tick submit: exactly one new job appears). */
 +    private static Set<UUID> jobIds() {
 +        final Set<UUID> ids = new HashSet<>();
@@ -403,7 +468,19 @@ index 000000000..7c1e5a9b2
 +        return found;
 +    }
 +
-+    /** Dry-run plan: candidate echo per storage folder (capped), nothing converted. */
++    /**
++     * Dry-run plan: candidate echo per storage folder (capped), nothing converted.
++     * Union-per-target with the anchored {@code ^(mca|linear|b_linear)$} gate
++     * (mirrors {@code collectForwardCandidates/collectReverseCandidates} read-only;
++     * counting stays an estimate for dry-run only). Toward LINEAR counts
++     * {@code .mca + .b_linear}, toward B_LINEAR counts {@code .mca + .linear},
++     * toward ANVIL counts {@code .linear + .b_linear} (fixes the old single-extension
++     * miss). Same-coords ambiguous and target-occupied coords are excluded for that
++     * coords (real escalates valid shadows/ambiguous to FAILED, 0 queued; invalid-shadow
++     * requeue needs file-IO validation, not leg-visible); when in doubt UNDERcount.
++     * Folder-dirty skips and Pumpkin layout detection (needs detector IO) can only
++     * reduce the real queue further.
++     */
 +    private static void echoCandidates(@NotNull CommandSender sender, @NotNull String worldName, @NotNull ConvertDirection direction) {
 +        final World world = Bukkit.getWorld(worldName);
 +        if (world == null) {
@@ -411,32 +488,191 @@ index 000000000..7c1e5a9b2
 +            return;
 +        }
 +        final Path worldFolder = world.getWorldFolder().toPath();
++        final net.linear.RegionFileFormat target = direction.targetFormat();
++        final String targetExt;
++        if (target == net.linear.RegionFileFormat.B_LINEAR) {
++            targetExt = net.linear.RegionFileFormat.B_LINEAR_EXTENSION;
++        } else if (target == net.linear.RegionFileFormat.ANVIL) {
++            targetExt = net.linear.RegionFileFormat.ANVIL_EXTENSION;
++        } else {
++            targetExt = net.linear.RegionFileFormat.LINEAR_EXTENSION;
++        }
++        final java.util.regex.Pattern regionName =
++            java.util.regex.Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear|b_linear)$");
 +        final List<String> counts = new ArrayList<>();
 +        final List<String> sample = new ArrayList<>();
 +        int total = 0;
-+        final String ext = direction == ConvertDirection.LINEAR_TO_MCA ? ".linear" : ".mca";
 +        for (String folder : STORAGE_FOLDERS) {
-+            final File dir = worldFolder.resolve(folder).toFile();
-+            final String[] mca = dir.list((parent, name) -> name.endsWith(ext));
-+            final int count = mca == null ? 0 : mca.length;
++            final java.nio.file.Path dir = worldFolder.resolve(folder);
++            final java.util.Map<String, java.util.List<String>> sourcesByCoords = new java.util.HashMap<>();
++            final java.util.Set<String> targetCoords = new java.util.HashSet<>();
++            try (java.nio.file.DirectoryStream<java.nio.file.Path> stream =
++                java.nio.file.Files.newDirectoryStream(dir)) {
++                for (java.nio.file.Path file : stream) {
++                    if (!java.nio.file.Files.isRegularFile(file)) {
++                        continue;
++                    }
++                    final String name = file.getFileName().toString();
++                    final java.util.regex.Matcher m = regionName.matcher(name);
++                    if (!m.matches()) {
++                        continue;
++                    }
++                    final String coords = m.group(1) + "," + m.group(2);
++                    if (name.endsWith(targetExt)) {
++                        targetCoords.add(coords);
++                    } else if (name.endsWith(net.linear.RegionFileFormat.ANVIL_EXTENSION)
++                        || name.endsWith(net.linear.RegionFileFormat.LINEAR_EXTENSION)
++                        || name.endsWith(net.linear.RegionFileFormat.B_LINEAR_EXTENSION)) {
++                        sourcesByCoords.computeIfAbsent(coords, k -> new java.util.ArrayList<>()).add(name);
++                    }
++                }
++            } catch (Exception ignored) {
++            }
++            int count = 0;
++            final List<String> names = new java.util.ArrayList<>();
++            for (java.util.Map.Entry<String, java.util.List<String>> e : sourcesByCoords.entrySet()) {
++                if (e.getValue().size() > 1) {
++                    continue;
++                }
++                if (targetCoords.contains(e.getKey())) {
++                    continue;
++                }
++                count++;
++                names.add(e.getValue().get(0));
++            }
++            java.util.Collections.sort(names);
 +            total += count;
 +            counts.add(folder + "=" + count);
-+            if (mca != null) {
-+                for (String name : mca) {
-+                    if (sample.size() < 20) {
-+                        sample.add(folder + "/" + name);
-+                    }
++            for (String name : names) {
++                if (sample.size() < 20) {
++                    sample.add(folder + "/" + name);
 +                }
 +            }
 +        }
 +        sender.sendMessage("Dry-run plan for '" + worldName + "': " + total
-+            + " candidate " + ext + " file(s) (" + String.join(", ", counts) + "); nothing converted.");
++            + " candidate file(s) toward " + targetExt + " (" + String.join(", ", counts) + "); nothing converted.");
 +        for (String name : sample) {
 +            sender.sendMessage("  " + name);
 +        }
 +        if (total > sample.size()) {
 +            sender.sendMessage("  ... and " + (total - sample.size()) + " more.");
 +        }
++    }
++
++    /**
++     * Explicit dry-run plan: same echo path as legacy with extension-level
++     * {@code --from} filtering (mirrors {@code collectExplicitCandidates} read-only;
++     * counting stays an estimate, nothing converted). Same-extension {@code .linear}
++     * targets (V1/V2/V3/PUMPKIN share {@code .linear} per FR7) need detector IO to
++     * separate already-target layouts from same-path swaps, so same-extension
++     * {@code .linear} files are excluded (UNDERcount). Same-coords ambiguous and
++     * target-path-occupied groups count 0 (real escalates to FAILED, 0 queued).
++     * Pumpkin AUTO skip and folder-dirty skips need file/detector IO and can only
++     * reduce the real queue further.
++     */
++    private static void echoExplicitCandidates(@NotNull CommandSender sender, @NotNull String worldName, @NotNull LinearRegionConverter.ConvertFormat from, @NotNull LinearRegionConverter.ConvertFormat to) {
++        final World world = Bukkit.getWorld(worldName);
++        if (world == null) {
++            sender.sendMessage("Dry-run plan: unknown world '" + worldName + "'.");
++            return;
++        }
++        final Path worldFolder = world.getWorldFolder().toPath();
++        final String targetExt = to.extension();
++        final java.util.regex.Pattern regionName =
++            java.util.regex.Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear|b_linear)$");
++        final List<String> counts = new ArrayList<>();
++        final List<String> sample = new ArrayList<>();
++        int total = 0;
++        for (String folder : STORAGE_FOLDERS) {
++            final java.nio.file.Path dir = worldFolder.resolve(folder);
++            final java.util.Map<String, java.util.List<String>> byCoords = new java.util.HashMap<>();
++            try (java.nio.file.DirectoryStream<java.nio.file.Path> stream =
++                java.nio.file.Files.newDirectoryStream(dir)) {
++                for (java.nio.file.Path file : stream) {
++                    if (!java.nio.file.Files.isRegularFile(file)) {
++                        continue;
++                    }
++                    final String name = file.getFileName().toString();
++                    if (!regionName.matcher(name).matches()) {
++                        continue;
++                    }
++                    if (!name.endsWith(net.linear.RegionFileFormat.ANVIL_EXTENSION)
++                        && !name.endsWith(net.linear.RegionFileFormat.LINEAR_EXTENSION)
++                        && !name.endsWith(net.linear.RegionFileFormat.B_LINEAR_EXTENSION)) {
++                        continue;
++                    }
++                    if (!explicitFromMatches(name, from)) {
++                        continue;
++                    }
++                    if (targetExt.equals(net.linear.RegionFileFormat.LINEAR_EXTENSION)
++                        && name.endsWith(net.linear.RegionFileFormat.LINEAR_EXTENSION)) {
++                        continue;
++                    }
++                    if (name.endsWith(targetExt)) {
++                        continue;
++                    }
++                    final java.util.regex.Matcher m = regionName.matcher(name);
++                    m.matches();
++                    final String coords = m.group(1) + "," + m.group(2);
++                    byCoords.computeIfAbsent(coords, k -> new java.util.ArrayList<>()).add(name);
++                }
++            } catch (Exception ignored) {
++            }
++            final java.util.List<String> kept = new java.util.ArrayList<>();
++            for (java.util.Map.Entry<String, java.util.List<String>> e : byCoords.entrySet()) {
++                if (e.getValue().size() > 1) {
++                    continue;
++                }
++                final String sole = e.getValue().get(0);
++                String base = sole;
++                for (String known : new String[] {net.linear.RegionFileFormat.ANVIL_EXTENSION,
++                    net.linear.RegionFileFormat.LINEAR_EXTENSION,
++                    net.linear.RegionFileFormat.B_LINEAR_EXTENSION}) {
++                    if (base.endsWith(known)) {
++                        base = base.substring(0, base.length() - known.length()) + targetExt;
++                        break;
++                    }
++                }
++                try {
++                    if (java.nio.file.Files.isRegularFile(dir.resolve(base))) {
++                        continue;
++                    }
++                } catch (RuntimeException ignored) {
++                }
++                kept.add(sole);
++            }
++            java.util.Collections.sort(kept);
++            total += kept.size();
++            counts.add(folder + "=" + kept.size());
++            for (String name : kept) {
++                if (sample.size() < 20) {
++                    sample.add(folder + "/" + name);
++                }
++            }
++        }
++        sender.sendMessage("Dry-run plan for '" + worldName + "': " + total
++            + " candidate file(s) from " + from.name().toLowerCase(java.util.Locale.ROOT)
++            + " toward " + targetExt + " (" + String.join(", ", counts) + "); nothing converted.");
++        for (String name : sample) {
++            sender.sendMessage("  " + name);
++        }
++        if (total > sample.size()) {
++            sender.sendMessage("  ... and " + (total - sample.size()) + " more.");
++        }
++    }
++
++    private static boolean explicitFromMatches(String fileName,
++        LinearRegionConverter.ConvertFormat from) {
++        if (from == null || from == LinearRegionConverter.ConvertFormat.AUTO) {
++            return true;
++        }
++        if (from == LinearRegionConverter.ConvertFormat.MCA) {
++            return fileName.endsWith(net.linear.RegionFileFormat.ANVIL_EXTENSION);
++        }
++        if (from == LinearRegionConverter.ConvertFormat.B_LINEAR) {
++            return fileName.endsWith(net.linear.RegionFileFormat.B_LINEAR_EXTENSION);
++        }
++        return fileName.endsWith(net.linear.RegionFileFormat.LINEAR_EXTENSION);
 +    }
 +
 +    /**
@@ -488,7 +724,8 @@ index 000000000..7c1e5a9b2
 +        for (String folder : STORAGE_FOLDERS) {
 +            folders.add(worldFolder.resolve(folder));
 +        }
-+        final boolean reverse = job.direction() == ConvertDirection.LINEAR_TO_MCA;
++        final boolean reverse =
++            job.direction().targetFormat() == net.linear.RegionFileFormat.ANVIL;
 +        if (reverse) {
 +            net.linear.config.LinearFormatOverride.set(worldName, "ANVIL");
 +            for (Path folderPath : folders) {
@@ -554,7 +791,41 @@ index 000000000..7c1e5a9b2
 +
 +    @Override
 +    public @NotNull List<String> tabComplete(@NotNull CommandSender sender, @NotNull String alias, @NotNull String[] args) {
-+        return LinearTabCompleter.suggest(args, QUEUE, () -> { try { final java.util.Set<String> names = new java.util.HashSet<>(); for (org.bukkit.World w : org.bukkit.Bukkit.getWorlds()) { names.add(w.getName()); } return names; } catch (RuntimeException empty) { return java.util.Collections.emptySet(); } });
++        final List<String> base = LinearTabCompleter.suggest(args, QUEUE, () -> { try { final java.util.Set<String> names = new java.util.HashSet<>(); for (org.bukkit.World w : org.bukkit.Bukkit.getWorlds()) { names.add(w.getName()); } return names; } catch (RuntimeException empty) { return java.util.Collections.emptySet(); } });
++        return withExplicitConvertFlags(args, base);
++    }
++
++    /**
++     * Suggests the explicit any-to-any flags ({@code --from/--to/--grid}) in
++     * the convert flag slot. Core completion owns the values after each flag
++     * and the legacy flag list (frozen); this leg only adds the three flag
++     * names where a flag is being typed, never in a value or world slot.
++     */
++    private static List<String> withExplicitConvertFlags(final String[] args, final List<String> base) {
++        if (args == null || args.length < 3 || args[0] == null
++            || !"convert".equalsIgnoreCase(args[0])) {
++            return base;
++        }
++        final String prev = args[args.length - 2];
++        if (prev != null && (prev.equalsIgnoreCase("--level") || prev.equalsIgnoreCase("--threads")
++            || prev.equalsIgnoreCase("--from") || prev.equalsIgnoreCase("--to")
++            || prev.equalsIgnoreCase("--grid"))) {
++            return base;
++        }
++        String cur = args[args.length - 1];
++        if (cur == null) {
++            cur = "";
++        }
++        if (!cur.isEmpty() && !cur.startsWith("-")) {
++            return base;
++        }
++        final List<String> out = new ArrayList<>(base);
++        for (final String flag : List.of("--from", "--to", "--grid")) {
++            if (flag.startsWith(cur) && !out.contains(flag)) {
++                out.add(flag);
++            }
++        }
++        return out;
 +    }
 +}
 diff --git a/src/main/java/io/papermc/paper/command/PaperCommands.java b/src/main/java/io/papermc/paper/command/PaperCommands.java

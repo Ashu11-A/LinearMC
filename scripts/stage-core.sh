@@ -17,10 +17,10 @@ if [ "${1:-}" = "--mc" ]; then MC="${2:?--mc needs a value}"; fi
 MC="${MC:-26.1.x}"
 
 VD="$SUPPLEMENT_DIR/versions/servers/$MC"
-OFFENDERS="$(grep -rn '^+++.*net/linear/' "$VD/folia/patches" "$VD/common" "$VD/canvasmc/patches" "$VD/canvasmc/overlay" 2>/dev/null | grep -v 'src/test/' || true)"
+OFFENDERS="$(grep -rn '^+++.*net/linear/' "$VD/folia/patches" "$VD/common" "$VD/canvasmc/patches" "$VD/canvasmc/overlay" "$SUPPLEMENT_DIR/versions/servers/common/canvas/overlay" 2>/dev/null | grep -v 'src/test/' || true)"
 if [ -n "$OFFENDERS" ]; then
   echo "stage-core GUARD FAIL: net/linear/* hunks belong in linear-core/, not in patches:" >&2
   echo "$OFFENDERS" >&2
   exit 1
 fi
-echo "stage-core guard OK: no net/linear/* hunks in $VD/{folia/patches,common,canvasmc/{patches,overlay}}"
+echo "stage-core guard OK: no net/linear/* hunks in $VD/{folia/patches,common,canvasmc/{patches,overlay}} + versions/servers/common/canvas/overlay"

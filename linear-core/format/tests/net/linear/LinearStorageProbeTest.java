@@ -11,7 +11,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
-/** Probe contract for the Phase D Canvas overlay / Horizon mixin. */
+/** Probe contract for the Canvas overlay / Horizon mixin storage open paths. */
 public class LinearStorageProbeTest {
 
     @Rule
@@ -23,6 +23,7 @@ public class LinearStorageProbeTest {
         assertEquals("r.1.2.linear", LinearStorageProbe.fileNameFor(1, 2, RegionFileFormat.LINEAR));
         assertEquals("r.-3.4.mca", LinearStorageProbe.fileNameFor(-3, 4, RegionFileFormat.ANVIL));
         assertEquals("r.-3.4.linear", LinearStorageProbe.fileNameFor(-3, 4, RegionFileFormat.LINEAR));
+        assertEquals("r.1.2.b_linear", LinearStorageProbe.fileNameFor(1, 2, RegionFileFormat.B_LINEAR));
     }
 
     @Test
@@ -46,6 +47,46 @@ public class LinearStorageProbeTest {
     @Test
     public void probeNullWhenNeitherExists() {
         assertNull(LinearStorageProbe.probeExisting(tmp.getRoot().toPath(), 9, 9));
+    }
+
+    @Test
+    public void probeOrderMcaLinearBuffered() throws Exception {
+        Path folder = tmp.getRoot().toPath();
+        Path mca = folder.resolve("r.0.0.mca");
+        Path linear = folder.resolve("r.0.0.linear");
+        Path buffered = folder.resolve("r.0.0.b_linear");
+        Files.write(buffered, new byte[] {3});
+        assertEquals(buffered, LinearStorageProbe.probeExisting(folder, 0, 0));
+        Files.write(linear, new byte[] {2});
+        assertEquals(linear, LinearStorageProbe.probeExisting(folder, 0, 0));
+        Files.write(mca, new byte[] {1});
+        assertEquals(mca, LinearStorageProbe.probeExisting(folder, 0, 0));
+        assertEquals(buffered, LinearStorageProbe.bufferedSiblingIfProbed(folder, 0, 0));
+    }
+
+    @Test
+    public void bufferedTargetMapping() {
+        Path mca = Path.of("region", "r.1.2.mca");
+        assertEquals(Path.of("region", "r.1.2.b_linear"), LinearStorageProbe.bufferedTargetForSource(mca));
+        Path lin = Path.of("region", "r.1.2.linear");
+        assertEquals(Path.of("region", "r.1.2.b_linear"), LinearStorageProbe.bufferedTargetForSource(lin));
+    }
+
+    @Test
+    public void symlinkGuardCoversFamily() throws Exception {
+        Path folder = tmp.getRoot().toPath();
+        Path link = folder.resolve("r.0.0.b_linear");
+        Files.createSymbolicLink(link, folder.resolve("nonexistent-target.b_linear"));
+        assertTrue(LinearStorageProbe.shouldRefuseSymlink(RegionFileFormat.B_LINEAR, link));
+        assertFalse(LinearStorageProbe.shouldRefuseSymlink(RegionFileFormat.ANVIL, link));
+    }
+
+    @Test
+    public void shouldUseBufferedOnlyForBuffered() {
+        Path folder = tmp.getRoot().toPath();
+        assertTrue(LinearStorageProbe.shouldUseBuffered(folder, 0, 0, RegionFileFormat.B_LINEAR));
+        assertFalse(LinearStorageProbe.shouldUseBuffered(folder, 0, 0, RegionFileFormat.LINEAR));
+        assertFalse(LinearStorageProbe.shouldUseBuffered(folder, 0, 0, RegionFileFormat.ANVIL));
     }
 
     @Test

@@ -1,6 +1,7 @@
 // codec: LinearRegionFile, zstd/LZ4 codec, direct streams, envelope codec.
 dependencies {
     api(project(":format"))
+    api(project(":config"))
     api(project(":flush")) // file-level timing/stats forwarding (flush never depends back on codec)
     // Tests exercise the converter round-trip (reverse path reads linear files).
     testImplementation(project(":convert"))

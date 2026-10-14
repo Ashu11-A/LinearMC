@@ -17,9 +17,17 @@ public final class LinearTabCompleter {
     private static final List<String> QUEUE_OPS =
         List.of("list", "status", "clear", "pause", "resume", "cancel");
     private static final List<String> CONVERT_FLAGS = List.of(
-        "--to-linear", "--to-mca", "--level", "--threads", "--execute", "--dry-run");
+        "--to-linear", "--to-mca", "--to-blinear", "--level", "--threads", "--execute", "--dry-run");
     private static final List<String> LEVEL_VALUES = levelValues();
     private static final List<String> THREAD_VALUES = threadValues();
+    // Explicit-only values (FR3): suggested after --from/--to/--grid without changing
+    // CONVERT_FLAGS (legacy flag list stays byte-identical for existing tests).
+    // --from linear is the family wildcard (matches any .linear layout); --to linear means V1.
+    private static final List<String> FROM_VALUES = List.of(
+        "auto", "mca", "v1", "v2", "v3", "blinear", "b_linear", "pumpkin", "linear");
+    private static final List<String> TO_VALUES = List.of(
+        "mca", "v1", "v2", "v3", "blinear", "b_linear", "pumpkin", "linear");
+    private static final List<String> GRID_VALUES = List.of("1", "2", "4", "8", "16", "32");
 
     /**
      * Suggests completions for the token being typed (last element of args).
@@ -64,6 +72,15 @@ public final class LinearTabCompleter {
                 }
                 if (prev != null && prev.equalsIgnoreCase("--threads")) {
                     return filterInOrder(THREAD_VALUES, cur);
+                }
+                if (prev != null && prev.equalsIgnoreCase("--from")) {
+                    return filterInOrder(FROM_VALUES, cur);
+                }
+                if (prev != null && prev.equalsIgnoreCase("--to")) {
+                    return filterInOrder(TO_VALUES, cur);
+                }
+                if (prev != null && prev.equalsIgnoreCase("--grid")) {
+                    return filterInOrder(GRID_VALUES, cur);
                 }
                 return filterInOrder(CONVERT_FLAGS, cur);
             }

@@ -5,13 +5,26 @@
 # no .linear files are written unless this file or a sysprop opts in).
 # Edits require a restart; nothing here is re-read at runtime.
 region-format:
-  # ANVIL or LINEAR (case-sensitive; unknown values fall back to ANVIL).
+  # ANVIL, LINEAR or B_LINEAR (case-sensitive; unknown values fall back to ANVIL).
   format: ANVIL
   linear:
     compression-level: 6
+    # V1 (single blob), V2/V3 (bucketed DivineMC-compatible). Writers only;
+    # readers accept all versions regardless. Case-insensitive, default V1.
+    implementation: V1
+    # Bucket grid for V2/V3 writes: 1, 2, 4, 8, 16 or 32. Default 8.
+    grid-size: 8
     crash-on-broken-symlink: true
     flush-frequency: 10
     flush-max-threads: 1
     compression-workers: 0
     long-distance-matching: 0
     log-flush-batches: false
+
+# /linear convert copies one world's region files to another layout.
+# Five migration formats: mca, v1, v2, v3, blinear (--to linear means v1).
+# Pumpkin migrates explicit-only:
+#   /linear convert <world> --from pumpkin --to <target> --execute
+# (per-job --grid 1|2|4|8|16|32; Pumpkin target fixes level 1, grid default 2).
+# Startup auto-conversion never rewrites Pumpkin files. No settings here
+# affect conversion: it takes the level above plus the per-job flags.

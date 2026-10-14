@@ -8,7 +8,6 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import net.linear.AbstractRegionFile;
-import net.linear.BufferedRegionOutput;
 import net.linear.FlushReports;
 import net.linear.LinearRegionFile;
 import net.linear.LinearWritePath;
@@ -30,9 +29,9 @@ import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
  * <p>Constructor cost (documented trade-off): the superclass constructor
  * eagerly opens and parses its file, so it is pointed at a fresh empty
  * temporary asset. Cost per open is one temp file plus one 8 KiB header
- * buffer; both are released deterministically by {@link #close()} (super
- * close + asset delete). Stale assets after a crash are inert 0-byte files
- * in the system temp dir, never in world folders.
+ * buffer; all three (super state, asset file, asset dir) are released
+ * deterministically by {@link #close()}. Stale assets after a crash are
+ * inert 0-byte files in the system temp dir, never in world folders.
  *
  * <p>Payload symmetry: BOTH the {@code ChunkPos} and {@code long} overloads
  * normalize writes ({@link LinearWritePath#normalizeWritePayload}) and serve
@@ -45,6 +44,7 @@ public class HorizonLinearRegionFile extends RegionFile implements AbstractRegio
     private final LinearRegionFile delegate;
     private final Path realPath;
     private final Path asset;
+    private final Path assetDir;
 
     /**
      * Opens (or creates) the Linear file at {@code realPath}.
@@ -65,6 +65,7 @@ public class HorizonLinearRegionFile extends RegionFile implements AbstractRegio
         );
         this.realPath = realPath;
         this.asset = asset[0];
+        this.assetDir = asset[1];
         this.delegate = new LinearRegionFile(realPath, level);
     }
 
@@ -163,9 +164,39 @@ public class HorizonLinearRegionFile extends RegionFile implements AbstractRegio
      */
     @Override
     public DataOutputStream getChunkDataOutputStream(final ChunkPos pos) throws IOException {
-        // Safe downcast: the core contract returns a DataOutputStream today.
-        return (DataOutputStream) BufferedRegionOutput.forFile(
-            this.delegate, ChunkPosCoords.toKey(pos));
+        return stagedStream(ChunkPosCoords.toKey(pos));
+    }
+
+    /**
+     * ChunkBuffer entry point, mirroring {@link #write(long, ByteBuffer)}:
+     * bytes accumulate in memory and persist (normalized, self-reported) on
+     * close. Normalization here is load-bearing, not cosmetic: the direct
+     * path strips the vanilla envelope before storing, so an unnormalized
+     * streaming write would store a different byte shape for the same chunk.
+     */
+    private DataOutputStream stagedStream(final long chunk) {
+        final java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream(8096);
+        return new DataOutputStream(buffer) {
+            private boolean closed;
+
+            @Override
+            public void close() throws IOException {
+                if (this.closed) {
+                    return;
+                }
+                this.closed = true;
+                try {
+                    super.close();
+                    final byte[] raw = buffer.toByteArray();
+                    final ByteBuffer normalized = raw.length == 0
+                        ? ByteBuffer.allocate(0)
+                        : LinearWritePath.normalizeWritePayload(ByteBuffer.wrap(raw));
+                    delegate.write(chunk, normalized);
+                } finally {
+                    markDirty();
+                }
+            }
+        };
     }
 
     // ---- lifecycle: core durability, then super cleanup + asset removal ----
@@ -183,7 +214,11 @@ public class HorizonLinearRegionFile extends RegionFile implements AbstractRegio
             try {
                 super.close();
             } finally {
+                // Stale assets after a crash are inert 0-byte files in the
+                // system temp dir, never in world folders; the dir only
+                // deletes when empty, so a shared dir is never disturbed.
                 Files.deleteIfExists(this.asset);
+                Files.deleteIfExists(this.assetDir);
             }
         }
     }

@@ -213,9 +213,24 @@ public class LinearPolicyTest {
     }
 
     @Test
+    public void overrideAcceptsBuffered() {
+        LinearFormatOverride.resetForTests();
+        try {
+            LinearFormatOverride.set("world", "B_LINEAR");
+            assertEquals("B_LINEAR", LinearFormatOverride.get("world"));
+            assertEquals(RegionFileFormat.B_LINEAR,
+                    LinearPolicy.resolveFormatWithOverride(null, "ANVIL", RegionFileFormat.ANVIL, "world"));
+            LinearFormatOverride.set("world", "bogus");
+            assertEquals(null, LinearFormatOverride.get("world"));
+        } finally {
+            LinearFormatOverride.resetForTests();
+        }
+    }
+
+    @Test
     public void messageFormatsExact() {        assertEquals("[region-format] sysprop linearmc.format=LINEAR overrides file ANVIL -> effective LINEAR (server)",
                 LinearPolicy.overrideLine("linearmc.format", "LINEAR", "ANVIL", "LINEAR", "server"));
-        assertEquals("[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL.",
+        assertEquals("[region-format] Unknown region format, expected ANVIL, LINEAR or B_LINEAR. Falling back to ANVIL.",
                 LinearPolicy.unknownFormatMessage());
         assertEquals("[region-format] linear.compression-level must be 1-22, got 99. Falling back to 6.",
                 LinearPolicy.badLevelMessage(99));

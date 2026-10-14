@@ -37,7 +37,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
  public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise.patches.chunk_system.io.ChunkSystemRegionFileStorage { // Paper - rewrite chunk system
      private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger(); // Paper
      public static final String ANVIL_EXTENSION = ".mca";
-+    public static final String LINEAR_EXTENSION = ".linear"; // Linear
++    public static final String LINEAR_EXTENSION = ".linear"; // Linear - linear family; see isLinearFamily for B_LINEAR
      private static final int MAX_CACHE_SIZE = 256;
 -    private final Long2ObjectLinkedOpenHashMap<RegionFile> regionCache = new Long2ObjectLinkedOpenHashMap<>();
 +    // Linear - cache widened from RegionFile to AbstractRegionFile so one cache
@@ -62,7 +62,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
      public static ChunkPos getRegionFileCoordinates(Path file) {
          String fileName = file.getFileName().toString();
 -        if (!fileName.startsWith("r.") || !fileName.endsWith(".mca")) {
-+        if (!fileName.startsWith("r.") || (!fileName.endsWith(ANVIL_EXTENSION) && !fileName.endsWith(LINEAR_EXTENSION))) { // Linear - accept .linear
++        if (!fileName.startsWith("r.") || (!fileName.endsWith(ANVIL_EXTENSION) && !fileName.endsWith(LINEAR_EXTENSION) && !fileName.endsWith(AbstractRegionFileFactory.B_LINEAR_EXTENSION))) { // Linear - accept .linear + .b_linear
              return null;
          }
  
@@ -95,7 +95,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +        //   if (!this.format.equals("LINEAR")) return;
 +        // would always be true (an enum never equals a String) and disable
 +        // the guard. Correct form:
-+        if (this.format != RegionFileFormat.LINEAR) return;
++        if (!RegionFileFormat.isLinearFamily(this.format)) return;
 +        if (!java.nio.file.Files.isSymbolicLink(path)) return;
 +        Path link = java.nio.file.Files.readSymbolicLink(path);
 +        if (!java.nio.file.Files.exists(link) || !java.nio.file.Files.isReadable(link)) {
@@ -158,8 +158,8 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 -        final Path regionPath = this.folder.resolve(getRegionFileName(chunkX, chunkZ));
 -
 -        if (!java.nio.file.Files.exists(regionPath)) {
-+        // Linear - dual-read probe owned by core (LinearStorageProbe.probeExisting:
-+        // .mca preferred, else .linear; null means "neither extension exists").
++        // Linear - triple-read probe owned by core (LinearStorageProbe.probeExisting:
++        // .mca preferred, else .linear, else .b_linear; null means "no extension exists").
 +        // The negative cache stays keyed by region long.
 +        final Path regionPath = net.linear.LinearStorageProbe.probeExisting(
 +            this.folder, chunkX >> REGION_SHIFT, chunkZ >> REGION_SHIFT);
@@ -322,7 +322,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
                      return null;
                  }
  
-@@ -255,55 +374,178 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -255,55 +374,179 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
  
              return ret;
              // Paper end - Attempt to recalculate regionfile header if it is corrupt
@@ -409,6 +409,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +        net.linear.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) ->
 +            (AbstractRegionFile)(Object) new RegionFile((RegionStorageInfo) info, file, dir, sync));
 +        net.linear.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
++        net.linear.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
 +        // Linear - reverse writer injection (core owns dispatch, legs own NMS):
 +        // raw NBT from the linear source is enveloped by the NMS sink.
 +        net.linear.LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) ->
@@ -599,7 +600,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
              // Paper start - rewrite chunk system
              if (region == null) {
                  // if the RegionFile doesn't exist, no point in deleting from it
-@@ -406,56 +620,110 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -406,56 +620,125 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              }
              // Paper end - rewrite chunk system
              if (value == null) {
@@ -716,18 +717,35 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 -                } catch (final IOException ex) {
 -                    exceptionCollector.add(ex);
 -                }
-+            snapshot = new java.util.ArrayList<>(this.regionCache.values());
-+        }
-+        final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
-+        for (final AbstractRegionFile regionFile : snapshot) {
-+            try {
-+                regionFile.flush();
-+            } catch (final IOException ex) {
-+                exceptionCollector.add(ex);
-             }
+-            }
 -
 -            exceptionCollector.throwIfPresent();
-         }
+-        }
++            snapshot = new java.util.ArrayList<>(this.regionCache.values());
++        }
++        // Shared parallel fan-out (durability barrier) for linear files:
++        // per-file flushes are independent, so a serial loop over hundreds
++        // of multi-MB masters costs minutes at shutdown (measured 91 s in one
++        // saveRegionChunks pass). Vanilla/anvil files keep their exact old
++        // behavior below (unconditional flush + force, errors collected and
++        // thrown) — only linear files move to the barrier, where failures
++        // are logged + counted in linearstats and requeued, never thrown.
++        final java.util.List<AbstractRegionFile> linearFiles =
++            new java.util.ArrayList<>(snapshot.size());
++        final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
++        for (final AbstractRegionFile regionFile : snapshot) {
++            if (regionFile instanceof net.linear.LinearRegionFile
++                    || regionFile instanceof net.linear.BufferedLinearRegionFile) {
++                linearFiles.add(regionFile);
++            } else {
++                try {
++                    regionFile.flush();
++                } catch (final IOException ex) {
++                    exceptionCollector.add(ex);
++                }
++            }
++        }
++        LinearFlushCoordinator.forFolder(this.folder).linear$flushSnapshot(linearFiles, true);
 +
 +        exceptionCollector.throwIfPresent();
          // Paper end - rewrite chunk system

@@ -2,6 +2,7 @@ package net.linear.config;
 
 import java.util.Objects;
 import java.util.Optional;
+import net.linear.LinearImplementation;
 import net.linear.RegionFileFormat;
 
 /**
@@ -18,6 +19,8 @@ public final class LinearFileConfig {
 
     private static volatile String fileFormatRaw;
     private static volatile Integer fileLevelRaw;
+    private static volatile String fileImplementationRaw;
+    private static volatile Integer fileGridSizeRaw;
 
     private LinearFileConfig() {
     }
@@ -28,6 +31,17 @@ public final class LinearFileConfig {
     public static void setFileValues(String format, Integer level) {
         fileFormatRaw = format;
         fileLevelRaw = level;
+    }
+
+    /**
+     * Pushes the raw writer file values ({@code null} when unset):
+     * {@code region-format.linear.implementation} and
+     * {@code region-format.linear.grid-size}. Additive: existing
+     * {@link #setFileValues} call sites keep working.
+     */
+    public static void setFileWriterValues(String implementation, Integer gridSize) {
+        fileImplementationRaw = implementation;
+        fileGridSizeRaw = gridSize;
     }
 
     /** Raw {@code region-format.format} from the file, or {@code null}. */
@@ -62,10 +76,42 @@ public final class LinearFileConfig {
             LinearPolicy.DEFAULT_LEVEL);
     }
 
+    /** Raw {@code region-format.linear.implementation} from the file, or {@code null}. */
+    public static String fileImplementation() {
+        return fileImplementationRaw;
+    }
+
+    /** Raw {@code region-format.linear.grid-size} from the file, or {@code null}. */
+    public static Integer fileGridSize() {
+        return fileGridSizeRaw;
+    }
+
+    /**
+     * No-arg convenience: sysprop wins over the cached file value, which
+     * wins over the shipped {@code V1} default.
+     */
+    public static LinearImplementation resolveImplementation() {
+        return LinearPolicy.resolveImplementation(
+            System.getProperty(LinearPolicy.SYSPROP_IMPLEMENTATION),
+            fileImplementationRaw);
+    }
+
+    /**
+     * No-arg convenience: sysprop wins over the cached file value, which
+     * wins over the shipped {@code 8} default.
+     */
+    public static int resolveGridSize() {
+        return LinearPolicy.resolveGridSize(
+            System.getProperty(LinearPolicy.SYSPROP_GRID_SIZE),
+            fileGridSizeRaw);
+    }
+
     /**
      * Sysprop-override log line for {@code key}
-     * ({@link LinearPolicy#SYSPROP_FORMAT} or
-     * {@link LinearPolicy#SYSPROP_LEVEL}).
+     * ({@link LinearPolicy#SYSPROP_FORMAT},
+     * {@link LinearPolicy#SYSPROP_LEVEL},
+     * {@link LinearPolicy#SYSPROP_IMPLEMENTATION} or
+     * {@link LinearPolicy#SYSPROP_GRID_SIZE}).
      *
      * <p>Present iff the sysprop is set (non-null) and its trimmed value
      * differs from the cached file value ({@code String.valueOf}, matching
@@ -94,6 +140,22 @@ public final class LinearFileConfig {
             }
             return Optional.of(LinearPolicy.overrideLine(
                 key, raw, fileValue, String.valueOf(resolveLevel()), "server"));
+        }
+        if (LinearPolicy.SYSPROP_IMPLEMENTATION.equals(key)) {
+            String fileValue = String.valueOf(fileImplementationRaw);
+            if (raw.trim().equals(fileValue)) {
+                return Optional.empty();
+            }
+            return Optional.of(LinearPolicy.overrideLine(
+                key, raw, fileValue, resolveImplementation().name(), "server"));
+        }
+        if (LinearPolicy.SYSPROP_GRID_SIZE.equals(key)) {
+            String fileValue = String.valueOf(fileGridSizeRaw);
+            if (raw.trim().equals(fileValue)) {
+                return Optional.empty();
+            }
+            return Optional.of(LinearPolicy.overrideLine(
+                key, raw, fileValue, String.valueOf(resolveGridSize()), "server"));
         }
         return Optional.empty();
     }

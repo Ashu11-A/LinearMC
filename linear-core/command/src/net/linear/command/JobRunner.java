@@ -43,8 +43,11 @@ public final class JobRunner {
      * per-file outcome on {@code job} and completing (or failing) it at the
      * end. Direction comes from the job: {@code MCA_TO_LINEAR} converts
      * forward, {@code LINEAR_TO_MCA} converts back (both validate before
-     * deleting sources). {@code threads} is the recorded request; pool width
-     * stays converter-owned.
+     * deleting sources). Explicit Phase-3 jobs ({@link ConvertJob#isExplicit})
+     * route via {@code from/to} (any-to-any, including same-extension
+     * {@code .linear} vs {@code .linear} via tmp+atomic-swap); legacy jobs keep
+     * the union-per-target routing byte-identically. {@code threads} is the
+     * recorded request; pool width stays converter-owned.
      */
     public static void run(ConvertJob job, List<Path> folders, int level, int threads) {
         if (job == null) {
@@ -90,10 +93,25 @@ public final class JobRunner {
                 return;
             }
             try {
-                if (job.direction() == ConvertDirection.LINEAR_TO_MCA) {
+                if (job.isExplicit()) {
+                    // Explicit-only (FR3): no silent cross-format rewrite; same-extension
+                    // converts swap atomically after pre-swap validation (never in-place).
+                    net.linear.LinearRegionConverter.ConvertFormat from = job.fromFormat();
+                    net.linear.LinearRegionConverter.ConvertFormat to = job.toFormat();
+                    LinearRegionConverter.convertRegionFolderExplicit(folder, level, job.gridSize(),
+                        listener, false, from, to);
+                } else {
+                // Union-per-target: every convertible non-target file converts
+                // (e.g. toward LINEAR, both .mca and .b_linear sources queue).
+                net.linear.RegionFileFormat target = job.direction().targetFormat();
+                if (target == net.linear.RegionFileFormat.ANVIL) {
                     LinearRegionConverter.convertRegionFolderReverse(folder, level, listener, false);
+                } else if (target == net.linear.RegionFileFormat.B_LINEAR) {
+                    LinearRegionConverter.convertRegionFolderToFormat(folder, level, listener, false,
+                        net.linear.RegionFileFormat.B_LINEAR);
                 } else {
                     LinearRegionConverter.convertRegionFolder(folder, level, listener, false);
+                }
                 }
             } catch (LinearRegionConverter.ConversionProtectionException failed) {
                 if (job.state() == JobState.CANCELLED) {

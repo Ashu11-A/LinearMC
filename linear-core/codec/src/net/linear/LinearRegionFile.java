@@ -1,12 +1,8 @@
 package net.linear;
 
-import com.github.luben.zstd.ZstdInputStream;
-import com.github.luben.zstd.ZstdOutputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -18,20 +14,34 @@ import java.util.concurrent.atomic.LongAccumulator;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantLock;
 import net.jpountz.lz4.LZ4Factory;
+import net.linear.config.LinearFileConfig;
+import net.linear.config.LinearPolicy;
+import net.linear.versions.ChunkSlotTable;
+import net.linear.versions.PumpkinLinear;
+import net.linear.versions.RegionFormatDetector;
+import net.linear.versions.V1Linear;
+import net.linear.versions.V2Linear;
+import net.linear.versions.V3Linear;
+import net.linear.versions.Version;
+import net.linear.versions.VersionWriteParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Xymb Linear region file (v2 writer, v1/v2 reader) for the Linear Folia fork.
+ * Xymb Linear region file (V1/V2/V3 reader, configurable V1/V2/V3 writer) for the Linear Folia fork.
  *
  * <h2>On-disk format (big-endian, identical to the reference {@code linear.py})</h2>
  * <pre>
- *   header (32 B): int64 SUPERBLOCK, uint8 VERSION=2, int64 newestTimestamp,
+ *   V1 (wire 1/2) header (32 B): int64 SUPERBLOCK, uint8 VERSION, int64 newestTimestamp,
  *                  int8 compressionLevel, int16 chunkCount, int32 compressedLength,
  *                  int64 reserved(0)
- *   body:          zstd blob (integrity-checked) of [1024 x (int32 size, int32 timestamp)]
+ *   V1 body:       zstd blob (integrity-checked) of [1024 x (int32 size, int32 timestamp)]
  *                  followed by the raw chunk payloads concatenated in slot order
- *   footer (8 B):  int64 SUPERBLOCK
+ *   V1 footer (8 B): int64 SUPERBLOCK
+ *   V2 (wire 3) / V3 (wire 4): DivineMC bucketed layout, one zstd frame per
+ *                  grid bucket with per-bucket xxhash64 (see {@link LinearBucketReader}).
+ *                  Read into the same slot tables; flushed in the configured
+ *                  write implementation (see {@link #linear$writeImplementation()}).
  * </pre>
  * Chunk payloads are opaque bytes: whatever {@link #write} is given is returned
  * verbatim by {@link #getChunkDataInputStream}. No {@code .mcc} oversized sidecar
@@ -81,19 +91,23 @@ public final class LinearRegionFile implements AbstractRegionFile {
 
     /** Magic opening/closing a region file. Also the signed form -4323716122432332390L. */
     private static final long SUPERBLOCK = 0xC3FF13183CCA9D9AL;
-    /** Version written by this class. */
-    private static final byte VERSION_WRITE = 2;
-    /** Oldest version accepted on read (LinearPaper wrote 1 with zeroed timestamps). */
-    private static final byte VERSION_MIN = 1;
-    /** Latest version accepted on read. */
-    private static final byte VERSION_MAX = 2;
+    /** Hard cap guarding the single direct load allocation against corrupt lengths. */
+    private static final long MAX_REGION_FILE_BYTES = 1024L * 1024L * 1024L;
+    /**
+     * Hard cap on summed decompressed payloads per region, enforced identically
+     * on every write path (V1 image, V2/V3 buckets, buffered master) and on
+     * load: a flush must never emit a file its own reader rejects, and no
+     * crafted table may turn a small file into a multi-gigabyte staging
+     * allocation (decompression-bomb guard).
+     *
+     * <p>Public so the {@code net.linear.versions} codecs enforce the same
+     * single bound.</p>
+     */
+    public static final long MAX_IMAGE_BYTES = MAX_REGION_FILE_BYTES - 65536L;
 
     private static final int SLOTS = 32 * 32;
     private static final int HEADER_SIZE = 8 + 1 + 8 + 1 + 2 + 4 + 8; // 32
     private static final int FOOTER_SIZE = 8;
-    private static final int TABLE_SIZE = SLOTS * 8; // 8192
-    /** Absolute file offset of the int32 compressedLength field inside the header. */
-    private static final int LENGTH_FIELD_OFFSET = 8 + 1 + 8 + 1 + 2; // 20
 
     /** Same bound as vanilla RegionFile: oversized external (.mcc) files are unsupported, so fail loudly instead. */
     public static final int MAX_CHUNK_SIZE = 500 * 1024 * 1024;
@@ -120,6 +134,8 @@ public final class LinearRegionFile implements AbstractRegionFile {
 
     private final Path file;
     private final int compressionLevel;
+    /** Cached parent folder for coordinator reporting (avoids per-op getParent lookups). */
+    private final Path parentDir;
 
     // Linear: lock-free per-file timing groups. Hot updates use
     // LongAdder/LongAccumulator only (no synchronized); add() calls run AFTER
@@ -150,6 +166,19 @@ public final class LinearRegionFile implements AbstractRegionFile {
     private volatile boolean dirty;
     private volatile boolean closed;
 
+    /** On-disk implementation this file writes (read accepts V1/V2/V3 regardless). */
+    private final LinearImplementation writeImplementation;
+    /** Bucket grid size for V2/V3 writes (ignored for V1). */
+    private final int gridSize;
+    /**
+     * Format detected at open (null when created empty: no file was loaded).
+     * Pumpkin-loaded files flush back as Pumpkin (preserve-on-flush); every
+     * other format flushes in the configured write implementation.
+     */
+    private volatile RegionFormatDetector.DetectedFormat detectedFormat;
+    /** Bucket grid encoded in a Pumpkin-loaded file (0 unless detected as Pumpkin). */
+    private volatile int detectedGrid;
+
     /**
      * Opens (or creates empty state for) the region file at {@code file}.
      *
@@ -157,12 +186,51 @@ public final class LinearRegionFile implements AbstractRegionFile {
      * @param compressionLevel zstd level used by {@link #flush()}; clamped to 1..22
      */
     public LinearRegionFile(final Path file, final int compressionLevel) throws IOException {
+        this(file, compressionLevel, LinearFileConfig.resolveImplementation(), LinearFileConfig.resolveGridSize());
+    }
+
+    /**
+     * Opens with an explicit write implementation and grid size.
+     *
+     * @param file region file path ({@code r.<x>.<z>.linear})
+     * @param compressionLevel zstd level used by {@link #flush()}; clamped to 1..22
+     * @param writeImplementation V1 (single blob), V2/V3 (bucketed); {@code null} yields V1
+     * @param gridSize bucket grid for V2/V3; off-whitelist yields 8
+     */
+    public LinearRegionFile(final Path file, final int compressionLevel,
+            final LinearImplementation writeImplementation, final int gridSize) throws IOException {
         this.file = Objects.requireNonNull(file, "file");
-        this.compressionLevel = Math.max(1, Math.min(22, compressionLevel));
+        this.compressionLevel = RegionFileFormat.clampCompressionLevel(compressionLevel);
+        this.writeImplementation = writeImplementation != null ? writeImplementation : LinearImplementation.V1;
+        this.gridSize = LinearBucketGrid.isValid(gridSize) ? gridSize : LinearPolicy.DEFAULT_GRID_SIZE;
+        this.parentDir = file.toAbsolutePath().getParent();
         createParentDirs(file);
         if (Files.isRegularFile(file) && Files.size(file) > 0L) {
             this.load();
         }
+    }
+
+    /** Write implementation selected at open (V1 unless configured). */
+    public LinearImplementation linear$writeImplementation() {
+        return this.writeImplementation;
+    }
+
+    /** Bucket grid size used for V2/V3 writes. */
+    public int linear$gridSize() {
+        return this.gridSize;
+    }
+
+    /**
+     * Format detected at open ({@code null} when created empty and nothing
+     * was loaded). Used by tests and the converter's per-file format checks.
+     */
+    public RegionFormatDetector.DetectedFormat linear$detectedFormat() {
+        return this.detectedFormat;
+    }
+
+    /** Bucket grid encoded in a Pumpkin-loaded file (0 unless Pumpkin was detected). */
+    public int linear$detectedGrid() {
+        return this.detectedGrid;
     }
 
     /**
@@ -246,7 +314,13 @@ public final class LinearRegionFile implements AbstractRegionFile {
         final ByteBuffer frame = src.duplicate();
         // NB: the fast decompressor returns the input frame length,
         // not dst bytes written; an over/under-run throws out of the call itself.
-        final int consumed = LZ4.fastDecompressor().decompress(frame, frame.position(), out, 0, size);
+        final int consumed;
+        try {
+            consumed = LZ4.fastDecompressor().decompress(frame, frame.position(), out, 0, size);
+        } catch (RuntimeException e) {
+            throw new IOException("LZ4 decompress failed for chunk " + ChunkKey.format(chunk)
+                + " in " + this.file + ": " + e.getMessage(), e);
+        }
         if (consumed != frame.remaining()) {
             throw new IOException("LZ4 frame mismatch for chunk " + ChunkKey.format(chunk) + " in " + this.file
                 + ": frame is " + frame.remaining() + " bytes, decompressor consumed " + consumed);
@@ -262,12 +336,8 @@ public final class LinearRegionFile implements AbstractRegionFile {
             this.readTotalMicros.add(micros);
             this.readMaxMicros.accumulate(micros);
             try {
-                Path parent = this.file.getParent();
-                if (parent == null) {
-                    parent = this.file.toAbsolutePath().getParent();
-                }
-                if (parent != null) {
-                    LinearFlushCoordinator.forFolder(parent).recordRead(micros);
+                if (this.parentDir != null) {
+                    LinearFlushCoordinator.forFolder(this.parentDir).recordRead(micros);
                 }
             } catch (RuntimeException ignored) {
             }
@@ -295,6 +365,7 @@ public final class LinearRegionFile implements AbstractRegionFile {
         if (size <= 0) {
             this.slotLock.lock();
             try {
+                ensureOpen();
                 this.compressed[index] = null;
                 this.uncompressedSize[index] = 0;
                 this.timestamps[index] = nowSeconds();
@@ -302,22 +373,19 @@ public final class LinearRegionFile implements AbstractRegionFile {
             } finally {
                 this.slotLock.unlock();
             }
+            reportDirty();
             return;
         }
         if (size > MAX_CHUNK_SIZE) {
             // Linear: oversize-throw records then rethrows unchanged.
             try {
-                Path parent = this.file.getParent();
-                if (parent == null) {
-                    parent = this.file.toAbsolutePath().getParent();
-                }
-                if (parent != null) {
-                    LinearFlushCoordinator.forFolder(parent).recordOversizeReject();
+                if (this.parentDir != null) {
+                    LinearFlushCoordinator.forFolder(this.parentDir).recordOversizeReject();
                 }
             } catch (RuntimeException ignored) {
             }
             throw new IOException("Chunk " + ChunkKey.format(chunk) + " is " + size + " bytes, exceeds " + MAX_CHUNK_SIZE
-                + "; oversized .mcc external files are unsupported");
+                + " in " + this.file + "; oversized .mcc external files are unsupported");
         }
 
         // Copy + compress outside the lock so the critical section stays tiny.
@@ -333,6 +401,7 @@ public final class LinearRegionFile implements AbstractRegionFile {
 
         this.slotLock.lock();
         try {
+            ensureOpen();
             this.compressed[index] = stored;
             this.uncompressedSize[index] = size;
             this.timestamps[index] = nowSeconds();
@@ -340,18 +409,15 @@ public final class LinearRegionFile implements AbstractRegionFile {
         } finally {
             this.slotLock.unlock();
         }
+        reportDirty();
         } finally {
             final long micros = (System.nanoTime() - startNanos) / 1000L;
             this.writeCount.increment();
             this.writeTotalMicros.add(micros);
             this.writeMaxMicros.accumulate(micros);
             try {
-                Path parent = this.file.getParent();
-                if (parent == null) {
-                    parent = this.file.toAbsolutePath().getParent();
-                }
-                if (parent != null) {
-                    LinearFlushCoordinator.forFolder(parent).recordWrite(micros);
+                if (this.parentDir != null) {
+                    LinearFlushCoordinator.forFolder(this.parentDir).recordWrite(micros);
                 }
             } catch (RuntimeException ignored) {
             }
@@ -434,13 +500,66 @@ public final class LinearRegionFile implements AbstractRegionFile {
         this.slotLock.lock();
         try {
             if (this.closed) {
-                return;
+                if (!this.dirty) {
+                    return;
+                }
+                // Previous close() failed after setting closed: retry the drain below.
+            } else {
+                this.closed = true;
             }
-            this.closed = true;
         } finally {
             this.slotLock.unlock();
         }
-        this.doFlush();
+        // A write that passed ensureOpen before closed was set may re-dirty
+        // after the first snapshot; drain until clean so close never drops it.
+        // A failed flush re-arms dirty (doFlush) and is retried once below;
+        // a second failure propagates with dirty intact (caller inspects).
+        // doFlush only throws IOException/RuntimeException/Error; unchecked
+        // failures are retried the same way so a transient zstd/LZ4 fault
+        // does not strand acknowledged writes.
+        IOException firstIoFailure = null;
+        RuntimeException firstRuntimeFailure = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                this.doFlush();
+            } catch (IOException e) {
+                if (firstIoFailure == null) {
+                    firstIoFailure = e;
+                }
+            } catch (RuntimeException e) {
+                if (firstRuntimeFailure == null) {
+                    firstRuntimeFailure = e;
+                }
+            }
+            this.slotLock.lock();
+            boolean stillDirty;
+            try {
+                stillDirty = this.dirty;
+            } finally {
+                this.slotLock.unlock();
+            }
+            if (!stillDirty) {
+                return;
+            }
+        }
+        this.slotLock.lock();
+        try {
+            if (this.dirty) {
+                if (firstRuntimeFailure != null) {
+                    throw firstRuntimeFailure;
+                }
+                throw firstIoFailure != null ? firstIoFailure
+                    : new IOException("Unflushed writes remain on close of " + this.file);
+            }
+        } finally {
+            this.slotLock.unlock();
+        }
+        if (firstRuntimeFailure != null) {
+            throw firstRuntimeFailure;
+        }
+        if (firstIoFailure != null) {
+            throw firstIoFailure;
+        }
     }
 
     // internal
@@ -454,15 +573,15 @@ public final class LinearRegionFile implements AbstractRegionFile {
         // (failures re-mark dirty and retry; see flushOk).
         boolean didIo = false;
         boolean flushOk = false;
+        Path tmp = null;
         this.flushGuard.lock();
         final long startNanos = System.nanoTime();
         try {
         try {
-            final ByteBuffer[] snapPacked = new ByteBuffer[SLOTS];
-            final int[] snapSize = new int[SLOTS];
-            final int[] snapTime = new int[SLOTS];
+            final ChunkSlotTable snapshot = new ChunkSlotTable();
             int chunkCount = 0;
             long newest = 0L;
+            long totalRaw = 0L;
 
             this.slotLock.lock();
             try {
@@ -470,13 +589,14 @@ public final class LinearRegionFile implements AbstractRegionFile {
                     return;
                 }
                 for (int i = 0; i < SLOTS; i++) {
-                    snapPacked[i] = this.compressed[i];
-                    snapSize[i] = this.uncompressedSize[i];
-                    snapTime[i] = this.timestamps[i];
-                    if (snapSize[i] > 0) {
+                    snapshot.lz4Payloads[i] = this.compressed[i];
+                    snapshot.uncompressedSize[i] = this.uncompressedSize[i];
+                    snapshot.timestamps[i] = this.timestamps[i];
+                    if (snapshot.uncompressedSize[i] > 0) {
                         chunkCount++;
-                        if ((snapTime[i] & 0xFFFFFFFFL) > newest) {
-                            newest = snapTime[i] & 0xFFFFFFFFL;
+                        totalRaw += snapshot.uncompressedSize[i];
+                        if ((snapshot.timestamps[i] & 0xFFFFFFFFL) > newest) {
+                            newest = snapshot.timestamps[i] & 0xFFFFFFFFL;
                         }
                     }
                 }
@@ -488,112 +608,48 @@ public final class LinearRegionFile implements AbstractRegionFile {
             if (chunkCount == 0 && !Files.isRegularFile(this.file)) {
                 return; // never persisted and still empty: leave no file behind
             }
-            didIo = true; // Linear: past both clean-no-op exits, IO follows.
 
-            // Linear - decompress each LZ4 slot straight into its
-            // final offset in image (removes one full region copy; previously
-            // held plain[] AND image ~2x). Absolute LZ4 calls leave positions
-            // untouched, so the table puts + absolute decompresses compose.
-            long totalRaw = 0L;
-            for (int i = 0; i < SLOTS; i++) {
-                if (snapSize[i] > 0) {
-                    totalRaw += snapSize[i];
-                    if (totalRaw > (long) Integer.MAX_VALUE - TABLE_SIZE) {
-                        throw new IOException("Region image too large for " + this.file);
-                    }
-                }
+            final int[] coords =
+                LinearBucketWriter.parseRegionCoordinates(this.file.getFileName().toString());
+            // Pumpkin preserve-on-flush: no LinearImplementation exists for Pumpkin, so the
+            // configured implementation cannot express it; rewriting Rust-generated files
+            // unprompted is the dangerous direction, so a Pumpkin-loaded region keeps
+            // round-tripping as Pumpkin (grid + coords preserved). Files created empty
+            // (detectedFormat null) stay on the configured path.
+            final boolean preservePumpkin =
+                this.detectedFormat == RegionFormatDetector.DetectedFormat.PUMPKIN;
+            final Version version;
+            final VersionWriteParams params;
+            if (preservePumpkin) {
+                version = PumpkinLinear.shared();
+                params = new VersionWriteParams(
+                    this.compressionLevel, this.detectedGrid, coords[0], coords[1], newest,
+                    linear$resolveCompressionWorkers(), linear$resolveLongDistanceMatching());
+                LOGGER.debug("Preserving Pumpkin layout on flush of {} (grid {})",
+                    this.file, this.detectedGrid);
+            } else {
+                version = LinearBase.getShared(this.writeImplementation.version());
+                params = new VersionWriteParams(
+                    this.compressionLevel, this.gridSize, coords[0], coords[1], newest,
+                    linear$resolveCompressionWorkers(), linear$resolveLongDistanceMatching());
             }
+            // Pure buffer transform: the version codec renders the whole file
+            // image; tmp + fsync + atomic move below are unchanged. File
+            // context is re-attached here (codecs carry no path).
+            final ByteBuffer image;
+            try {
+                image = version.flush(snapshot, params);
+            } catch (IOException e) {
+                throw new IOException(e.getMessage() + " in " + this.file, e);
+            }
+            final int imageSize = image.remaining();
 
-            // Assemble the decompressed region image in one direct buffer.
-            final ByteBuffer image = ByteBuffer.allocateDirect(TABLE_SIZE + (int) totalRaw);
-            for (int i = 0; i < SLOTS; i++) {
-                image.putInt(snapSize[i]);
-                image.putInt(snapTime[i]);
-            }
-            long writeOffset = TABLE_SIZE;
-            for (int i = 0; i < SLOTS; i++) {
-                if (snapSize[i] > 0) {
-                    final ByteBuffer frame = snapPacked[i].duplicate();
-                    final int consumed = LZ4.fastDecompressor().decompress(
-                        frame, frame.position(), image, (int) writeOffset, snapSize[i]);
-                    if (consumed != frame.remaining()) {
-                        throw new IOException("LZ4 frame mismatch in slot " + i + " of " + this.file);
-                    }
-                    writeOffset += snapSize[i];
-                }
-            }
-            // Table puts advanced position to TABLE_SIZE; absolute decompresses
-            // did not move it, so position explicitly to the end before flip.
-            image.position((int) (TABLE_SIZE + totalRaw));
-            image.flip();
-
-            // Stream to tmp: header (length patched later) + zstd frame + footer.
-            // Length is patched positionally afterwards so the zstd body never
-            // needs to be buffered in memory first.
-            final Path tmp = this.file.resolveSibling(this.file.getFileName() + ".tmp");
+            tmp = this.file.resolveSibling(this.file.getFileName() + ".tmp");
             createParentDirs(tmp);
-            // Linear: hoisted for byte counters below (lock-free).
-            long packedForMetrics = 0L;
+            didIo = true; // Past validation: IO follows (validation failures bill nothing).
             try (FileChannel channel = FileChannel.open(tmp, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
-                final ByteBuffer header = ByteBuffer.allocateDirect(HEADER_SIZE);
-                header.putLong(SUPERBLOCK);
-                header.put(VERSION_WRITE);
-                header.putLong(newest);
-                header.put((byte) this.compressionLevel);
-                header.putShort((short) chunkCount);
-                header.putInt(0); // patched after the frame completes
-                header.putLong(0L); // reserved
-                header.flip();
-                LinearDirectStreams.writeFully(channel, header);
-
-                final OutputStream fileOut = LinearDirectStreams.uncloseable(Channels.newOutputStream(channel));
-                try (ZstdOutputStream zstd = new ZstdOutputStream(fileOut, this.compressionLevel)) {
-                    zstd.setChecksum(true);
-                    // Linear: writer setWorkers/setLong, both default 0 =
-                    // inert (serial, LDM off). MUST precede first write() or
-                    // IllegalStateException (fresh stream per flush, so
-                    // per-flush setters are safe). JNI caps setLong at
-                    // windowLog 27; workers at high levels show zero speedup
-                    // for large native cost; LDM at low levels is cheap.
-                    // MT at level 22 has zero speedup and ~690MB native cost.
-                    // NATIVE-MEMORY CAUTION: setWorkers(n) at high levels
-                    // reserves GBs (level 22 + workers=2 is +3.2GB VSZ for zero
-                    // gain, single 512MiB job); use workers only at low levels
-                    // (level <= ~9 where jobs exist). Level 22 + flush threads
-                    // >=4 can exhaust a 6GiB container.
-                    final int zstdWorkers = linear$resolveCompressionWorkers();
-                    if (zstdWorkers > 0) {
-                        zstd.setWorkers(zstdWorkers);
-                    }
-                    final int ldmWindow = linear$resolveLongDistanceMatching();
-                    if (ldmWindow >= 10 && ldmWindow <= 27) {
-                        zstd.setLong(ldmWindow);
-                    }
-                    // 0 or out-of-range = LDM off (do not call; JNI would
-                    // silently disable and reset windowLog to 0 anyway).
-                    final byte[] scratch = new byte[32 * 1024]; // single bounded pump buffer per flush
-                    while (image.hasRemaining()) {
-                        final int n = Math.min(scratch.length, image.remaining());
-                        image.get(scratch, 0, n);
-                        zstd.write(scratch, 0, n);
-                    }
-                }
-
-                final ByteBuffer footer = ByteBuffer.allocateDirect(FOOTER_SIZE);
-                footer.putLong(SUPERBLOCK);
-                footer.flip();
-                LinearDirectStreams.writeFully(channel, footer);
-
-                final long packedLength = channel.position() - HEADER_SIZE - FOOTER_SIZE;
-                if (packedLength < 0L || packedLength > Integer.MAX_VALUE) {
-                    throw new IOException("Invalid zstd frame length " + packedLength + " for " + this.file);
-                }
-                packedForMetrics = packedLength;
-                final ByteBuffer patch = ByteBuffer.allocateDirect(4);
-                patch.putInt((int) packedLength);
-                patch.flip();
-                channel.write(patch, LENGTH_FIELD_OFFSET);
+                LinearDirectStreams.writeFully(channel, image);
                 channel.force(true);
             }
 
@@ -603,25 +659,40 @@ public final class LinearRegionFile implements AbstractRegionFile {
                 Files.move(tmp, this.file, StandardCopyOption.REPLACE_EXISTING);
             }
             // Linear: byte counters (lock-free, no pool re-cut).
-            // totalRaw is the uncompressed image (TABLE_SIZE + payloads);
-            // packedForMetrics is the zstd frame. Recorded only on success
+            // totalRaw is the summed payload bytes; packed is the compressed
+            // body (table + bucket frames for V2/V3, zstd frame for V1),
+            // derived from the rendered image. Recorded only on success
             // (after move); failures re-mark dirty and record nothing here.
+            final int headerLength;
+            if (preservePumpkin) {
+                headerLength = PumpkinLinear.headerLength();
+            } else if (version.implementation() == LinearImplementation.V2) {
+                headerLength = V2Linear.headerLength();
+            } else if (version.implementation() == LinearImplementation.V3) {
+                headerLength = V3Linear.headerLength();
+            } else {
+                headerLength = V1Linear.headerLength();
+            }
+            final long packedForMetrics = (long) imageSize - headerLength - FOOTER_SIZE;
             try {
-                Path parent = this.file.getParent();
-                if (parent == null) {
-                    parent = this.file.toAbsolutePath().getParent();
-                }
-                if (parent != null) {
-                    LinearFlushCoordinator.forFolder(parent).recordFlushBytes(totalRaw, packedForMetrics);
+                if (this.parentDir != null) {
+                    LinearFlushCoordinator.forFolder(this.parentDir).recordFlushBytes(totalRaw, packedForMetrics);
                 }
             } catch (RuntimeException ignored) {
             }
             flushOk = true;
         } catch (final IOException e) {
             this.markDirty();
+            deleteQuietly(tmp);
             throw e;
         } catch (final RuntimeException e) {
             this.markDirty();
+            deleteQuietly(tmp);
+            throw e;
+        } catch (final Error e) {
+            // OOM/zstd-native Error must not leave acknowledged writes clean.
+            this.markDirty();
+            deleteQuietly(tmp);
             throw e;
         } finally {
             this.flushGuard.unlock();
@@ -633,12 +704,8 @@ public final class LinearRegionFile implements AbstractRegionFile {
                 this.flushTotalMicros.add(micros);
                 this.flushMaxMicros.accumulate(micros);
                 try {
-                    Path parent = this.file.getParent();
-                    if (parent == null) {
-                        parent = this.file.toAbsolutePath().getParent();
-                    }
-                    if (parent != null) {
-                        LinearFlushCoordinator.forFolder(parent).recordFlush(micros, flushOk);
+                    if (this.parentDir != null) {
+                        LinearFlushCoordinator.forFolder(this.parentDir).recordFlush(micros, flushOk);
                     }
                 } catch (RuntimeException ignored) {
                 }
@@ -650,13 +717,17 @@ public final class LinearRegionFile implements AbstractRegionFile {
         // Linear: load timing, recorded AFTER publish unlock/exit.
         final long startNanos = System.nanoTime();
         try {
-        final ByteBuffer[] staged = new ByteBuffer[SLOTS];
-        final int[] stagedSize = new int[SLOTS];
-        final int[] stagedTime = new int[SLOTS];
+        // Killed-flush orphan (forced-but-unmoved image): the master is old
+        // truth until the move lands, so a sibling .tmp is garbage. The
+        // storage layer holds one handle per region file, so no live flush
+        // can be authoring this path during open.
+        deleteQuietly(this.file.resolveSibling(this.file.getFileName() + ".tmp"));
+        final ChunkSlotTable staged = new ChunkSlotTable();
+        staged.sourceName = this.file.toString();
 
         try (FileChannel channel = FileChannel.open(this.file, StandardOpenOption.READ)) {
             final long fileLength = channel.size();
-            if (fileLength > Integer.MAX_VALUE) {
+            if (fileLength > MAX_REGION_FILE_BYTES) {
                 throw new IOException("Region file too large: " + this.file + " (" + fileLength + " bytes)");
             }
             if (fileLength < (long) HEADER_SIZE + FOOTER_SIZE) {
@@ -666,83 +737,66 @@ public final class LinearRegionFile implements AbstractRegionFile {
             LinearDirectStreams.readFully(channel, raw);
             raw.flip();
 
-            if (raw.getLong() != SUPERBLOCK) {
+            if (raw.getLong(0) != SUPERBLOCK) {
                 throw new IOException("Invalid superblock in " + this.file);
             }
-            final byte version = raw.get();
-            if (version < VERSION_MIN || version > VERSION_MAX) {
-                throw new IOException("Unsupported linear version " + version + " in " + this.file);
+            final int[] fileCoords =
+                LinearBucketWriter.parseRegionCoordinates(this.file.getFileName().toString());
+            final RegionFormatDetector.DetectedFormat detected;
+            try {
+                detected = RegionFormatDetector.shared().detect(raw, fileCoords[0], fileCoords[1]);
+            } catch (IOException e) {
+                throw new IOException(e.getMessage() + " in " + this.file, e);
             }
-            raw.getLong(); // newestTimestamp: recomputed on flush, informational only
-            raw.get(); // compressionLevel: informational, this instance keeps its own
-            final int expectedChunks = raw.getShort() & 0xFFFF;
-            final int packedLength = raw.getInt();
-            raw.getLong(); // reserved
-            if (packedLength < 0 || (long) HEADER_SIZE + packedLength + FOOTER_SIZE != fileLength) {
-                throw new IOException("Invalid packed length " + packedLength + " in " + this.file
-                    + " (file is " + fileLength + " bytes)");
+            final Version version;
+            switch (detected) {
+                case V1:
+                    version = V1Linear.shared();
+                    break;
+                case V2:
+                    version = V2Linear.shared();
+                    break;
+                case V3:
+                    version = V3Linear.shared();
+                    break;
+                case PUMPKIN:
+                    version = PumpkinLinear.shared();
+                    break;
+                default:
+                    throw new IOException("Unsupported linear layout " + detected + " in " + this.file);
             }
-            final ByteBuffer blob = raw.slice();
-            blob.limit(packedLength);
-            if (raw.getLong(HEADER_SIZE + packedLength) != SUPERBLOCK) {
-                throw new IOException("Invalid footer superblock in " + this.file);
+            // Pure buffer transform: the version codec validates its own
+            // magic/version/footer and fills the staged tables. File context
+            // is re-attached here (codecs carry no path).
+            try {
+                version.parse(raw, staged);
+            } catch (IOException e) {
+                throw new IOException(e.getMessage() + " in " + this.file, e);
             }
-
-            // Linear: reader setLongMax(27) ships WITH the writer
-            // (reader-first for any future windowLog>27). Harmless no-op
-            // today (decoder default already 27, setLong capped at 27 by
-            // JNI; LDM-27 frames decode with stock readers). Set immediately
-            // after construction, before first read(); only a
-            // setWindowLog(28..31) writer would need >27.
-            final ZstdInputStream zstdIn = new ZstdInputStream(LinearDirectStreams.wrap(blob));
-            zstdIn.setLongMax(27);
-            try (DataInputStream in = new DataInputStream(zstdIn)) {
-                final int[] sizes = new int[SLOTS];
-                final int[] times = new int[SLOTS];
-                long totalRaw = 0L;
-                int present = 0;
-                for (int i = 0; i < SLOTS; i++) {
-                    sizes[i] = in.readInt();
-                    times[i] = in.readInt();
-                    if (sizes[i] < 0 || sizes[i] > MAX_CHUNK_SIZE) {
-                        throw new IOException("Invalid chunk size " + sizes[i] + " in slot " + i + " of " + this.file);
-                    }
-                    if (sizes[i] > 0) {
-                        present++;
-                        totalRaw += sizes[i];
-                        if (totalRaw > (long) Integer.MAX_VALUE - TABLE_SIZE) {
-                            throw new IOException("Region image too large in " + this.file);
-                        }
-                    }
-                }
-                if (present != expectedChunks) {
-                    // Tolerate (LinearPaper-era and third-party tools disagree on
-                    // edge cases); the table itself is authoritative.
-                    LOGGER.warn("Chunk count mismatch in {}: header says {}, table has {}", this.file, expectedChunks, present);
-                }
-                for (int i = 0; i < SLOTS; i++) {
-                    if (sizes[i] > 0) {
-                        // Cold path (open): exact heap read, then direct LZ4 staging.
-                        final byte[] payload = in.readNBytes(sizes[i]);
-                        if (payload.length != sizes[i]) {
-                            throw new IOException("Truncated payload in slot " + i + " of " + this.file);
-                        }
-                        staged[i] = lz4Pack(ByteBuffer.wrap(payload));
-                        stagedSize[i] = sizes[i];
-                        stagedTime[i] = times[i];
-                    }
-                }
-                if (in.read() != -1) {
-                    throw new IOException("Trailing bytes after payloads in " + this.file);
-                }
+            try {
+                this.detectedFormat = detected;
+                this.detectedGrid = RegionFormatDetector.shared().gridOf(raw, detected);
+            } catch (IOException e) {
+                throw new IOException(e.getMessage() + " in " + this.file, e);
+            }
+            final byte wire = raw.get(8);
+            final LinearImplementation impl = version.implementation();
+            if (detected == RegionFormatDetector.DetectedFormat.PUMPKIN) {
+                LOGGER.info("Loaded {} as PUMPKIN; preserving Pumpkin layout on flush (grid {})",
+                    this.file, this.detectedGrid);
+            } else if (impl == LinearImplementation.V2 || impl == LinearImplementation.V3) {
+                // DivineMC bucketed layout: inflated into the V1 slot tables.
+                // Next flush rewrites in the configured write implementation.
+                LOGGER.info("Loaded {} as {} (wire {}); will rewrite as {} on next flush",
+                    this.file, impl, wire & 0xFF, this.writeImplementation);
             }
         }
 
         this.slotLock.lock();
         try {
-            System.arraycopy(staged, 0, this.compressed, 0, SLOTS);
-            System.arraycopy(stagedSize, 0, this.uncompressedSize, 0, SLOTS);
-            System.arraycopy(stagedTime, 0, this.timestamps, 0, SLOTS);
+            System.arraycopy(staged.lz4Payloads, 0, this.compressed, 0, SLOTS);
+            System.arraycopy(staged.uncompressedSize, 0, this.uncompressedSize, 0, SLOTS);
+            System.arraycopy(staged.timestamps, 0, this.timestamps, 0, SLOTS);
             this.dirty = false;
         } finally {
             this.slotLock.unlock();
@@ -753,26 +807,12 @@ public final class LinearRegionFile implements AbstractRegionFile {
             this.loadTotalMicros.add(micros);
             this.loadMaxMicros.accumulate(micros);
             try {
-                Path parent = this.file.getParent();
-                if (parent == null) {
-                    parent = this.file.toAbsolutePath().getParent();
-                }
-                if (parent != null) {
-                    LinearFlushCoordinator.forFolder(parent).recordLoad(micros);
+                if (this.parentDir != null) {
+                    LinearFlushCoordinator.forFolder(this.parentDir).recordLoad(micros);
                 }
             } catch (RuntimeException ignored) {
             }
         }
-    }
-
-    private static ByteBuffer lz4Pack(final ByteBuffer plain) {
-        final int size = plain.remaining();
-        final int maxCompressed = LZ4.fastCompressor().maxCompressedLength(size);
-        final ByteBuffer packed = ByteBuffer.allocateDirect(maxCompressed);
-        final int packedSize = LZ4.fastCompressor().compress(plain, plain.position(), size, packed, 0, maxCompressed);
-        packed.position(0);
-        packed.limit(packedSize);
-        return packed.slice().asReadOnlyBuffer();
     }
 
     private void markDirty() {
@@ -781,6 +821,30 @@ public final class LinearRegionFile implements AbstractRegionFile {
             this.dirty = true;
         } finally {
             this.slotLock.unlock();
+        }
+    }
+
+    /**
+     * Self-reporting: every mutation path reports to the folder coordinator,
+     * so no acknowledged write depends on the caller remembering to report.
+     * Best-effort (bytes are already staged); idempotent coalescing in the
+     * coordinator makes duplicate reports from leg-level call sites harmless.
+     */
+    private void reportDirty() {
+        try {
+            if (this.parentDir != null) {
+                LinearFlushCoordinator.forFolder(this.parentDir).markDirty(this);
+            }
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private static void deleteQuietly(Path tmp) {
+        try {
+            if (tmp != null) {
+                Files.deleteIfExists(tmp);
+            }
+        } catch (IOException | RuntimeException ignored) {
         }
     }
 

@@ -6,8 +6,14 @@ global:
       compression-workers: 0
       long-distance-matching: 0
       log-flush-batches: false
+      # V1 (single blob), V2/V3 (bucketed DivineMC-compatible). Writers only;
+      # readers accept all versions regardless. Default V1.
+      implementation: V1
+      # Bucket grid for V2/V3 writes: 1, 2, 4, 8, 16 or 32. Default 8.
+      grid-size: 8
 world-defaults:
   region-format:
+    # ANVIL, LINEAR or B_LINEAR (buffered). New files only; reads probe all.
     format: LINEAR
     linear:
       compression-level: 6

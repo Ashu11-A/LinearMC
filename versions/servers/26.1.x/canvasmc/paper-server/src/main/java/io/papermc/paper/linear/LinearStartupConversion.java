@@ -107,13 +107,14 @@ public final class LinearStartupConversion {
         }
         // P1 SAFETY INVARIANT (negative assertion): resolveTargetFormat returns
         // ANVIL for explicit-ANVIL worlds (and for unset/invalid values), and
-        // conversion below runs ONLY when the returned target is LINEAR. Hence
-        // NO explicit-ANVIL path can reach conversion: dual-read (.mca
-        // preferred, negative cache means neither) keeps serving those worlds.
+        // conversion below runs ONLY when the returned target is linear-family
+        // (LINEAR or B_LINEAR). Hence
+        // NO explicit-ANVIL path can reach conversion: triple-read (.mca
+        // preferred, negative cache means none) keeps serving those worlds.
         // The canvas target already carries the core enum (no mapping step).
         final net.linear.RegionFileFormat target = RegionStorageUpgrader.resolveTargetFormat(
             worldFolder, canvasTarget.format);
-        if (target != net.linear.RegionFileFormat.LINEAR) {
+        if (!net.linear.RegionFileFormat.isLinearFamily(target)) {
             return true;
         }
         // Same configured level the live write side uses (B1's tuned default flows
@@ -132,10 +133,12 @@ public final class LinearStartupConversion {
             if (!Files.isDirectory(folder) || !RegionStorageUpgrader.needsConversion(folder)) {
                 continue;
             }
-            LOGGER.info("[Linear] Startup conversion: converting {} to LINEAR (level {})...", folder, compressionLevel);
+            LOGGER.info("[Linear] Startup conversion: converting {} to {} (level {})...", folder, target, compressionLevel);
             try {
-                final LinearRegionConverter.ConversionSummary summary = RegionStorageUpgrader.convertFolderToLinear(
-                    folder, compressionLevel, new LogListener(folder));
+                final LinearRegionConverter.ConversionSummary summary = target == net.linear.RegionFileFormat.B_LINEAR
+                    ? RegionStorageUpgrader.convertFolderToBuffered(folder, compressionLevel, new LogListener(folder))
+                    : RegionStorageUpgrader.convertFolderToLinear(
+                        folder, compressionLevel, new LogListener(folder));
                 LOGGER.info("[Linear] Startup conversion done: {} (converted={}, validated={}, deleted={}, failed={}).",
                     folder, summary.converted(), summary.validated(), summary.deleted(), summary.failed());
             } catch (final LinearRegionConverter.ConversionProtectionException ex) {

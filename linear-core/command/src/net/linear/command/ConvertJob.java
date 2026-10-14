@@ -49,6 +49,22 @@ public final class ConvertJob {
     private final int totalFiles;
     private final long startedAtMs;
 
+    /**
+     * Explicit layout filter for Phase-3 any-to-any jobs (FR3).
+     *
+     * <p>Design choice (documented per contract): the 6-value {@code ConvertDirection}
+     * enum is extension-based and cannot express same-extension pairs
+     * ({@code .linear} vs {@code .linear}: V1/V2/V3/PUMPKIN share one extension).
+     * The enum stays byte-identical for the 6 legacy pairs; explicit jobs carry
+     * layout-level {@code from/to} here instead. {@code from==AUTO} (default) means
+     * detect; {@code to==null} means legacy (route via {@code direction()} only).
+     * {@code grid==0} means unspecified (format default: Pumpkin 2, V2/V3 8).
+     */
+    private volatile net.linear.LinearRegionConverter.ConvertFormat fromFormat =
+        net.linear.LinearRegionConverter.ConvertFormat.AUTO;
+    private volatile net.linear.LinearRegionConverter.ConvertFormat toFormat = null;
+    private volatile int gridSize = 0;
+
     private volatile JobState state;
     private volatile long updatedAtMs;
     private volatile long runStartedAtMs;
@@ -114,6 +130,42 @@ public final class ConvertJob {
 
     public ConvertDirection direction() {
         return this.direction;
+    }
+
+    /** Explicit {@code --from} filter ({@code AUTO} = detect; default for legacy jobs). */
+    public net.linear.LinearRegionConverter.ConvertFormat fromFormat() {
+        return this.fromFormat;
+    }
+
+    /** Explicit {@code --to} target ({@code null} = legacy, route via {@code direction()}). */
+    public net.linear.LinearRegionConverter.ConvertFormat toFormat() {
+        return this.toFormat;
+    }
+
+    /** Explicit {@code --grid} (0 = unspecified, use format default). */
+    public int gridSize() {
+        return this.gridSize;
+    }
+
+    /** True for explicit Phase-3 jobs (route via {@code from/to}, not {@code direction} alone). */
+    public boolean isExplicit() {
+        return this.toFormat != null;
+    }
+
+    /** Sets explicit routing (called once by the executor right after submit). */
+    public void setExplicit(net.linear.LinearRegionConverter.ConvertFormat from,
+            net.linear.LinearRegionConverter.ConvertFormat to, int gridSize) {
+        if (to == null || to == net.linear.LinearRegionConverter.ConvertFormat.AUTO
+                || to == net.linear.LinearRegionConverter.ConvertFormat.LINEAR) {
+            throw new IllegalArgumentException("explicit to must be concrete, got " + to
+                + " (--to linear means V1, normalized at parse time)");
+        }
+        if (from == null) {
+            throw new IllegalArgumentException("explicit from must not be null");
+        }
+        this.fromFormat = from;
+        this.toFormat = to;
+        this.gridSize = gridSize;
     }
 
     public String world() {
@@ -469,7 +521,7 @@ public final class ConvertJob {
         if (slash >= 0 && slash + 1 < name.length()) {
             name = name.substring(slash + 1);
         }
-        if (name.endsWith(".mca") || name.endsWith(".linear")) {
+        if (name.endsWith(".mca") || name.endsWith(".linear") || name.endsWith(".b_linear")) {
             int dot = name.lastIndexOf('.');
             if (dot > 0) {
                 name = name.substring(0, dot);

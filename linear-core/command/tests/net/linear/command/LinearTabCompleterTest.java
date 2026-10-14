@@ -134,11 +134,11 @@ public class LinearTabCompleterTest {
         JobQueue q = new JobQueue();
         Supplier<Set<String>> w = worlds("world");
         assertEquals(
-            List.of("--to-linear", "--to-mca", "--level", "--threads", "--execute", "--dry-run"),
+            List.of("--to-linear", "--to-mca", "--to-blinear", "--level", "--threads", "--execute", "--dry-run"),
             LinearTabCompleter.suggest(new String[]{"convert", "world", "--"}, q, w));
-        assertEquals(List.of("--to-linear", "--to-mca"),
+        assertEquals(List.of("--to-linear", "--to-mca", "--to-blinear"),
             LinearTabCompleter.suggest(new String[]{"convert", "world", "--to-"}, q, w));
-        assertEquals(List.of("--to-linear", "--to-mca"),
+        assertEquals(List.of("--to-linear", "--to-mca", "--to-blinear"),
             LinearTabCompleter.suggest(new String[]{"convert", "world", "--TO-"}, q, w));
         assertEquals(List.of(), LinearTabCompleter.suggest(new String[]{"convert", "world", "--zzz"}, q, w));
     }
@@ -148,7 +148,7 @@ public class LinearTabCompleterTest {
         JobQueue q = new JobQueue();
         Supplier<Set<String>> w = worlds("world");
         assertEquals(
-            List.of("--to-linear", "--to-mca", "--level", "--threads", "--execute", "--dry-run"),
+            List.of("--to-linear", "--to-mca", "--to-blinear", "--level", "--threads", "--execute", "--dry-run"),
             LinearTabCompleter.suggest(new String[]{"convert", "myworld", ""}, q, w));
     }
 
@@ -268,7 +268,7 @@ public class LinearTabCompleterTest {
         assertEquals(List.of(), LinearTabCompleter.suggest(new String[]{"convert", ""}, null, null));
         assertEquals(List.of(), LinearTabCompleter.suggest(new String[]{"queue", "pause", ""}, null, null));
         assertEquals(
-            List.of("--to-linear", "--to-mca", "--level", "--threads", "--execute", "--dry-run"),
+            List.of("--to-linear", "--to-mca", "--to-blinear", "--level", "--threads", "--execute", "--dry-run"),
             LinearTabCompleter.suggest(new String[]{"convert", "w", "--"}, null, null));
         assertEquals(List.of("list", "status", "clear", "pause", "resume", "cancel"),
             LinearTabCompleter.suggest(new String[]{"queue", ""}, null, null));
@@ -285,7 +285,7 @@ public class LinearTabCompleterTest {
         assertEquals(List.of(), LinearTabCompleter.suggest(new String[]{"convert", ""}, q, throwing));
         assertEquals(List.of(), LinearTabCompleter.suggest(new String[]{"stats", ""}, q, nullSet));
         assertEquals(
-            List.of("--to-linear", "--to-mca", "--level", "--threads", "--execute", "--dry-run"),
+            List.of("--to-linear", "--to-mca", "--to-blinear", "--level", "--threads", "--execute", "--dry-run"),
             LinearTabCompleter.suggest(new String[]{"convert", "w", "--"}, q, throwing));
         assertEquals(List.of("list", "status", "clear", "pause", "resume", "cancel"),
             LinearTabCompleter.suggest(new String[]{"queue", ""}, q, throwing));

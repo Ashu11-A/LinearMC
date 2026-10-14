@@ -46,7 +46,7 @@ index 2eeefe3..797b594 100644
          }
          // Linear: cache miss (lock-free delegate, zero new fields).
          try {
-@@ -161,7 +167,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -161,8 +167,8 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
          final int cacheSize = io.papermc.paper.configuration.GlobalConfiguration.get() == null ? 256 : io.papermc.paper.configuration.GlobalConfiguration.get().misc.regionFileCacheSize; // Paper - Sanitise RegionFileCache and make configurable - Config not available during initial FileFixerUpper run
  
          if (this.regionCache.size() >= cacheSize) {
@@ -54,7 +54,8 @@ index 2eeefe3..797b594 100644
 +            evicted = this.regionCache.removeLast(); // close outside (see below)
          }
  
-         // Linear - dual-read probe: .mca preferred, else .linear. The negative cache
+         // Linear - triple-read probe: .mca preferred, else .linear, else .b_linear. The negative cache
+         // stays keyed by region long and now means "no extension exists".
 @@ -183,10 +189,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
          FileUtil.createDirectoriesSafe(this.folder);
  
@@ -128,7 +129,7 @@ index 2eeefe3..797b594 100644
          // Paper end - rewrite chunk system
      }
  
-@@ -623,39 +641,53 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -623,35 +641,68 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      @Override
      public void close() throws IOException {
          // Paper start - rewrite chunk system
@@ -187,16 +188,29 @@ index 2eeefe3..797b594 100644
 -                }
 +            snapshot = new java.util.ArrayList<>(this.regionCache.values());
 +        }
++        // Shared parallel fan-out (durability barrier) for linear files:
++        // per-file flushes are independent, so a serial loop over hundreds
++        // of multi-MB masters costs minutes at shutdown (measured 91 s in one
++        // saveRegionChunks pass). Vanilla/anvil files keep their exact old
++        // behavior below (unconditional flush + force, errors collected and
++        // thrown) — only linear files move to the barrier, where failures
++        // are logged + counted in linearstats and requeued, never thrown.
++        final java.util.List<AbstractRegionFile> linearFiles =
++            new java.util.ArrayList<>(snapshot.size());
 +        final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
 +        for (final AbstractRegionFile regionFile : snapshot) {
-+            try {
-+                regionFile.flush();
-+            } catch (final IOException ex) {
-+                exceptionCollector.add(ex);
-             }
--
--            exceptionCollector.throwIfPresent();
-         }
++            if (regionFile instanceof net.linear.LinearRegionFile
++                    || regionFile instanceof net.linear.BufferedLinearRegionFile) {
++                linearFiles.add(regionFile);
++            } else {
++                try {
++                    regionFile.flush();
++                } catch (final IOException ex) {
++                    exceptionCollector.add(ex);
++                }
++            }
++        }
++        LinearFlushCoordinator.forFolder(this.folder).linear$flushSnapshot(linearFiles, true);
 +
 +        exceptionCollector.throwIfPresent();
          // Paper end - rewrite chunk system

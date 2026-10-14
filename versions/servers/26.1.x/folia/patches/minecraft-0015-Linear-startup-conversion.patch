@@ -67,7 +67,7 @@ index 9732cca..a89632d 100644
              )
              : new SimpleRegionStorage(info, regionFolder, this.dataFixer, true, this.dataFixType));
      }
-@@ -176,6 +182,88 @@ public class RegionStorageUpgrader {
+@@ -176,6 +182,102 @@ public class RegionStorageUpgrader {
          return net.linear.RegionFileFormat.ANVIL;
      }
  
@@ -151,6 +151,20 @@ index 9732cca..a89632d 100644
 +        if (sysLevel != null && !sysLevel.trim().equals(String.valueOf(compressionLevel))) { LOGGER.info(net.linear.config.LinearPolicy.overrideLine(net.linear.config.LinearPolicy.SYSPROP_LEVEL, sysLevel, String.valueOf(compressionLevel), String.valueOf(effectiveLevel), String.valueOf(regionFolder))); }
 +        return net.linear.LinearRegionConverter.convertRegionFolder(
 +            regionFolder, AbstractRegionFileFactory.clampCompressionLevel(effectiveLevel), listener);
++    }
++
++    // Buffered sibling: same seams, buffered target (swap sibling travels
++    // with the master through the converter's staging move).
++    public static net.linear.LinearRegionConverter.ConversionSummary convertFolderToBuffered(
++        final Path regionFolder,
++        final int compressionLevel,
++        final net.linear.LinearRegionConverter.Listener listener
++    ) throws net.linear.LinearRegionConverter.ConversionProtectionException {
++        final String sysLevel = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_LEVEL);
++        final int effectiveLevel = net.linear.config.LinearPolicy.resolveLevel(sysLevel, compressionLevel, 6);
++        return net.linear.LinearRegionConverter.convertRegionFolderToFormat(
++            regionFolder, AbstractRegionFileFactory.clampCompressionLevel(effectiveLevel), listener, true,
++            net.linear.RegionFileFormat.B_LINEAR);
 +    }
 +
      private List<FileToUpgrade> getFilesToProcess(final RegionStorageInfo info, final Path regionFolder) {

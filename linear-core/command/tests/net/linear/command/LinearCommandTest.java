@@ -13,6 +13,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import net.linear.LinearRegionTimings;
+import net.linear.RegionFileFormat;
 import org.junit.Test;
 
 /** command: /linear grammar (parse) + executor smoke (no Bukkit). */
@@ -221,7 +222,21 @@ public class LinearCommandTest {
         assertTrue(LinearCommandParser.HELP_TEXT,
             LinearCommandParser.HELP_TEXT.contains("Your old files are still there"));
         assertTrue(LinearCommandParser.HELP_TEXT,
-            LinearCommandParser.HELP_TEXT.contains("Add --to-mca to copy new saves back to old."));
+            LinearCommandParser.HELP_TEXT.contains("Add --to-mca to copy new saves back to old,"));
+        assertTrue(LinearCommandParser.HELP_TEXT,
+            LinearCommandParser.HELP_TEXT.contains("--to-blinear"));
+    }
+
+    @Test
+    public void convertToBlinearParses() {
+        LinearCommandParser parser = new LinearCommandParser();
+        LinearAction action = parser.parse(
+            new String[]{"convert", "world", "--to-blinear", "--execute"});
+        assertTrue(action instanceof LinearAction.ConvertAction);
+        LinearAction.ConvertAction convert = (LinearAction.ConvertAction) action;
+        assertEquals(ConvertDirection.MCA_TO_BLINEAR, convert.direction());
+        assertEquals(ConvertDirection.MCA_TO_BLINEAR.targetFormat(), RegionFileFormat.B_LINEAR);
+        assertEquals("Old saves to buffered faster saves", convert.direction().plainDirection());
     }
 
     @Test

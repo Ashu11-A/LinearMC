@@ -1,5 +1,6 @@
 package io.linearmc.horizon;
 
+import net.linear.LinearImplementation;
 import net.linear.RegionFileFormat;
 import net.linear.config.LinearFileConfig;
 import net.linear.config.LinearPolicy;
@@ -32,6 +33,16 @@ public final class LinearFormatPolicy {
         LinearFileConfig.setFileValues(format, level);
     }
 
+    /**
+     * Pushes the raw writer file values ({@code null} when unset):
+     * {@code region-format.linear.implementation} and
+     * {@code region-format.linear.grid-size}. Called once by
+     * {@code LinearPlugin#onEnable}.
+     */
+    public static void setFileWriterValues(String implementation, Integer gridSize) {
+        LinearFileConfig.setFileWriterValues(implementation, gridSize);
+    }
+
     /** Raw {@code region-format.format} from config.yml, or {@code null}. */
     public static String fileFormat() {
         return LinearFileConfig.fileFormat();
@@ -44,11 +55,27 @@ public final class LinearFormatPolicy {
 
     /**
      * Case-insensitive parse; {@code null} or unknown input yields
-     * {@link RegionFileFormat#ANVIL} (new-writes default; reads dual-probe
-     * both extensions regardless).
+     * {@link RegionFileFormat#ANVIL} (new-writes default; reads triple-probe
+     * all extensions regardless).
      */
     public static RegionFileFormat resolveFormat(String configured) {
         return LinearPolicy.resolveFormat(configured, null, LinearPolicy.FALLBACK_FORMAT);
+    }
+
+    /**
+     * Write implementation: sysprop wins over the config.yml value, which
+     * wins over {@code V1}.
+     */
+    public static LinearImplementation resolveImplementation() {
+        return LinearFileConfig.resolveImplementation();
+    }
+
+    /**
+     * Bucket grid size: sysprop wins over the config.yml value, which wins
+     * over {@code 8}.
+     */
+    public static int resolveGridSize() {
+        return LinearFileConfig.resolveGridSize();
     }
 
     /**

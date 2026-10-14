@@ -70,6 +70,7 @@ public final class FlushReports {
 
         /** Stop barrier: force-drain every folder, then shut the flush pool down. */
         public static void onServerStop() {
+            LinearFlushCoordinator.linear$beginShutdown();
             LinearFlushCoordinator.evictAll();
             LinearFlushCoordinator.shutdownFlushPool();
         }

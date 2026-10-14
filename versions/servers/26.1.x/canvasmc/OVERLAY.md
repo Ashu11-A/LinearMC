@@ -26,4 +26,9 @@ Designed divergences, all proven by the suite:
 
 Proven on the pinned ref with full suite green plus region file emission and Anvil opt-out boot checks.
 
+Shared implementation: 47 files (18 overlay patches, 9 paper-server files,
+20 tests) live once in versions/servers/common/canvas/ and stage first; this
+leg keeps only 5 seam adapters + LinearStartupConversion.java (graduation rules
+in the hub README).
+
 For behavior and settings see docs/architecture.md and docs/configuration.md.

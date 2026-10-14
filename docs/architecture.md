@@ -25,8 +25,8 @@ Every world has three storage folders — region, poi, and entities — and each
 One region file holds a 32 by 32 square of chunks, 1024 slots in total.
 
 - Every file opens with a fixed magic number header and closes with the same magic number as a footer, so torn or truncated files are easy to reject. The magic value is C3FF13183CCA9D9A in both places.
-- Files are written as version 2. Readers accept versions 1 and 2, so old files keep loading after an upgrade.
-- The body is a single compressed blob holding two things in order: a table of 1024 size-and-timestamp pairs, then the raw chunk payloads concatenated in slot order. An empty slot simply means that chunk is absent.
+- Files are written as version 2 (V1). Readers accept versions 1 and 2, plus DivineMC's bucketed versions 3 (V2) and 4 (V3), so old and migrated files keep loading after an upgrade. Bucketed files are inflated into the same slot tables on open and rewrite as version 2 on the next flush (one-way upgrade; the configured `linear.implementation` selects future writers, default V1).
+- The version-2 body is a single compressed blob holding two things in order: a table of 1024 size-and-timestamp pairs, then the raw chunk payloads concatenated in slot order. An empty slot simply means that chunk is absent. Versions 3/4 instead hold one compressed blob per grid bucket with a per-bucket integrity hash.
 - Chunk payloads are opaque: whatever the game hands to storage comes back unchanged on read.
 - There are no sidecar files — no `.mcc` files or anything like them. A single chunk larger than 500 megabytes is rejected rather than spilled elsewhere, matching the bound the vanilla game uses.
 - The header carries a compression-level byte for diagnostics only. Readers ignore it, so changing the level is a settings change rather than a format change.
@@ -91,3 +91,5 @@ Server legs under `versions/servers` are thin patches over the game. They adapt 
 - There is one shared, bounded worker pool for the whole server — no thread per file, no pool per folder.
 - Memory-heavy paths reuse direct buffers end to end instead of allocating on every flush, keeping garbage-collection pauses down on busy servers.
 - Save statistics use lock-free counters only, so measuring never slows saving.
+- Convert single-flight is per storage folder: Canvas and Horizon hold a static concurrent set of in-flight folders; a second `--execute` on an in-flight folder is rejected with `conversion already running for <folder>` (no queue, no block) and the entry is removed in `finally` after the worker settles. Folia already serializes converts through its singleton worker, so its threading is left alone.
+- Convert scope differs by leg on purpose: Horizon covers the single `region/` folder while Canvas and Folia cover `region/`, `entities/`, and `poi/`. This is pre-existing and intentional.

@@ -45,9 +45,34 @@ runs:
         # relative supplement paths die with "can't open patch" (observed).
         LEG="$(cd "$LEG" && pwd)"
         CANVAS_DIR="$(cd "$CANVAS_DIR" && pwd)"
+        # 0. Shared Canvas hub (version-agnostic graduates). Single implementation:
+        # byte-identical files live here once; legs keep only seam adapters.
+        SHARED="$SUPPLEMENT_DIR/versions/servers/common/canvas"
+        test -f "$SHARED/README.md" || { echo "::error::Missing shared Canvas hub $SHARED (README.md)"; exit 1; }
+        SHARED="$(cd "$SHARED" && pwd)"
+        test -d "$SUPPLEMENT_DIR/linear-core" || { echo "::error::linear-core missing in supplement $SUPPLEMENT_DIR (NMS patches reference net.linear)"; exit 1; }
+        # Shadow rule (hub demotion across versions): when a leg carries an
+        # adapter with the SAME basename as a hub file, the leg wins and the
+        # hub copy is SKIPPED for this version (loud NOTE, never silent).
+        # This is how a drifted version demotes a file without forking the hub
+        # (see hub README graduation/demotion rules).
         test -d "$CANVAS_DIR/paper-server/src/main/java" || { echo "::error::$CANVAS_DIR/paper-server missing: run applyAllPatches before stage-overlay"; exit 1; }
         test -d "$CANVAS_DIR/canvas-server/src/minecraft/java" || { echo "::error::$CANVAS_DIR/canvas-server/src/minecraft missing: run applyAllPatches before stage-overlay"; exit 1; }
-        # 1. NMS overlay (18): check ALL, then apply ALL (never half-apply).
+        # 1. NMS overlay (hub graduates + leg adapters): check ALL, then apply
+        # ALL (never half-apply). Hub first (minus shadows), leg adapters second.
+        for p in "$SHARED"/overlay/nms/*.patch; do
+          if [ -e "$LEG/overlay/nms/$(basename "$p")" ]; then
+            echo "stage-overlay: NOTE shadow nms/$(basename "$p") (leg adapter overrides hub)"
+            continue
+          fi
+          git -C "$CANVAS_DIR/canvas-server/src/minecraft/java" apply --check -p1 "$p" \
+            || { echo "::error::NMS shared overlay --check failed: $p"; exit 1; }
+        done
+        for p in "$SHARED"/overlay/nms/*.patch; do
+          [ -e "$LEG/overlay/nms/$(basename "$p")" ] && continue
+          git -C "$CANVAS_DIR/canvas-server/src/minecraft/java" apply -p1 --whitespace=nowarn "$p" \
+            || { echo "::error::NMS shared overlay apply failed: $p"; exit 1; }
+        done
         for p in "$LEG"/overlay/nms/*.patch; do
           git -C "$CANVAS_DIR/canvas-server/src/minecraft/java" apply --check -p1 "$p" \
             || { echo "::error::NMS overlay --check failed: $p"; exit 1; }
@@ -76,16 +101,42 @@ runs:
             done
           done
         done
-        # 3. Paper-side new files (verbatim). The leg stores them as
+        # 3. Paper-side new files (verbatim): shared hub first (minus shadows),
+        # then leg adapters. The hub and the leg store them as
         # paper-server/src/main/java/**; strip that prefix so they land on
         # the module path (a bare paper-server/** layout keeps working too).
-        P_SRC="$LEG/paper-server"
-        [ -d "$P_SRC/src/main/java" ] && P_SRC="$P_SRC/src/main/java"
-        (cd "$P_SRC" && find . -name '*.java' | while read -r f; do
+        H_PS="$SHARED/paper-server"
+        [ -d "$H_PS/src/main/java" ] && H_PS="$H_PS/src/main/java"
+        L_PS="$LEG/paper-server"
+        [ -d "$L_PS/src/main/java" ] && L_PS="$L_PS/src/main/java"
+        test -d "$H_PS" || { echo "::error::hub paper-server tree missing: $H_PS"; exit 1; }
+        test -d "$L_PS" || { echo "::error::leg paper-server tree missing: $L_PS"; exit 1; }
+        (cd "$H_PS" && find . -name '*.java' | while IFS= read -r f; do
+          if [ -e "$L_PS/$f" ]; then
+            echo "stage-overlay: NOTE shadow paper-server/$f (leg adapter overrides hub)"
+            continue
+          fi
           mkdir -p "$CANVAS_DIR/paper-server/src/main/java/$(dirname "$f")"
           cp "$f" "$CANVAS_DIR/paper-server/src/main/java/$f"
         done)
-        # 4. Paper-side modifications (check-gated).
+        (cd "$L_PS" && find . -name '*.java' | while IFS= read -r f; do
+          mkdir -p "$CANVAS_DIR/paper-server/src/main/java/$(dirname "$f")"
+          cp "$f" "$CANVAS_DIR/paper-server/src/main/java/$f"
+        done)
+        # 4. Paper-side modifications (hub minus shadows + leg, each check-gated).
+        for p in "$SHARED"/overlay/paper/*.patch; do
+          if [ -e "$LEG/overlay/paper/$(basename "$p")" ]; then
+            echo "stage-overlay: NOTE shadow paper/$(basename "$p") (leg adapter overrides hub)"
+            continue
+          fi
+          git -C "$CANVAS_DIR/paper-server" apply --check -p1 "$p" \
+            || { echo "::error::paper shared overlay --check failed: $p"; exit 1; }
+        done
+        for p in "$SHARED"/overlay/paper/*.patch; do
+          [ -e "$LEG/overlay/paper/$(basename "$p")" ] && continue
+          git -C "$CANVAS_DIR/paper-server" apply -p1 --whitespace=nowarn "$p" \
+            || { echo "::error::paper shared overlay apply failed: $p"; exit 1; }
+        done
         for p in "$LEG"/overlay/paper/*.patch; do
           git -C "$CANVAS_DIR/paper-server" apply --check -p1 "$p" \
             || { echo "::error::paper overlay --check failed: $p"; exit 1; }
@@ -94,7 +145,20 @@ runs:
           git -C "$CANVAS_DIR/paper-server" apply -p1 --whitespace=nowarn "$p" \
             || { echo "::error::paper overlay apply failed: $p"; exit 1; }
         done
-        # 5. Canvas config (git-derived paths, check-gated).
+        # 5. Canvas config (git-derived paths; hub minus shadows + leg, each check-gated).
+        for p in "$SHARED"/overlay/config/*.patch; do
+          if [ -e "$LEG/overlay/config/$(basename "$p")" ]; then
+            echo "stage-overlay: NOTE shadow config/$(basename "$p") (leg adapter overrides hub)"
+            continue
+          fi
+          git -C "$CANVAS_DIR" apply --check -p1 "$p" \
+            || { echo "::error::config shared overlay --check failed: $p"; exit 1; }
+        done
+        for p in "$SHARED"/overlay/config/*.patch; do
+          [ -e "$LEG/overlay/config/$(basename "$p")" ] && continue
+          git -C "$CANVAS_DIR" apply -p1 --whitespace=nowarn "$p" \
+            || { echo "::error::config shared overlay apply failed: $p"; exit 1; }
+        done
         for p in "$LEG"/overlay/config/*.patch; do
           git -C "$CANVAS_DIR" apply --check -p1 "$p" \
             || { echo "::error::config overlay --check failed: $p"; exit 1; }
@@ -120,13 +184,24 @@ runs:
         else:
             print('stage-overlay: zstd dep present')
         EOF
-        # 7. Tests (package tree preserved; canvas-server/src/test/java is the
-        # module's own test source set — Canvas 26.2 dropped the folia-server
-        # test-srcDir wiring, and Canvas has no folia-server module).
+        # 7. Tests (package tree preserved; hub graduates first minus shadows,
+        # then leg additions. Either tree may be absent: legs with no own tests
+        # stage hub tests only. Canvas 26.2 dropped the folia-server test-srcDir
+        # wiring, and Canvas has no folia-server module).
         if [ "$INCLUDE_TESTS" = "true" ]; then
-          (cd "$LEG/tests" && find . -name '*.java' | while read -r f; do
+          (cd "$SHARED/tests" && find . -name '*.java' | while IFS= read -r f; do
+            if [ -e "$LEG/tests/$f" ]; then
+              echo "stage-overlay: NOTE shadow tests/$f (leg adapter overrides hub)"
+              continue
+            fi
             mkdir -p "$CANVAS_DIR/canvas-server/src/test/java/$(dirname "$f")"
             cp "$f" "$CANVAS_DIR/canvas-server/src/test/java/$f"
           done)
+          if [ -d "$LEG/tests" ]; then
+            (cd "$LEG/tests" && find . -name '*.java' | while IFS= read -r f; do
+              mkdir -p "$CANVAS_DIR/canvas-server/src/test/java/$(dirname "$f")"
+              cp "$f" "$CANVAS_DIR/canvas-server/src/test/java/$f"
+            done)
+          fi
         fi
-        echo "stage-overlay: done ($(ls "$LEG"/overlay/nms/*.patch | wc -l) nms, $(ls "$LEG"/overlay/paper/*.patch | wc -l) paper, $(ls "$LEG"/overlay/config/*.patch | wc -l) config)"
+        echo "stage-overlay: done (hub+leg: $(($(find "$SHARED"/overlay/nms "$LEG"/overlay/nms -maxdepth 1 -name '*.patch' 2>/dev/null | wc -l))) nms, $(($(find "$SHARED"/overlay/paper "$LEG"/overlay/paper -maxdepth 1 -name '*.patch' 2>/dev/null | wc -l))) paper, $(($(find "$SHARED"/overlay/config "$LEG"/overlay/config -maxdepth 1 -name '*.patch' 2>/dev/null | wc -l))) config)"

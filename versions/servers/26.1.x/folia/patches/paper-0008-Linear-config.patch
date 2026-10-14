@@ -98,7 +98,7 @@ index 7916d3762d3615910dc25e52e9a846db3729245f..c808a673a4c9364366005abe7e02ddf5
 +    public RegionFormat regionFormat;
 +
 +    public class RegionFormat extends ConfigurationPart {
-+        @Comment("Region file format for NEW files. ANVIL (default) or LINEAR. Unknown values log SEVERE and fall back to ANVIL. Reads always probe both extensions (dual-read from day 1, sibling A5-B1), so flipping this flag never hides existing data.")
++        @Comment("Region file format for NEW files. ANVIL (default), LINEAR or B_LINEAR. Unknown values log SEVERE and fall back to ANVIL. Reads always probe all extensions (triple-read from day 1, sibling A5-B1), so flipping this flag never hides existing data.")
 +        @Setting("format")
 +        public RegionFileFormat format = RegionFileFormat.ANVIL;
 +        @Setting("linear")
@@ -124,7 +124,7 @@ index 7916d3762d3615910dc25e52e9a846db3729245f..c808a673a4c9364366005abe7e02ddf5
 +        @PostProcess
 +        private void postProcess() {
 +            if (this.format == null) {
-+                LOGGER.error("[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL.");
++                LOGGER.error("[region-format] Unknown region format, expected ANVIL, LINEAR or B_LINEAR. Falling back to ANVIL.");
 +                this.format = RegionFileFormat.ANVIL;
 +            }
 +        }
@@ -138,7 +138,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..ff1b3bc642d56726c3f6cf84478b33ebd9de1538
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/configuration/type/RegionFileFormat.java
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,14 @@
 +package io.papermc.paper.configuration.type;
 +
 +/**
@@ -150,14 +150,15 @@ index 0000000000000000000000000000000000000000..ff1b3bc642d56726c3f6cf84478b33eb
 + */
 +public enum RegionFileFormat {
 +    ANVIL,
-+    LINEAR;
++    LINEAR,
++    B_LINEAR;
 +}
 diff --git a/src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java b/src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..891e8bde2005ed7af8dd323e933e4f6c3e23001b
 --- /dev/null
 +++ b/src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,120 @@
 +package net.minecraft.util.worldupdate;
 +
 +import static org.junit.jupiter.api.Assertions.*;
@@ -170,15 +171,15 @@ index 0000000000000000000000000000000000000000..891e8bde2005ed7af8dd323e933e4f6c
 +import org.junit.jupiter.params.provider.ValueSource;
 +
 +/**
-+ * Both-extension upgrade-scan coverage.
++ * Triple-extension upgrade-scan coverage.
 + *
-+ * <p>The upgrader REGEX must accept both extensions with no literal spaces
-+ * inside the alternation: {@code "^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(linear|mca)$"}.
++ * <p>The upgrader REGEX must accept all extensions with no literal spaces
++ * inside the alternation: {@code "^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear|b_linear)$"}.
 + * The scan lives in {@link RegionStorageUpgrader}: the {@code REGEX} field plus
-+ * the {@code listFiles} filename filter ({@code endsWith} checks). Both cover
-+ * {@code linear} and {@code mca}; filenames always start with the {@code r.}
++ * the {@code listFiles} filename filter ({@code endsWith} checks). All cover
++ * {@code mca}, {@code linear} and {@code b_linear}; filenames always start with the {@code r.}
 + * prefix.
-+ * Only exact dual-extension names match; junk is rejected.
++ * Only exact triple-extension names match; junk is rejected.
 + *
 + * <p>These tests read the REAL private {@code REGEX} via reflection when available (so a
 + * regression to spaced/mca-only fails), and always verify the filename filter predicate
@@ -190,7 +191,7 @@ index 0000000000000000000000000000000000000000..891e8bde2005ed7af8dd323e933e4f6c
 +public class RegionStorageUpgraderScanTest {
 +
 +    private static final Pattern FIXED_REGEX =
-+        Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(linear|mca)$");
++        Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear|b_linear)$");
 +    private static final Pattern BUGGY_REGEX =
 +        Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(linear | mca)$");
 +
@@ -205,15 +206,16 @@ index 0000000000000000000000000000000000000000..891e8bde2005ed7af8dd323e933e4f6c
 +        }
 +    }
 +
-+    /** Mirrors the fixed line-163 filter: {@code endsWith .mca || endsWith .linear}. */
++    /** Mirrors the fixed line-163 filter: {@code endsWith .mca || endsWith .linear || endsWith .b_linear}. */
 +    private static boolean fixedFilenameFilter(String name) {
-+        return name.endsWith(".mca") || name.endsWith(".linear");
++        return name.endsWith(".mca") || name.endsWith(".linear") || name.endsWith(".b_linear");
 +    }
 +
 +    @ParameterizedTest(name = "scan accepts {0}")
 +    @ValueSource(strings = {
 +        "r.0.0.mca", "r.1.2.mca", "r.-1.-2.mca",
 +        "r.0.0.linear", "r.1.2.linear", "r.-1.-2.linear", "r.-10.4.linear",
++        "r.0.0.b_linear", "r.1.2.b_linear", "r.-1.-2.b_linear",
 +    })
 +    public void fixedRegexAcceptsBothExtensions(String name) {
 +        assertTrue(FIXED_REGEX.matcher(name).matches(), "fixed REGEX must match " + name);
@@ -223,10 +225,11 @@ index 0000000000000000000000000000000000000000..891e8bde2005ed7af8dd323e933e4f6c
 +    @ValueSource(strings = {
 +        "foo.mca", "r.0.0.txt", "r.a.b.mca", "r.0.mca", "r.0.0.mca.bak",
 +        "r.0.0.linear ",   // trailing space
++        "r.0.0.b_linear ",   // trailing space
 +        "r.0.0. linear",   // spaced extension
 +        "r.0.0. mca",
 +        "r.0.0.linear|mca",
-+        "r.0.0.MCA", "r.0.0.LINEAR",
++        "r.0.0.MCA", "r.0.0.LINEAR", "r.0.0.B_LINEAR",
 +    })
 +    public void fixedRegexRejectsJunk(String name) {
 +        assertFalse(FIXED_REGEX.matcher(name).matches(), "fixed REGEX must reject " + name);
@@ -235,7 +238,7 @@ index 0000000000000000000000000000000000000000..891e8bde2005ed7af8dd323e933e4f6c
 +    @Test
 +    public void buggySpacedRegexMatchesNothingReal() {
 +        // Pin the defect: the spaced alternation never matches real names.
-+        String[] realNames = {"r.0.0.mca", "r.0.0.linear", "r.-1.2.mca", "r.-1.2.linear"};
++        String[] realNames = {"r.0.0.mca", "r.0.0.linear", "r.0.0.b_linear", "r.-1.2.mca", "r.-1.2.linear", "r.-1.2.b_linear"};
 +        for (String name : realNames) {
 +            assertFalse(BUGGY_REGEX.matcher(name).matches(), "buggy REGEX unexpectedly matched " + name);
 +        }
@@ -248,29 +251,30 @@ index 0000000000000000000000000000000000000000..891e8bde2005ed7af8dd323e933e4f6c
 +    public void productionRegexMatchesBothExtensions() {
 +        Pattern actual = productionRegex();
 +        assertNotNull(actual, "RegionStorageUpgrader.REGEX not found via reflection — "
-+            + "if the scan moved to a dispatch helper, apply the dual-extension fix there");
-+        for (String name : new String[]{"r.0.0.mca", "r.-1.2.mca", "r.0.0.linear", "r.-1.2.linear"}) {
++            + "if the scan moved to a dispatch helper, apply the triple-extension fix there");
++        for (String name : new String[]{"r.0.0.mca", "r.-1.2.mca", "r.0.0.linear", "r.-1.2.linear", "r.0.0.b_linear", "r.-1.2.b_linear"}) {
 +            assertTrue(actual.matcher(name).matches(), "production REGEX must match " + name);
 +        }
 +        assertFalse(actual.matcher("r.0.0.txt").matches());
 +        assertFalse(actual.matcher("r.0.0.linear ").matches(), "production REGEX must not contain literal spaces");
-+        // Accept either alternation order — (mca|linear) or (linear|mca);
-+        // both are the spaceless dual-extension form. What matters is both
-+        // extensions match, no spaces.
++        assertFalse(actual.matcher("r.0.0.b_linear ").matches(), "production REGEX must not contain literal spaces");
++        // Accept either alternation order — (mca|linear), (linear|mca), or the triple form;
++        // what matters is all extensions match, no spaces.
 +        String pattern = actual.pattern();
 +        boolean ok = pattern.equals("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(linear|mca)$")
-+            || pattern.equals("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
-+        assertTrue(ok, "production REGEX pattern must be the spaceless dual-extension form, was: " + pattern);
++            || pattern.equals("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$")
++            || pattern.equals("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear|b_linear)$");
++        assertTrue(ok, "production REGEX pattern must be the spaceless triple-extension form, was: " + pattern);
 +    }
 +
 +    @ParameterizedTest(name = "filter accepts {0}")
-+    @ValueSource(strings = {"r.0.0.mca", "r.-1.2.linear", "r.5.5.mca", "r.5.5.linear"})
++    @ValueSource(strings = {"r.0.0.mca", "r.-1.2.linear", "r.0.0.b_linear", "r.5.5.mca", "r.5.5.linear", "r.5.5.b_linear"})
 +    public void filenameFilterAcceptsBothExtensions(String name) {
 +        assertTrue(fixedFilenameFilter(name), "filter must accept " + name);
 +    }
 +
 +    @ParameterizedTest(name = "filter rejects {0}")
-+    @ValueSource(strings = {"r.0.0.txt", "r.0.0.nbt", "r.0.0.mca.bak", "r.0.0.linear.tmp", "level.dat"})
++    @ValueSource(strings = {"r.0.0.txt", "r.0.0.nbt", "r.0.0.mca.bak", "r.0.0.linear.tmp", "r.0.0.b_linear.tmp", "level.dat"})
 +    public void filenameFilterRejectsJunk(String name) {
 +        assertFalse(fixedFilenameFilter(name), "filter must reject " + name);
 +    }
@@ -469,7 +473,7 @@ new file mode 100644
 index 000000000..057c18c7cace7a1c5f944a80825f20b1e391dd81 100644
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/linear/PaperFormatMapper.java
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,33 @@
 +package io.papermc.paper.linear;
 +
 +/**
@@ -484,7 +488,8 @@ index 000000000..057c18c7cace7a1c5f944a80825f20b1e391dd81 100644
 + * RegionStorageUpgrader.resolveTargetFormat) pass their raw
 + * {@code regionFormat.format} value through.</p>
 + *
-+ * <p>Maps {@code LINEAR -> LINEAR}, everything else ({@code ANVIL},
++ * <p>Maps {@code LINEAR -> LINEAR}, {@code B_LINEAR -> B_LINEAR},
++ * everything else ({@code ANVIL},
 + * {@code null} pre-{@code @PostProcess} or direct unit-test calls) to
 + * {@code ANVIL}.</p>
 + */
@@ -497,6 +502,8 @@ index 000000000..057c18c7cace7a1c5f944a80825f20b1e391dd81 100644
 +            ? net.linear.RegionFileFormat.ANVIL
 +            : "LINEAR".equals(paperEnum.toString())
 +                ? net.linear.RegionFileFormat.LINEAR
-+                : net.linear.RegionFileFormat.ANVIL;
++                : "B_LINEAR".equals(paperEnum.toString())
++                    ? net.linear.RegionFileFormat.B_LINEAR
++                    : net.linear.RegionFileFormat.ANVIL;
 +    }
 +}

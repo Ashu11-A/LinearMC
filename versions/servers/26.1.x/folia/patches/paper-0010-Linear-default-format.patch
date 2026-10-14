@@ -21,8 +21,8 @@ index 29a32b85e..af9ead0cc 100644
      public RegionFormat regionFormat;
  
      public class RegionFormat extends ConfigurationPart {
--        @Comment("Region file format for NEW files. ANVIL (default) or LINEAR. Unknown values log SEVERE and fall back to ANVIL. Reads always probe both extensions (dual-read from day 1, sibling A5-B1), so flipping this flag never hides existing data.")
-+        @Comment("Region file format for NEW files. LINEAR (default) or ANVIL. Unknown values log SEVERE and fall back to ANVIL. Reads always probe both extensions (dual-read from day 1, sibling A5-B1), so flipping this flag never hides existing data.")
+-        @Comment("Region file format for NEW files. ANVIL (default), LINEAR or B_LINEAR. Unknown values log SEVERE and fall back to ANVIL. Reads always probe all extensions (triple-read from day 1, sibling A5-B1), so flipping this flag never hides existing data.")
++        @Comment("Region file format for NEW files. LINEAR (default), ANVIL or B_LINEAR. Unknown values log SEVERE and fall back to ANVIL. Reads always probe all extensions (triple-read from day 1, sibling A5-B1), so flipping this flag never hides existing data.")
          @Setting("format")
 -        public RegionFileFormat format = RegionFileFormat.ANVIL;
 +        public RegionFileFormat format = RegionFileFormat.LINEAR;

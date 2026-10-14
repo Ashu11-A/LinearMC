@@ -8,9 +8,11 @@ import java.util.Objects;
  * Construction seam between {@code RegionFileStorage} (and the world
  * upgrader) and the concrete region-file implementations.
  *
- * <p>Dispatch rule: file names ending in {@code .linear} produce
- * {@code net.linear.LinearRegionFile}; anything else takes the vanilla
- * anvil path via the injected {@link AnvilOpener}. This class is NMS-free
+ * <p>Dispatch rule: file names ending in {@code .b_linear} produce the
+ * buffered implementation via the injected {@link BufferedOpener}; names
+ * ending in {@code .linear} produce {@code net.linear.LinearRegionFile}
+ * (V1/V2/V3/Pumpkin resolved by the detector at open); anything else takes
+ * the vanilla anvil path via the injected {@link AnvilOpener}. This class is NMS-free
  * by design: the anvil opener receives the storage info (NMS
  * {@code RegionStorageInfo}) as {@code Object} and the leg-provided opener
  * casts it back, so core compiles and loads with zero NMS or Paper API
@@ -25,9 +27,9 @@ import java.util.Objects;
  *
  * <p>Paper config mapping note: this class no longer names the Paper config
  * format enum. Legs map their Paper config value to the core
- * {@link RegionFileFormat} enum in their own mapper ({@code PaperFormatMapper},
- * Phase D); core-side parsing stays string-based via
- * {@link RegionFileFormat#fromString}.</p>
+ * {@link RegionFileFormat} enum inline (Canvas {@code RegionFileFormat::map},
+ * Horizon {@code LinearFormatPolicy}); core-side parsing stays string-based
+ * via {@link RegionFileFormat#fromString}.</p>
  */
 public final class AbstractRegionFileFactory {
 
@@ -35,6 +37,7 @@ public final class AbstractRegionFileFactory {
     // so existing call sites (storage, upgrader, converter trigger) keep compiling.
     public static final String LINEAR_EXTENSION = RegionFileFormat.LINEAR_EXTENSION;
     public static final String ANVIL_EXTENSION = RegionFileFormat.ANVIL_EXTENSION;
+    public static final String B_LINEAR_EXTENSION = RegionFileFormat.B_LINEAR_EXTENSION;
 
     /** Fallback compression when the configured level is out of range. */
     public static final int DEFAULT_COMPRESSION_LEVEL = RegionFileFormat.DEFAULT_COMPRESSION_LEVEL;
@@ -85,6 +88,25 @@ public final class AbstractRegionFileFactory {
     }
 
     /**
+     * Opens a buffered-linear region file. Symmetric with {@link LinearOpener}:
+     * the implementation lives in codec ({@code BufferedLinearRegionFile}),
+     * which format must not depend on, so legs register it at startup. The
+     * default throws, loudly, instead of silently producing another format.
+     */
+    public interface BufferedOpener {
+        AbstractRegionFile open(Path file, int compressionLevel) throws IOException;
+    }
+
+    private static volatile BufferedOpener bufferedOpener = (file, level) -> {
+        throw new IOException("no BufferedOpener registered");
+    };
+
+    /** Legs register {@code BufferedLinearRegionFile::new} here at startup. */
+    public static void linear$setBufferedOpener(BufferedOpener opener) {
+        bufferedOpener = Objects.requireNonNull(opener, "opener");
+    }
+
+    /**
      * Contract-exact factory entry point. The Linear file MUST
      * declare {@code implements net.linear.AbstractRegionFile} for the
      * {@code *.linear} branch to link.
@@ -101,6 +123,9 @@ public final class AbstractRegionFileFactory {
         Path file, Object info, Path folder, boolean sync, int compressionLevel
     ) throws IOException {
         String fileName = file.getFileName().toString();
+        if (fileName.endsWith(B_LINEAR_EXTENSION)) {
+            return bufferedOpener.open(file, clampCompressionLevel(compressionLevel));
+        }
         if (fileName.endsWith(LINEAR_EXTENSION)) {
             return linearOpener.open(file, clampCompressionLevel(compressionLevel));
         }
@@ -110,7 +135,13 @@ public final class AbstractRegionFileFactory {
 
     /** Extension (with dot) used when creating new region files. */
     public static String extensionFor(RegionFileFormat format) {
-        return format == RegionFileFormat.LINEAR ? LINEAR_EXTENSION : ANVIL_EXTENSION;
+        if (format == RegionFileFormat.LINEAR) {
+            return LINEAR_EXTENSION;
+        }
+        if (format == RegionFileFormat.B_LINEAR) {
+            return B_LINEAR_EXTENSION;
+        }
+        return ANVIL_EXTENSION;
     }
 
     /**

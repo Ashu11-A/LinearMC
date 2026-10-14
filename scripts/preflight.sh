@@ -29,7 +29,7 @@ ok()   { echo "PASS: $1"; pass=$((pass+1)); }
 nope() { echo "FAIL: $1"; fail=$((fail+1)); }
 skip() { echo "SKIP: $1"; }
 
-VERSIONS=$(cd "$SUPPLEMENT_DIR/versions/servers" && ls -d */ 2>/dev/null | tr -d '/' | sort -V)
+VERSIONS=$(cd "$SUPPLEMENT_DIR/versions/servers" && ls -d */ 2>/dev/null | tr -d '/' | grep -v '^common$' | sort -V)
 if [ -z "${VERSIONS:-}" ]; then
   nope "no version folders under versions/servers/"
   echo "---- preflight: $pass passed, $fail failed ----"
@@ -68,6 +68,62 @@ legdir() { # $1 = version -> prints leg dir (per-server first, legacy fallback)
     echo "versions/servers/$1"
   fi
 }
+# 1a. Shared Canvas hub (version-agnostic single implementation): every file
+# CI stages from it must exist. Checked once here, not per version.
+for rel in versions/servers/common/canvas/README.md \
+           versions/servers/common/canvas/MANIFEST.txt \
+           "versions/servers/common/canvas/overlay/nms/*.patch" \
+           "versions/servers/common/canvas/overlay/paper/*.patch" \
+           "versions/servers/common/canvas/overlay/config/*.patch" \
+           versions/servers/common/canvas/paper-server/src/main/java/io/papermc/paper/command/CommandLinear.java \
+           versions/servers/common/canvas/paper-server/src/main/java/io/papermc/paper/linear/LinearStats.java \
+           "versions/servers/common/canvas/tests/net/linear/*.java" \
+           versions/servers/common/canvas/tests/net/linear/LinearNmsTestSuite.java; do
+  # shellcheck disable=SC2086
+  found=$(ls "$SUPPLEMENT_DIR"/$rel 2>/dev/null | wc -l)
+  [ "$found" -ge 1 ] && ok "inventory $rel" || nope "inventory $rel (missing)"
+done
+# 1b. Hub manifest integrity: every listed file exists with the recorded sha
+# (single tally line; details only on mismatch).
+mcount=0; mok=0
+if [ ! -f "$SUPPLEMENT_DIR/versions/servers/common/canvas/MANIFEST.txt" ]; then
+  nope "inventory hub manifest (missing)"; mcount=1
+else
+while IFS= read -r line; do
+  read -r fam rel sha _ <<< "$line"
+  case "$fam" in ''|'#'*) continue;; esac
+  if [ -z "${rel:-}" ] || [ -z "${sha:-}" ]; then
+    nope "inventory hub manifest malformed line: $fam $rel"; mcount=$((mcount+1)); continue
+  fi
+  if [ ! -f "$SUPPLEMENT_DIR/versions/servers/common/canvas/$rel" ]; then
+    nope "inventory hub manifest missing file: $rel"; mcount=$((mcount+1)); continue
+  fi
+  got=$(sha256sum "$SUPPLEMENT_DIR/versions/servers/common/canvas/$rel" | cut -d' ' -f1)
+  if [ "$got" = "$sha" ]; then mok=$((mok+1)); else
+    nope "inventory hub manifest sha mismatch: $rel"; mcount=$((mcount+1))
+  fi
+done < "$SUPPLEMENT_DIR/versions/servers/common/canvas/MANIFEST.txt"
+[ "$mcount" = 0 ] && ok "inventory hub manifest: $mok files sha-verified"
+fi
+# 1c. Hub shadow report (leg adapters overriding hub files with the same
+# relative path): informational PASS lines so every demotion stays visible.
+HUBC="$SUPPLEMENT_DIR/versions/servers/common/canvas"
+for v in $VERSIONS; do
+  VLEG="$SUPPLEMENT_DIR/versions/servers/$v/canvasmc"
+  [ -d "$VLEG/overlay" ] || continue
+  for sp in "$HUBC"/overlay/*/*.patch; do
+    b="$(basename "$sp")"; fam="$(basename "$(dirname "$sp")")"
+    [ -e "$VLEG/overlay/$fam/$b" ] && ok "shadow $v overlay/$fam/$b (leg adapter overrides hub)"
+  done
+  while IFS= read -r sf; do
+    [ -e "$VLEG/paper-server/$sf" ] && ok "shadow $v paper-server/$sf (leg adapter overrides hub)"
+  done < <(cd "$HUBC/paper-server" && find . -name '*.java')
+  if [ -d "$VLEG/tests" ]; then
+    while IFS= read -r sf; do
+      [ -e "$VLEG/tests/$sf" ] && ok "shadow $v tests/$sf (leg adapter overrides hub)"
+    done < <(cd "$HUBC/tests" && find . -name '*.java')
+  fi
+done
 for v in $VERSIONS; do
   VDIR="$SUPPLEMENT_DIR/versions/servers/$v"
   # Legs present in this line (a line may carry folia, canvas, both, or neither).
@@ -112,9 +168,9 @@ for v in $VERSIONS; do
            "versions/servers/$v/canvasmc/overlay/paper/*.patch" \
            "versions/servers/$v/canvasmc/overlay/config/*.patch" \
            versions/servers/$v/canvasmc/OVERLAY.md \
-           versions/servers/$v/canvasmc/paper-server/src/main/java/io/papermc/paper/command/CommandLinear.java \
+           versions/servers/common/canvas/paper-server/src/main/java/io/papermc/paper/command/CommandLinear.java \
            versions/servers/$v/canvasmc/paper-server/src/main/java/io/papermc/paper/linear/LinearStartupConversion.java \
-           "versions/servers/$v/canvasmc/tests/net/linear/*.java"; do
+           "versions/servers/common/canvas/tests/net/linear/*.java"; do
     # shellcheck disable=SC2086
     found=$(ls "$SUPPLEMENT_DIR"/$f 2>/dev/null | wc -l)
     [ "$found" -ge 1 ] && ok "inventory $f" || nope "inventory $f (missing)"
@@ -214,6 +270,12 @@ for v in $VERSIONS; do
   done
   [ "$found_any" = 1 ] || nope "$v patch set empty"
 done
+# 3b. Shared Canvas hub patches parse once (version-agnostic, not per version).
+for p in "$SUPPLEMENT_DIR"/versions/servers/common/canvas/overlay/*/*.patch; do
+  grep -q '^diff --git' "$p" && grep -q '^@@' "$p" \
+    && ok "patch parses: common/canvas/$(basename "$p")" \
+    || nope "patch malformed: common/canvas/$(basename "$p")"
+done
 
 # 4. Inherited-bug grep gates, per version (see docs/architecture.md
 # "Inherited bugs that were fixed, not ported"). Scans added patch lines,
@@ -231,7 +293,10 @@ bug_gate() { # $1 = version dir, $2 = fixed-string pattern
       if (index(line, pat)) print file " :: " line
     }' "$1"/folia/patches/*.patch "$1"/common/*.patch "$1"/patches/*.patch \
        "$1"/canvasmc/overlay/nms/*.patch "$1"/canvasmc/overlay/paper/*.patch \
-       "$1"/canvasmc/overlay/config/*.patch 2>/dev/null
+       "$1"/canvasmc/overlay/config/*.patch \
+       "$SUPPLEMENT_DIR"/versions/servers/common/canvas/overlay/nms/*.patch \
+       "$SUPPLEMENT_DIR"/versions/servers/common/canvas/overlay/paper/*.patch \
+       "$SUPPLEMENT_DIR"/versions/servers/common/canvas/overlay/config/*.patch 2>/dev/null
 }
 for v in $VERSIONS; do
   if [ -z "$(patch_dirs "$v")" ]; then

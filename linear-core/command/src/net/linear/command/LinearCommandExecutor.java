@@ -49,6 +49,8 @@ public final class LinearCommandExecutor {
             runStats(sender, s);
         } else if (action instanceof LinearAction.ConvertAction c) {
             runConvert(sender, c);
+        } else if (action instanceof LinearAction.ExplicitConvertAction e) {
+            runConvertExplicit(sender, e);
         } else if (action instanceof LinearAction.QueueAction q) {
             runQueue(sender, q);
         } else if (action instanceof LinearAction.StatusAction s) {
@@ -107,6 +109,41 @@ public final class LinearCommandExecutor {
             sender.sendMessage("Queued " + job.shortId() + " for " + action.world() + ": "
                 + action.direction().plainDirection() + ".");
         }
+    }
+
+    private void runConvertExplicit(CommandSender sender, LinearAction.ExplicitConvertAction action) {
+        if (!sender.hasPermission(LinearPermissions.CONVERT)
+                && !sender.hasPermission(LinearPermissions.BASE)) {
+            sender.sendMessage(LinearPermissions.denied("linear convert"));
+            return;
+        }
+        // Placeholder legacy direction for queue display (explicit routing lives on the job's
+        // from/to; the direction only preserves the 6-value enum for legacy code paths).
+        ConvertDirection placeholder = placeholderFor(action.to());
+        ConvertJob job = queue.submit(new JobQueue.Spec(
+            placeholder, action.world(), action.level(), action.threads(), action.dryRun(), 0));
+        job.setExplicit(action.from(), action.to(), action.grid());
+        String words = "Copy from " + action.from().name().toLowerCase(java.util.Locale.ROOT)
+            + " to " + action.to().name().toLowerCase(java.util.Locale.ROOT);
+        String params = net.linear.LinearRegionConverter.explicitParamsDetail(
+            action.to(), action.level(), action.grid());
+        if (action.dryRun()) {
+            sender.sendMessage("Queued " + job.shortId() + " for " + action.world() + ": "
+                + words + " (" + params + "). Practice run, nothing changed.");
+        } else {
+            sender.sendMessage("Queued " + job.shortId() + " for " + action.world() + ": "
+                + words + " (" + params + ").");
+        }
+    }
+
+    private static ConvertDirection placeholderFor(net.linear.LinearRegionConverter.ConvertFormat to) {
+        if (to == net.linear.LinearRegionConverter.ConvertFormat.MCA) {
+            return ConvertDirection.LINEAR_TO_MCA;
+        }
+        if (to == net.linear.LinearRegionConverter.ConvertFormat.B_LINEAR) {
+            return ConvertDirection.MCA_TO_BLINEAR;
+        }
+        return ConvertDirection.MCA_TO_LINEAR;
     }
 
     private void runQueue(CommandSender sender, LinearAction.QueueAction action) {

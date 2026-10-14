@@ -225,8 +225,8 @@ index 022593220923b28d61b458bee827d21be4dd2f2c..911d515d5bbde2408edc344bd3199f28
 --- a/net/minecraft/server/level/ServerChunkCache.java
 +++ b/net/minecraft/server/level/ServerChunkCache.java
 @@ -215,5 +215,14 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
-          this.savedDataStorage = savedDataStorage; // Paper - initialize SavedDataStorage earlier
-          this.ticketStorage = this.savedDataStorage.computeIfAbsent(TicketStorage.TYPE);
+         this.savedDataStorage = savedDataStorage; // Paper - initialize SavedDataStorage earlier
+         this.ticketStorage = this.savedDataStorage.computeIfAbsent(TicketStorage.TYPE);
 +        // Linear - sysprop-first via LinearPolicy (single owner; file layer stays case-sensitive, per-world scope, default LINEAR).
 +        final String linearSysFormat = System.getProperty(net.linear.config.LinearPolicy.SYSPROP_FORMAT);
 +        final String linearFileFormat = level.paperConfig().regionFormat.format == null ? null : level.paperConfig().regionFormat.format.toString();
@@ -308,7 +308,7 @@ index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd283
 -    private static final Pattern REGEX = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.mca$");
 +    // Linear - match both extensions. NOTE the grouping has no spaces:
 +    // Kaiiju 0004 shipped "(linear | mca)" which only matches a literal "linear " with trailing space.
-+    private static final Pattern REGEX = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
++    private static final Pattern REGEX = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear|b_linear)$");
      private final DataFixer dataFixer;
      private final UpgradeProgress upgradeProgress;
      private final String type;
@@ -338,7 +338,7 @@ index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd283
          return (SimpleRegionStorage)(this.recreateRegionFiles
              ? new RecreatingSimpleRegionStorage(
                  info.withTypeSuffix("source"),
-@@ -143,11 +153,29 @@ public class RegionStorageUpgrader {
+@@ -143,11 +153,41 @@ public class RegionStorageUpgrader {
                  resolveRecreateDirectory(regionFolder),
                  this.dataFixer,
                  true,
@@ -352,16 +352,28 @@ index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd283
  
 +    // Linear - config-free format signal. LINEAR worlds carry .linear files
 +    // (the offline converter lays them down before any flag flip; see UPGRADE.md),
-+    // so one REGEX-matching *.linear file selects the LINEAR write side. Pure-Anvil
++    // so one REGEX-matching *.linear/*.b_linear file selects the linear-family write side. Pure-Anvil
 +    // folders keep the vanilla ANVIL side. Filesystem signal only.
 +    private static net.linear.RegionFileFormat probeWriteFormat(final Path regionFolder) {
-+        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".linear"));
++        // Deterministic over listFiles order (which is undefined): scan all
++        // matches, preferring B_LINEAR when any buffered file is present,
++        // else LINEAR. Mixed folders are pathological (the converter
++        // escalates same-coordinates pairs instead of guessing); the write
++        // side must still pick exactly one format.
++        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".linear") || name.endsWith(".b_linear"));
++        boolean seenLinear = false;
 +        if (files != null) {
 +            for (File file : files) {
 +                if (REGEX.matcher(file.getName()).matches()) {
-+                    return net.linear.RegionFileFormat.LINEAR;
++                    if (file.getName().endsWith(".b_linear")) {
++                        return net.linear.RegionFileFormat.B_LINEAR;
++                    }
++                    seenLinear = true;
 +                }
 +            }
++        }
++        if (seenLinear) {
++            return net.linear.RegionFileFormat.LINEAR;
 +        }
 +        return net.linear.RegionFileFormat.ANVIL;
 +    }
@@ -374,8 +386,8 @@ index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd283
  
      private static List<FileToUpgrade> getAllChunkPositions(final RegionStorageInfo info, final Path regionFolder) {
 -        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".mca"));
-+        // Linear - scan both extensions so --upgradeWorld / DFU passes see Linear data.
-+        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".mca") || name.endsWith(".linear"));
++        // Linear - scan all extensions so --upgradeWorld / DFU passes see Linear data.
++        File[] files = regionFolder.toFile().listFiles((dir, name) -> name.endsWith(".mca") || name.endsWith(".linear") || name.endsWith(".b_linear"));
          if (files == null) {
              return List.of();
          } else {
@@ -403,7 +415,7 @@ index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd283
                          }
                      } catch (Throwable var18) {
                          LOGGER.error("Failed to read chunks from region file {}", regionFile.toPath(), var18);
-@@ -251,20 +282,48 @@ public class RegionStorageUpgrader {
+@@ -251,20 +282,85 @@ public class RegionStorageUpgrader {
          return storage.upgradeChunkTag(chunkTag, this.defaultVersion, this.dataFixContextTag, targetVersion);
      }
  
@@ -425,10 +437,13 @@ index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd283
              Path directoryPath = filePath.getParent();
 +            // Linear - recreate format: the write side creates in the probed
 +            // format, so the new file may carry a different extension than the source
-+            // (mca -> linear on a LINEAR world; unchanged on ANVIL). Resolve both.
++            // (mca -> linear/b_linear on a linear-family world; unchanged on ANVIL). Resolve all.
              Path newFilePath = resolveRecreateDirectory(directoryPath).resolve(filePath.getFileName().toString());
 +            Path newLinearPath = replaceExtension(newFilePath, ".mca", ".linear");
 +            Path newAnvilPath = replaceExtension(newFilePath, ".linear", ".mca");
++            Path newBufferedPath = replaceExtension(replaceExtension(newFilePath, ".mca", ".b_linear"), ".linear", ".b_linear");
++            Path newLinearFromBuffered = replaceExtension(newFilePath, ".b_linear", ".linear");
++            Path newAnvilFromBuffered = replaceExtension(newFilePath, ".b_linear", ".mca");
 +            Path actualNew = null;
 +            if (newFilePath.toFile().exists()) {
 +                actualNew = newFilePath;
@@ -436,6 +451,12 @@ index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd283
 +                actualNew = newLinearPath;
 +            } else if (newAnvilPath.toFile().exists()) {
 +                actualNew = newAnvilPath;
++            } else if (newBufferedPath.toFile().exists()) {
++                actualNew = newBufferedPath;
++            } else if (newLinearFromBuffered.toFile().exists()) {
++                actualNew = newLinearFromBuffered;
++            } else if (newAnvilFromBuffered.toFile().exists()) {
++                actualNew = newAnvilFromBuffered;
 +            }
  
              try {
@@ -444,15 +465,43 @@ index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd283
 -                    Files.move(newFilePath, filePath);
 +                if (actualNew != null) {
 +                    Path finalPath = directoryPath.resolve(actualNew.getFileName().toString());
++                    // Linear - buffered swap sibling travels with the master:
++                    // a lingering .swp beside a deleted source would resurrect
++                    // chunks on the next open, and a staged .swp left behind
++                    // would shadow the moved master. Mirror every master
++                    // move/delete on its ".swp" sibling.
++                    boolean bufferedTarget =
++                        actualNew.getFileName().toString().endsWith(".b_linear");
++                    boolean bufferedSource =
++                        filePath.getFileName().toString().endsWith(".b_linear");
++                    Path actualNewSwap =
++                        actualNew.resolveSibling(actualNew.getFileName() + ".swp");
++                    Path finalSwap =
++                        finalPath.resolveSibling(finalPath.getFileName() + ".swp");
++                    Path sourceSwap =
++                        filePath.resolveSibling(filePath.getFileName() + ".swp");
 +                    if (!finalPath.equals(filePath)) {
-+                        // Extension changed (mca -> linear or reverse): lay down the new
++                        // Extension changed (mca -> linear/b_linear or reverse): lay down the new
 +                        // file, then remove the stale source so no shadow pair remains
 +                        // (dual-read prefers .mca and would hide the converted data).
 +                        Files.move(actualNew, finalPath);
++                        if (bufferedTarget && Files.isRegularFile(actualNewSwap)) {
++                            Files.move(actualNewSwap, finalSwap);
++                        }
 +                        Files.deleteIfExists(filePath);
++                        if (bufferedSource) {
++                            Files.deleteIfExists(sourceSwap);
++                        }
 +                    } else {
 +                        Files.delete(filePath);
++                        if (bufferedSource) {
++                            Files.deleteIfExists(sourceSwap);
++                        }
 +                        Files.move(actualNew, finalPath);
++                        if (bufferedTarget && Files.isRegularFile(actualNewSwap)) {
++                            Files.deleteIfExists(finalSwap);
++                            Files.move(actualNewSwap, finalSwap);
++                        }
 +                    }
                  } else {
                      LOGGER.error("Failed to replace an old region file. New file {} does not exist.", newFilePath);
@@ -666,7 +715,7 @@ index eae4963b6d18c5f92871477b93f81c2c79331cd9..63abf1eadd70a7db3a9c450821805949
  public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise.patches.chunk_system.io.ChunkSystemRegionFileStorage { // Paper - rewrite chunk system
      private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger(); // Paper
      public static final String ANVIL_EXTENSION = ".mca";
-+    public static final String LINEAR_EXTENSION = ".linear"; // Linear
++    public static final String LINEAR_EXTENSION = ".linear"; // Linear - linear family; see isLinearFamily for B_LINEAR
      private static final int MAX_CACHE_SIZE = 256;
 -    public final Long2ObjectLinkedOpenHashMap<RegionFile> regionCache = new Long2ObjectLinkedOpenHashMap<>();
 +    // Linear - cache widened from RegionFile to AbstractRegionFile so one cache
@@ -691,7 +740,7 @@ index eae4963b6d18c5f92871477b93f81c2c79331cd9..63abf1eadd70a7db3a9c450821805949
      public static ChunkPos getRegionFileCoordinates(Path file) {
          String fileName = file.getFileName().toString();
 -        if (!fileName.startsWith("r.") || !fileName.endsWith(".mca")) {
-+        if (!fileName.startsWith("r.") || (!fileName.endsWith(ANVIL_EXTENSION) && !fileName.endsWith(LINEAR_EXTENSION))) { // Linear - accept .linear
++        if (!fileName.startsWith("r.") || (!fileName.endsWith(ANVIL_EXTENSION) && !fileName.endsWith(LINEAR_EXTENSION) && !fileName.endsWith(AbstractRegionFileFactory.B_LINEAR_EXTENSION))) { // Linear - accept .linear + .b_linear
              return null;
          }
  
@@ -724,7 +773,7 @@ index eae4963b6d18c5f92871477b93f81c2c79331cd9..63abf1eadd70a7db3a9c450821805949
 +        //   if (!this.format.equals("LINEAR")) return;
 +        // would always be true (an enum never equals a String) and disable
 +        // the guard. Correct form:
-+        if (this.format != RegionFileFormat.LINEAR) return;
++        if (!RegionFileFormat.isLinearFamily(this.format)) return;
 +        if (!java.nio.file.Files.isSymbolicLink(path)) return;
 +        Path link = java.nio.file.Files.readSymbolicLink(path);
 +        if (!java.nio.file.Files.exists(link) || !java.nio.file.Files.isReadable(link)) {
@@ -755,22 +804,25 @@ index eae4963b6d18c5f92871477b93f81c2c79331cd9..63abf1eadd70a7db3a9c450821805949
          if (ret != null) {
              return ret;
          }
-@@ -113,9 +154,16 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -113,9 +154,19 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              this.regionCache.removeLast().close();
          }
  
 -        final Path regionPath = this.folder.resolve(getRegionFileName(chunkX, chunkZ));
 -
 -        if (!java.nio.file.Files.exists(regionPath)) {
-+        // Linear - dual-read probe: .mca preferred, else .linear. The negative cache
-+        // stays keyed by region long and now means "neither extension exists".
++        // Linear - triple-read probe: .mca preferred, else .linear, else .b_linear. The negative cache
++        // stays keyed by region long and now means "no extension exists".
 +        final Path anvilPath = this.folder.resolve(getRegionFileName(chunkX, chunkZ, RegionFileFormat.ANVIL));
 +        final Path linearPath = this.folder.resolve(getRegionFileName(chunkX, chunkZ, RegionFileFormat.LINEAR));
++        final Path bufferedPath = this.folder.resolve(getRegionFileName(chunkX, chunkZ, RegionFileFormat.B_LINEAR));
 +        final Path regionPath;
 +        if (java.nio.file.Files.exists(anvilPath)) {
 +            regionPath = anvilPath;
 +        } else if (java.nio.file.Files.exists(linearPath)) {
 +            regionPath = linearPath;
++        } else if (java.nio.file.Files.exists(bufferedPath)) {
++            regionPath = bufferedPath;
 +        } else {
              this.markNonExisting(key);
              return null;

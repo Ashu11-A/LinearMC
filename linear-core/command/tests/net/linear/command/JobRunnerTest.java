@@ -1,5 +1,6 @@
 package net.linear.command;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -18,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import net.linear.AbstractRegionFile;
+import net.linear.BufferedLinearRegionFile;
 import net.linear.ChunkKey;
 import net.linear.LinearRegionConverter;
 import net.linear.LinearRegionFile;
@@ -37,15 +39,20 @@ public class JobRunnerTest {
     @After
     public void restoreDefaultSeams() {
         LinearRegionConverter.linear$setRegionOpener((file, folder, sync, format, level) -> {
+            String name = file.getFileName().toString();
+            if (name.endsWith(RegionFileFormat.B_LINEAR_EXTENSION)) {
+                return new BufferedLinearRegionFile(file, level);
+            }
             if (format == null || format == RegionFileFormat.LINEAR) {
                 return new LinearRegionFile(file, level);
             }
-            throw new IOException("No RegionOpener registered for non-LINEAR open: " + file);
+            throw new IOException("No RegionOpener registered for non-linear open: " + file);
         });
         LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) -> {
             throw new IOException("no ChunkSinkOpener registered for " + file);
         });
         LinearRegionConverter.linear$setReverseSkipPredicate(p -> false);
+        LinearRegionConverter.linear$setForwardSkipPredicate(p -> false);
     }
 
     @Test
@@ -80,6 +87,44 @@ public class JobRunnerTest {
         assertEquals(1, sinkOpens.get());
         assertFalse(Files.isRegularFile(source));
         assertTrue(Files.isRegularFile(region.resolve("r.0.0.mca")));
+    }
+
+    @Test
+    public void bufferedReverseRoutesToMca() throws Exception {
+        Path region = temporaryFolder.newFolder("regionb").toPath();
+        Path source = region.resolve("r.1.1.b_linear");
+        long chunk = ChunkKey.of(33, 33);
+        byte[] payload = new byte[]{4, 5, 6};
+        try (BufferedLinearRegionFile src = new BufferedLinearRegionFile(source, 6)) {
+            src.write(chunk, ByteBuffer.wrap(payload));
+            src.flush();
+        }
+
+        Map<Long, byte[]> mcaChunks = new ConcurrentHashMap<>();
+        AtomicInteger sinkOpens = new AtomicInteger(0);
+        LinearRegionConverter.linear$setRegionOpener((file, folder, sync, format, level) -> {
+            if (file.getFileName().toString().endsWith(RegionFileFormat.ANVIL_EXTENSION)) {
+                return new FakeMcaFile(mcaChunks);
+            }
+            String name = file.getFileName().toString();
+            if (name.endsWith(RegionFileFormat.B_LINEAR_EXTENSION)) {
+                return new BufferedLinearRegionFile(file, level);
+            }
+            return new LinearRegionFile(file, level);
+        });
+        LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) -> {
+            sinkOpens.incrementAndGet();
+            return new FakeSink(file, mcaChunks);
+        });
+
+        ConvertJob job = new ConvertJob(
+            ConvertDirection.BLINEAR_TO_MCA, "world", 6, 1, false, 0);
+        JobRunner.run(job, List.of(region), 6, 1);
+
+        assertEquals(JobState.DONE, job.state());
+        assertEquals(1, sinkOpens.get());
+        assertFalse(Files.isRegularFile(source));
+        assertArrayEquals(payload, mcaChunks.get(chunk));
     }
 
     @Test

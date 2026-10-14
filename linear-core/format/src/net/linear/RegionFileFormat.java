@@ -7,12 +7,15 @@ package net.linear;
 public enum RegionFileFormat {
     ANVIL,
     LINEAR,
+    B_LINEAR,
     INVALID;
 
     /** On-disk extension for Anvil region files. */
     public static final String ANVIL_EXTENSION = ".mca";
     /** On-disk extension for Linear region files. */
     public static final String LINEAR_EXTENSION = ".linear";
+    /** On-disk extension for buffered-linear region files. */
+    public static final String B_LINEAR_EXTENSION = ".b_linear";
     /** Shipped default compression level (v1.0.0+). */
     public static final int DEFAULT_COMPRESSION_LEVEL = 6;
     /** Maximum zstd level accepted. */
@@ -43,5 +46,16 @@ public enum RegionFileFormat {
             return DEFAULT_COMPRESSION_LEVEL;
         }
         return level;
+    }
+
+    /**
+     * True for the linear family ({@code LINEAR} and {@code B_LINEAR}):
+     * both share the LZ4/zstd codec lineage, dual-read probing, the
+     * symlink data-loss guard, and the no-sidecar oversize policy.
+     * Use this (never {@code == LINEAR}) when branching on
+     * "linear-family vs anvil" so buffered files are not misrouted.
+     */
+    public static boolean isLinearFamily(RegionFileFormat format) {
+        return format == LINEAR || format == B_LINEAR;
     }
 }

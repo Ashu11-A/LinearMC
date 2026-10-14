@@ -41,10 +41,14 @@ public class ConverterValidationTest {
         // No reset hook exists on the seam, so re-register behavior identical
         // to the production default (LINEAR direct, anything else rejected).
         LinearRegionConverter.linear$setRegionOpener((file, folder, sync, format, level) -> {
+            String name = file.getFileName().toString();
+            if (name.endsWith(RegionFileFormat.B_LINEAR_EXTENSION)) {
+                return new BufferedLinearRegionFile(file, level);
+            }
             if (format == null || format == RegionFileFormat.LINEAR) {
                 return new LinearRegionFile(file, level);
             }
-            throw new IOException("No RegionOpener registered for non-LINEAR open: " + file);
+            throw new IOException("No RegionOpener registered for non-linear open: " + file);
         });
     }
 

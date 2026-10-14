@@ -95,8 +95,177 @@ public class FlushCoordinatorTest {
     }
 
     @Test
-    public void evictForceFlushesAndDropsRegistry() throws Exception {
-        Path folder = temporaryFolder.newFolder("evict").toPath();
+    public void redirtiedDuringFlushRequeuesInsteadOfDropping() throws Exception {
+        // A file still marked after flush() (write landed after the snapshot)
+        // must be requeued, not dropped: first drain reflushes, second clears.
+        Path folder = temporaryFolder.newFolder("requeue").toPath();
+        LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
+        StubRegionFile file = new StubRegionFile() {
+            int calls;
+            @Override
+            public void flush() {
+                calls++;
+                super.flush();
+                if (calls == 1) {
+                    // Simulate a write racing the flush: re-mark after the
+                    // snapshot clear so the tail sees a dirty file.
+                    marked = true;
+                }
+            }
+        };
+        coordinator.markDirty(file);
+        coordinator.flushDirty(true);
+        assertEquals(1, file.flushCalls);
+        assertEquals("redirtied file must be requeued", 1, coordinator.dirtyCount());
+        assertEquals("clean requeue must not count a failure",
+            0, coordinator.snapshot().failures());
+        coordinator.flushDirty(true);
+        assertEquals(2, file.flushCalls);
+        assertTrue(coordinator.isEmpty());    }
+
+    @Test
+    public void shutdownModeDefersVictimsToForcedDrain() throws Exception {
+        // Post-halt saves re-dirty hundreds of files at once: per-mark
+        // pressure/age victim batches would serialize multi-second rebuilds
+        // behind the shutdown saves. Shutdown mode tracks only; the tail
+        // forced barrier persists everything once.
+        Path folder = temporaryFolder.newFolder("shutdownmode").toPath();
+        LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
+        LinearFlushCoordinator.linear$beginShutdown();
+        java.util.List<StubRegionFile> files = new java.util.ArrayList<>();
+        for (int i = 0; i < LinearFlushCoordinator.MAX_DIRTY + 50; i++) {
+            StubRegionFile file = new StubRegionFile();
+            files.add(file);
+            coordinator.markDirty(file);
+        }
+        assertEquals("no victim may drain during shutdown saves",
+            LinearFlushCoordinator.MAX_DIRTY + 50, coordinator.dirtyCount());
+        for (StubRegionFile file : files) {
+            assertEquals(0, file.flushCalls);
+        }
+        coordinator.flushDirty(true);
+        for (StubRegionFile file : files) {
+            assertEquals(1, file.flushCalls);
+        }
+        assertTrue(coordinator.isEmpty());
+    }
+
+    @Test
+    public void shutdownModeDefersAgeVictim() throws Exception {
+        // Age branch needs a really-old head (frequency is live-read): the
+        // removal from the dirty set happens synchronously in markDirty, so
+        // asserting the count right after the trigger is deterministic.
+        LinearFlushCoordinator.linear$setFlushFrequencyForTests(1L);
+        Path folder = temporaryFolder.newFolder("shutdownage").toPath();
+        LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
+        StubRegionFile head = new StubRegionFile();
+        coordinator.markDirty(head);
+        Thread.sleep(1100L);
+        LinearFlushCoordinator.linear$beginShutdown();
+        coordinator.markDirty(new StubRegionFile());
+        assertEquals("age victim must not drain during shutdown", 2, coordinator.dirtyCount());
+        assertEquals(0, head.flushCalls);
+        coordinator.flushDirty(true);
+        assertTrue(coordinator.isEmpty());
+    }
+
+    @Test
+    public void forcedDrainUsesThreadFloor() throws Exception {        // Forced drains (explicit save, eviction, shutdown) run at least at
+        // the floor even when flush-max-threads is 1; periodic saves don't.
+        LinearFlushCoordinator.linear$setFlushThreadsForTests(1);
+        assertTrue(LinearFlushCoordinator.linear$forcedThreadsFloor() >= 2);
+        LinearFlushCoordinator.linear$setForcedThreadsForTests(1);
+        assertEquals(1, LinearFlushCoordinator.linear$forcedThreadsFloor());
+        LinearFlushCoordinator.linear$setForcedThreadsForTests(null);
+        assertTrue(LinearFlushCoordinator.linear$forcedThreadsFloor() >= 2);
+    }
+
+    @Test
+    public void evictRedrainsRaceRemark() throws Exception {
+        // A write landing between the evict snapshot-clear and the tail check
+        // re-marks after the drain: evict's bounded re-pass must persist it
+        // instead of stranding it in the dropped registry.
+        Path folder = temporaryFolder.newFolder("evictrace").toPath();
+        LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
+        StubRegionFile file = new StubRegionFile() {
+            int calls;
+            @Override
+            public void flush() {
+                calls++;
+                super.flush();
+                if (calls == 1) {
+                    marked = true;
+                }
+            }
+        };
+        coordinator.markDirty(file);
+        LinearFlushCoordinator.evict(folder);
+        assertEquals(2, file.flushCalls);
+        assertEquals(0, LinearFlushCoordinator.forFolder(folder).dirtyCount());
+    }
+
+    @Test
+    public void flushSnapshotFansOutAndJoins() throws Exception {
+        // Leg-owned storage loops share this barrier: every file flushed
+        // exactly once, joined before return, failures isolated per file.
+        Path folder = temporaryFolder.newFolder("snapshot").toPath();
+        LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
+        java.util.List<StubRegionFile> files = new java.util.ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            StubRegionFile file = new StubRegionFile();
+            files.add(file);
+        }
+        coordinator.linear$flushSnapshot(
+            new java.util.ArrayList<AbstractRegionFile>(files), true);
+        for (StubRegionFile file : files) {
+            assertEquals(1, file.flushCalls);
+        }
+    }
+
+    @Test
+    public void flushSnapshotIsolatesFailures() throws Exception {
+        Path folder = temporaryFolder.newFolder("snapshotfail").toPath();
+        LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
+        StubRegionFile ok1 = new StubRegionFile();
+        StubRegionFile bad = new StubRegionFile() {
+            @Override
+            public void flush() {
+                throw new RuntimeException("boom");
+            }
+        };
+        StubRegionFile ok2 = new StubRegionFile();
+        java.util.List<AbstractRegionFile> snapshot = new java.util.ArrayList<>();
+        snapshot.add(ok1);
+        snapshot.add(bad);
+        snapshot.add(ok2);
+        // Must not throw: failures are logged + counted + requeued.
+        coordinator.linear$flushSnapshot(snapshot, true);
+        assertEquals(1, ok1.flushCalls);
+        assertEquals(1, ok2.flushCalls);
+        assertEquals("failure must be counted", 1, coordinator.snapshot().failures());
+        assertEquals("failed file must be requeued", 1, coordinator.dirtyCount());
+    }
+
+    @Test
+    public void flushSnapshotSerialWhenUnforced() throws Exception {
+        // forceBarrier=false keeps the configured serial default: with
+        // threads=1 the files flush inline in order.
+        LinearFlushCoordinator.linear$setFlushThreadsForTests(1);
+        Path folder = temporaryFolder.newFolder("snapshotserial").toPath();
+        LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
+        java.util.List<StubRegionFile> files = new java.util.ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            files.add(new StubRegionFile());
+        }
+        coordinator.linear$flushSnapshot(
+            new java.util.ArrayList<AbstractRegionFile>(files), false);
+        for (StubRegionFile file : files) {
+            assertEquals(1, file.flushCalls);
+        }
+    }
+
+    @Test
+    public void evictForceFlushesAndDropsRegistry() throws Exception {        Path folder = temporaryFolder.newFolder("evict").toPath();
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
         StubRegionFile file = new StubRegionFile();
         coordinator.markDirty(file);
@@ -304,6 +473,10 @@ public class FlushCoordinatorTest {
 
         @Override
         public void flush() {
+            // Mirrors the real files (LinearRegionFile/BufferedLinearRegionFile
+            // clear the flag when they snapshot): a flush without concurrent
+            // writes leaves nothing marked. Concurrent writes re-mark after.
+            marked = false;
             flushCalls++;
         }
 
@@ -347,6 +520,8 @@ public class FlushCoordinatorTest {
                 timedOut = true;
                 return;
             }
+            // Same snapshot-clear contract as StubRegionFile.flush().
+            marked = false;
             flushCalls++;
         }
     }
