@@ -164,3 +164,15 @@ format and the reference implementation.
 constraints.
 * Spottedleaf's [SectorTool](https://github.com/PaperMC/SectorTool) as a spec
 reference, and the GC rules established during its review for hot-path buffers.
+* [DivineMC](https://github.com/BX-Team/DivineMC) for the V2/V3 bucketed
+layout (wire bytes 3 and 4) and the per-version codec structure;
+wire-compatible in both directions.
+* [Pumpkin](https://github.com/Pumpkin-MC/Pumpkin) (Rust server) for the
+Pumpkin bucketed layout (wire byte 2, dense buckets); structural reference
+for detection and conversion.
+* LinearPurpur for the hot per-chunk zstd level practice on the
+tick-adjacent write path.
+* [Paper](https://github.com/PaperMC/Paper) / [Folia](https://github.com/PaperMC/Folia)
+and [Canvas](https://github.com/CraftCanvasMC/Canvas) /
+[Horizon](https://github.com/CraftCanvasMC/Horizon) as the supported server
+lines.
