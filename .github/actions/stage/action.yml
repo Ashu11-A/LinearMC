@@ -175,25 +175,17 @@ runs:
         # Core sources (single codebase: linear-core owns all net.linear
         # classes). Folia patches no longer inject net/linear, so without
         # this copy the fork won't compile. Mirrors the canvas
-        # stage-overlay copy: each module contributes its top-level
-        # net/linear/*.java plus subpackage trees, into the analogous
+        # stage-overlay copy: each module contributes its full net/linear
+        # tree (recursive, preserving relative paths) into the analogous
         # folia-server java tree (canvas uses
         # canvas-server/src/main/java/net/linear/).
         mkdir -p "$FOLIA_DIR/folia-server/src/main/java/net/linear"
         for m in "$SUPPLEMENT_DIR"/linear-core/*/src/net/linear; do
-          for f in "$m"/*.java; do
-            [ -f "$f" ] || continue
-            cp "$f" "$FOLIA_DIR/folia-server/src/main/java/net/linear/"
-          done
-          for sub in "$m"/*/; do
-            [ -d "$sub" ] || continue
-            subname="$(basename "$sub")"
-            mkdir -p "$FOLIA_DIR/folia-server/src/main/java/net/linear/$subname"
-            for f in "$sub"/*.java; do
-              [ -f "$f" ] || continue
-              cp "$f" "$FOLIA_DIR/folia-server/src/main/java/net/linear/$subname/"
-            done
-          done
+          (cd "$m" && find . -name '*.java' | while IFS= read -r f; do
+            dest="$FOLIA_DIR/folia-server/src/main/java/net/linear/${f#./}"
+            mkdir -p "$(dirname "$dest")"
+            cp "$f" "$dest"
+          done)
         done
         if [ "$INCLUDE_TESTS" = "true" ]; then
           mkdir -p "$FOLIA_DIR/folia-server/src/test/java/net/linear"

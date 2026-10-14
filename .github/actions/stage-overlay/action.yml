@@ -82,24 +82,16 @@ runs:
             || { echo "::error::NMS overlay apply failed: $p"; exit 1; }
         done
         # 2. Core sources (single codebase: linear-core owns all net.linear classes).
-        # Each module contributes its top-level net/linear/*.java plus any
-        # subpackage trees (command/, config/) preserving relative paths.
-        # Destination layout is unchanged: net/linear/ flat + subpackages.
+        # Each module contributes its full net/linear tree (recursive: top-level
+        # files plus arbitrarily deep subpackage trees) preserving relative
+        # paths. Destination layout mirrors the source tree.
         mkdir -p "$CANVAS_DIR/canvas-server/src/main/java/net/linear"
         for m in "$SUPPLEMENT_DIR"/linear-core/*/src/net/linear; do
-          for f in "$m"/*.java; do
-            [ -f "$f" ] || continue
-            cp "$f" "$CANVAS_DIR/canvas-server/src/main/java/net/linear/"
-          done
-          for sub in "$m"/*/; do
-            [ -d "$sub" ] || continue
-            subname="$(basename "$sub")"
-            mkdir -p "$CANVAS_DIR/canvas-server/src/main/java/net/linear/$subname"
-            for f in "$sub"/*.java; do
-              [ -f "$f" ] || continue
-              cp "$f" "$CANVAS_DIR/canvas-server/src/main/java/net/linear/$subname/"
-            done
-          done
+          (cd "$m" && find . -name '*.java' | while IFS= read -r f; do
+            dest="$CANVAS_DIR/canvas-server/src/main/java/net/linear/${f#./}"
+            mkdir -p "$(dirname "$dest")"
+            cp "$f" "$dest"
+          done)
         done
         # 3. Paper-side new files (verbatim): shared hub first (minus shadows),
         # then leg adapters. The hub and the leg store them as
