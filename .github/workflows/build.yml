@@ -427,13 +427,6 @@ jobs:
           ./gradlew build --stacktrace
           ls -la build/libs/ | grep -iE 'horizon-plugin-.*\.jar'
 
-      - name: Hash paperclip jar (SHA256)
-        if: matrix.server != 'horizon'
-        run: |
-          JAR=$(ls "$GITHUB_WORKSPACE/fork/${{ steps.layout.outputs.module }}/build/libs"/${{ steps.layout.outputs.glob }} | head -1)
-          test -f "$JAR" || { echo "::error::paperclip jar missing:"; ls -la "$GITHUB_WORKSPACE/fork/${{ steps.layout.outputs.module }}/build/libs/" || true; exit 1; }
-          sha256sum "$JAR" | tee "$JAR.sha256"
-
       - name: Boot smoke (ANVIL fresh world)
         if: matrix.server != 'horizon'
         uses: ./supplement/.github/actions/boot-smoke
@@ -484,26 +477,19 @@ jobs:
           name: linearmc-${{ matrix.server }}-${{ matrix.mc }}
           path: |
             fork/${{ steps.layout.outputs.module }}/build/libs/${{ steps.layout.outputs.glob }}
-            fork/${{ steps.layout.outputs.module }}/build/libs/${{ steps.layout.outputs.glob }}.sha256
           if-no-files-found: error
 
-      - name: Hash + upload Horizon jars (artifact + release asset)
-        if: matrix.server == 'horizon'
-        run: |
-          cd "$GITHUB_WORKSPACE/supplement/versions/plugins/horizon/${{ matrix.version }}/build/libs"
-          # Exactly two jars: the mixin jar + the Paper-half -plugin jar.
-          test "$(ls horizon-plugin-*.jar | wc -l)" -eq 2 || { echo "::error::expected 2 horizon jars:"; ls -la; exit 1; }
-          sha256sum horizon-plugin-*.jar | tee checksums.sha256
-          echo HASHED
-
-      - name: Upload Horizon jars (artifact + release asset)
+      - name: Upload Horizon jar (artifact + release asset)
         if: matrix.server == 'horizon'
         uses: actions/upload-artifact@v4
         with:
           name: linearmc-${{ matrix.server }}-${{ matrix.mc }}
+          # Only the mixin jar ships. The splitPluginSourceSets side-product
+          # (horizon-plugin-*-plugin.jar, ~25 KB, Paper half without its
+          # dependencies) never worked standalone and is not published.
           path: |
             supplement/versions/plugins/horizon/${{ matrix.version }}/build/libs/horizon-plugin-*.jar
-            supplement/versions/plugins/horizon/${{ matrix.version }}/build/libs/checksums.sha256
+            !supplement/versions/plugins/horizon/${{ matrix.version }}/build/libs/horizon-plugin-*-plugin.jar
           if-no-files-found: error
 
   release:
@@ -570,20 +556,16 @@ jobs:
             case "$TAG" in
               v*-linear.*) echo "Legacy tag targets a fork build; horizon has no asset — skipping upload."; exit 0;;
             esac
-            # Horizon channel ships TWO jars: the mixin jar (plugins/) and
-            # the Paper-half -plugin jar (--add-plugin). Both attach.
+            # Horizon channel ships ONE jar: the mixin jar (plugins/). The
+            # splitPluginSourceSets side-product (-plugin jar, ~25 KB without
+            # dependencies) never worked standalone and is not published.
             MAIN=$(ls dist/horizon-plugin-*.jar | grep -v -- '-plugin\.jar$' | head -1)
-            PLUGIN=$(ls dist/horizon-plugin-*-plugin.jar | head -1)
             test -f "$MAIN" || { echo "::error::horizon mixin jar missing:"; ls -la dist/ || true; exit 1; }
-            test -f "$PLUGIN" || { echo "::error::horizon paper-half jar missing:"; ls -la dist/ || true; exit 1; }
             cp "$MAIN" "linearmc-horizon-${{ matrix.mc }}-${PROJ}.jar"
-            cp "$PLUGIN" "linearmc-horizon-${{ matrix.mc }}-${PROJ}-plugin.jar"
-            sha256sum linearmc-horizon-*.jar | tee linearmc-horizon-${{ matrix.mc }}-${PROJ}.sha256
-            gh release upload "$TAG" linearmc-horizon-${{ matrix.mc }}-${PROJ}.jar linearmc-horizon-${{ matrix.mc }}-${PROJ}-plugin.jar linearmc-horizon-${{ matrix.mc }}-${PROJ}.sha256 --repo Ashu11-A/LinearMC --clobber
+            gh release upload "$TAG" linearmc-horizon-${{ matrix.mc }}-${PROJ}.jar --repo Ashu11-A/LinearMC --clobber
             exit 0
           fi
           JAR=$(ls dist/*-paperclip-*.jar | head -1)
           test -f "$JAR" || { echo "::error::paperclip jar missing in artifact:"; ls -la dist/ || true; exit 1; }
           cp "$JAR" "$ASSET"
-          sha256sum "$ASSET" | tee "$ASSET.sha256"
-          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --repo Ashu11-A/LinearMC --clobber
+          gh release upload "$TAG" "$ASSET" --repo Ashu11-A/LinearMC --clobber

@@ -1,6 +1,6 @@
 # Changelog
 
-Tags are project versions (`v1.0.0`, `v1.1.0`, `v1.1.1`). Each release attaches one jar + `.sha256`
+Tags are project versions (`v1.0.0`, `v1.1.0`, `v1.1.1`). Each release attaches one jar
 per supported version line, named `folia-linear-<mcversion>-<project>.jar`.
 
 ## v1.1.1
@@ -234,7 +234,7 @@ Folia `62dc0f2` (MC 26.1.2), Java 25.
 - **CI:** `build.yml` (tags/releases/dispatch, paperclip + release assets)
   and `test.yml` (every push/PR: static gates, preflight, unit suites,
   config checks); `scripts/preflight.sh` local CI mirror. CI builds on `v*`
-  tags and attaches the paperclip jar plus its sha256.
+  tags and attaches the paperclip jar.
 - **Release package:** revert procedure (flag flip, convert back, stock jar
   swap) behind backup, free-space and sha gates; operator notes; config
   templates.

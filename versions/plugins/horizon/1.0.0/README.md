@@ -6,7 +6,10 @@ Targets region file and region storage behavior, plus the Moonrise region contro
 
 Install:
 
-- Put both the mixin jar and the plugin jar in the plugins folder. Both are required.
+- Put the mixin jar in the plugins folder. No second jar is needed: the
+  former `-plugin` side-product carried the Paper classes without their
+  dependencies and could never load standalone, so it is no longer
+  published.
 - Put the format flag on the server startup command line.
 - Default format is Anvil when the flag is absent.
 
