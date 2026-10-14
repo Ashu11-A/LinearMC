@@ -144,6 +144,9 @@ directions, chunk-for-chunk on real server bytes.
   (44 carried byte-identical; `CommandLinear.java`,
   `RegionFileFormat.java`, and the upgrader scan test carry the current
   B_LINEAR feature state, identical on both legs);
+  Canvas 26.3 ships under this version (`linearmc-canvas-26.3-1.1.0.jar`,
+  pinned to Canvas `main@cc4e7611`, legs keep only seam adapters with
+  hub-shadow staging).
   each version leg keeps only its seam adapters (a drifted version shadows
   the hub copy with a loud staging note — see the hub README). Verified
   locally against Canvas main (`cc4e7611`, MC 26.3): full overlay stages,
