@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import net.linear.probe.LinearStorageProbe;
 
 /** Probe contract for the Canvas overlay / Horizon mixin storage open paths. */
 public class LinearStorageProbeTest {

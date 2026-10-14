@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.Random;
 import net.jpountz.lz4.LZ4Factory;
 import net.linear.versions.ChunkSlotTable;
-import net.linear.versions.PumpkinLinear;
+import net.linear.versions.codecs.PumpkinLinear;
 import net.linear.versions.RegionFormatDetector;
 import net.linear.versions.VersionWriteParams;
 import org.junit.After;

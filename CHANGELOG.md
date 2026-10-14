@@ -1,7 +1,24 @@
 # Changelog
 
-Tags are project versions (`v1.0.0`, `v1.1.0`). Each release attaches one jar + `.sha256`
+Tags are project versions (`v1.0.0`, `v1.1.0`, `v1.1.1`). Each release attaches one jar + `.sha256`
 per supported version line, named `folia-linear-<mcversion>-<project>.jar`.
+
+## v1.1.1
+
+### Sub-package reorganization, zero behavior change (2026-10-14)
+
+Structural maintenance release: every source file is under 1,000 lines and
+every `src` package holds at most 5 files. The 3,658-line converter,
+1,293-line flush coordinator and 1,123-line buffered region file are now
+thin delegating facades over extracted modules (converter 596, coordinator
+598, buffered 972). Versions share one abstract base with identical hook
+names, each version has its own public decoder and encoder classes, and the
+save-format sinks (`LINEAR`/`B_LINEAR`/`ANVIL`) are separated from the
+version codecs (`V1`/`V2`/`V3`/Pumpkin). Same wire bytes, same config
+defaults, same gameplay as v1.1.0; two internal methods and one constant
+widened from package-private to public, no signature changes. One internal
+guard added: buffered masters fail fast instead of staging through the
+plain-linear render path.
 
 ## v1.1.0
 

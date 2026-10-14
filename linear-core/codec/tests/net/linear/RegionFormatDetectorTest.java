@@ -13,7 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import net.linear.versions.ChunkSlotTable;
-import net.linear.versions.PumpkinLinear;
+import net.linear.versions.codecs.PumpkinLinear;
 import net.linear.versions.RegionFormatDetector;
 import net.linear.versions.RegionFormatDetector.DetectedFormat;
 import net.linear.versions.VersionWriteParams;

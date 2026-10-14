@@ -4,8 +4,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
-import net.linear.LinearBucketGrid;
-import net.linear.LinearXxHash64;
+import net.linear.probe.LinearBucketGrid;
+import net.linear.compression.LinearXxHash64;
+import net.linear.versions.base.V2LinearBase;
 
 /**
  * Self-aware format detection for {@code .linear} files (requirements section 4).

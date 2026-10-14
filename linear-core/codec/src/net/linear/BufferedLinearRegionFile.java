@@ -17,11 +17,12 @@ import java.util.Objects;
 import java.util.concurrent.atomic.LongAccumulator;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantLock;
-import net.jpountz.lz4.LZ4Factory;
-import net.jpountz.xxhash.XXHash32;
-import net.jpountz.xxhash.XXHashFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import net.linear.buffered.BufferedMaster;
+import net.linear.buffered.BufferedStagingSweep;
+import net.linear.buffered.BufferedSwapFile;
+import net.linear.io.LinearDirectStreams;
 
 /**
  * Buffered-linear region file ({@code .b_linear} + {@code .b_linear.swp}).
@@ -59,23 +60,20 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
     private static final Logger LOGGER = LoggerFactory.getLogger(BufferedLinearRegionFile.class);
 
     /** Swap magic (DivineMC-compatible). */
-    static final long SWAP_SUPERBLOCK = 0x1145141919810L;
-    static final byte SWAP_VERSION = 2;
-    static final int DEFAULT_SEED = 0x0721;
-    static final int SECTOR_ENTRY_SIZE = 17;
-    static final int SECTOR_TABLE_SIZE = 1024 * SECTOR_ENTRY_SIZE;
-    static final int SWAP_HEADER_SIZE = 8 + 1 + 4 + 8 + SECTOR_TABLE_SIZE;
+    static final long SWAP_SUPERBLOCK = BufferedSwapFile.SWAP_SUPERBLOCK;
+    static final byte SWAP_VERSION = BufferedSwapFile.SWAP_VERSION;
+    static final int DEFAULT_SEED = BufferedSwapFile.DEFAULT_SEED;
+    static final int SECTOR_ENTRY_SIZE = BufferedSwapFile.SECTOR_ENTRY_SIZE;
+    static final int SECTOR_TABLE_SIZE = BufferedSwapFile.SECTOR_TABLE_SIZE;
+    static final int SWAP_HEADER_SIZE = BufferedSwapFile.SWAP_HEADER_SIZE;
     /** Master magic (DivineMC-compatible). */
-    static final long MASTER_SUPERBLOCK = -0x200812250269L;
-    static final byte MASTER_VERSION = 2;
-    static final int MASTER_HEADER_SIZE = 8 + 1 + 8 + 1;
+    public static final long MASTER_SUPERBLOCK = BufferedMaster.MASTER_SUPERBLOCK;
+    public static final byte MASTER_VERSION = BufferedMaster.MASTER_VERSION;
+    static final int MASTER_HEADER_SIZE = BufferedMaster.MASTER_HEADER_SIZE;
     /** Auto-compact when spare exceeds 1 MiB and 60% of live bytes. */
-    static final long COMPACT_SPARE_BYTES = 1024L * 1024L;
+    static final long COMPACT_SPARE_BYTES = BufferedMaster.COMPACT_SPARE_BYTES;
     /** Cap guarding the single master-image allocation against corrupt lengths. */
-    static final long MAX_MASTER_BYTES = 1024L * 1024L * 1024L;
-
-    private static final LZ4Factory LZ4 = LZ4Factory.fastestInstance();
-    private static final XXHash32 HASH32 = XXHashFactory.fastestInstance().hash32();
+    static final long MAX_MASTER_BYTES = BufferedMaster.MAX_MASTER_BYTES;
 
     private final Path file;
     private final Path swapPath;
@@ -391,11 +389,7 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
         pruneSwapSidecar();
     }
 
-    private void pruneSwapSidecar() {
-        deleteQuietly(this.swapPath);
-        deleteQuietly(this.file.resolveSibling(this.file.getFileName() + ".tmp"));
-        deleteQuietly(this.swapPath.resolveSibling(this.swapPath.getFileName() + ".tmp"));
-    }
+    private void pruneSwapSidecar() { BufferedStagingSweep.pruneSwapSidecar(this.file, this.swapPath); }
 
     // internal
 
@@ -491,15 +485,15 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
             flushOk = true;
         } catch (final IOException e) {
             this.markDirty();
-            deleteQuietly(tmp);
+            BufferedSwapFile.deleteQuietly(tmp);
             throw e;
         } catch (final RuntimeException e) {
             this.markDirty();
-            deleteQuietly(tmp);
+            BufferedSwapFile.deleteQuietly(tmp);
             throw e;
         } catch (final Error e) {
             this.markDirty();
-            deleteQuietly(tmp);
+            BufferedSwapFile.deleteQuietly(tmp);
             throw e;
         } finally {
             this.flushGuard.unlock();
@@ -582,10 +576,10 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
             }
             out.force(true);
         } catch (IOException | RuntimeException e) {
-            deleteQuietly(compactTmp);
+            BufferedSwapFile.deleteQuietly(compactTmp);
             throw e instanceof IOException io ? io : new IOException("Swap compact failed for " + this.file, e);
         } catch (Error e) {
-            deleteQuietly(compactTmp);
+            BufferedSwapFile.deleteQuietly(compactTmp);
             throw e;
         }
         // Move first while the old channel is still open: on move failure
@@ -642,8 +636,7 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
             // but unmoved, compact staging): the master is old truth and the
             // swap table decides, so neither tmp may survive to confuse a
             // later open or inflate disk.
-            deleteQuietly(this.file.resolveSibling(this.file.getFileName() + ".tmp"));
-            deleteQuietly(this.swapPath.resolveSibling(this.swapPath.getFileName() + ".tmp"));
+            BufferedStagingSweep.sweepTmpSiblings(this.file);
             long swapSize = Files.isRegularFile(this.swapPath) ? this.swapChannel.size() : 0L;
             byte[][] masterEnvelopes = null;
             boolean swapUsable = swapSize >= SWAP_HEADER_SIZE;
@@ -799,79 +792,21 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
     }
 
     /** True iff the live sector's envelope reads and its hash verifies. */
-    private boolean verifySector(int index) {        try {
-            if (this.sectorLength[index] <= 0 || this.sectorLength[index] > LinearRegionFile.MAX_CHUNK_SIZE + 1024L) {
-                return false;
-            }
-            if (this.sectorOffset[index] < SWAP_HEADER_SIZE
-                    || this.sectorOffset[index] + this.sectorLength[index] > this.swapChannel.size()) {
-                return false;
-            }
-            byte[] outer = new byte[(int) this.sectorLength[index]];
-            readFully(this.swapChannel, this.sectorOffset[index], outer);
-            decodeOuterToEnvelope(outer, index);
-            return true;
-        } catch (IOException | RuntimeException e) {
-            return false;
-        }
-    }
+    private boolean verifySector(int index) { return BufferedSwapFile.verifySector(this.swapChannel, this.sectorOffset, this.sectorLength, index, this.file); }
 
     private void readSwapHeaders() throws IOException {
-        long size = this.swapChannel.size();
-        if (size < SWAP_HEADER_SIZE) {
-            throw new IOException("Truncated swap file: " + this.swapPath + " (" + size + " bytes)");
-        }
-        ByteBuffer header = ByteBuffer.allocate(SWAP_HEADER_SIZE);
-        readFully(this.swapChannel, 0L, header);
-        header.flip();
-        if (header.getLong() != SWAP_SUPERBLOCK) {
-            throw new IOException("Invalid swap superblock in " + this.swapPath);
-        }
-        if ((header.get() & 0xFF) != (SWAP_VERSION & 0xFF)) {
-            throw new IOException("Unsupported swap version in " + this.swapPath);
-        }
-        this.hashSeed = header.getInt();
-        long acquired = header.getLong();
-        long maxEnd = SWAP_HEADER_SIZE;
-        for (int i = 0; i < 1024; i++) {
-            long offset = header.getLong();
-            long length = header.getLong();
-            boolean live = header.get() == 1;
-            if (offset < 0L || length < 0L || (live && (offset < SWAP_HEADER_SIZE || offset + length > size))) {
-                live = false;
-                length = 0L;
-                offset = 0L;
-            }
-            this.sectorOffset[i] = offset;
-            this.sectorLength[i] = length;
-            this.sectorLive[i] = live && length > 0;
-            if (offset + length > maxEnd && offset + length <= size) {
-                maxEnd = offset + length;
-            }
-        }
-        this.acquiredIndex = Math.max(acquired, maxEnd);
+        int[] seed = new int[1];
+        long acquired = BufferedSwapFile.readSwapHeaders(this.swapChannel, this.swapPath, this.sectorOffset,
+            this.sectorLength, this.sectorLive, seed);
+        this.hashSeed = seed[0];
+        this.acquiredIndex = acquired;
     }
 
-    private ByteBuffer encodeSwapHeader(long acquired) {
-        ByteBuffer header = ByteBuffer.allocate(SWAP_HEADER_SIZE);
-        header.putLong(SWAP_SUPERBLOCK);
-        header.put(SWAP_VERSION);
-        header.putInt(this.hashSeed);
-        header.putLong(acquired);
-        for (int i = 0; i < 1024; i++) {
-            header.putLong(this.sectorOffset[i]);
-            header.putLong(this.sectorLength[i]);
-            header.put((byte) (this.sectorLive[i] ? 1 : 0));
-        }
-        header.flip();
-        return header;
-    }
+    private ByteBuffer encodeSwapHeader(long acquired) { return BufferedSwapFile.encodeSwapHeader(acquired, this.hashSeed, this.sectorOffset, this.sectorLength, this.sectorLive); }
 
     private void writeSwapHeadersLocked(boolean force) throws IOException {
-        writeFully(this.swapChannel, 0L, encodeSwapHeader(this.acquiredIndex));
-        if (force) {
-            this.swapChannel.force(true);
-        }
+        BufferedSwapFile.writeSwapHeadersLocked(this.swapChannel, this.acquiredIndex, this.hashSeed,
+            this.sectorOffset, this.sectorLength, this.sectorLive, force);
     }
 
     /**
@@ -934,104 +869,27 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
         return envelopes;
     }
 
-    // envelope helpers
+    // envelope helpers (owned by BufferedMaster; one-line delegates)
 
     /** Builds the inner envelope {@code [len, timestampMs, xxhash32, payload]}. */
-    private byte[] encodeInner(byte[] payload, long timestampMs) {
-        ByteBuffer envelope = ByteBuffer.allocate(4 + 8 + 4 + payload.length);
-        envelope.putInt(payload.length);
-        envelope.putLong(timestampMs);
-        envelope.putInt(HASH32.hash(payload, 0, payload.length, this.hashSeed));
-        envelope.put(payload);
-        return envelope.array();
-    }
+    private byte[] encodeInner(byte[] payload, long timestampMs) { return BufferedMaster.encodeInner(payload, timestampMs, this.hashSeed); }
 
     /** Verifies an inner envelope and returns its payload. */
-    private byte[] decodeInner(byte[] envelope, int slot) throws IOException {
-        if (envelope.length < 16) {
-            throw new IOException("Truncated envelope in slot " + slot + " of " + this.file);
-        }
-        ByteBuffer buf = ByteBuffer.wrap(envelope);
-        int dataLen = buf.getInt();
-        buf.getLong();
-        int hash = buf.getInt();
-        if (dataLen < 0 || dataLen > LinearRegionFile.MAX_CHUNK_SIZE || dataLen != envelope.length - 16) {
-            throw new IOException("Invalid envelope length " + dataLen + " in slot " + slot + " of " + this.file);
-        }
-        byte[] payload = new byte[dataLen];
-        buf.get(payload);
-        if (HASH32.hash(payload, 0, payload.length, this.hashSeed) != hash) {
-            throw new IOException("XXHash32 check failed in slot " + slot + " of " + this.file);
-        }
-        return payload;
-    }
+    private byte[] decodeInner(byte[] envelope, int slot) throws IOException { return BufferedMaster.decodeInner(envelope, slot, this.file, this.hashSeed); }
 
-    private void verifyInner(byte[] envelope, int slot) throws IOException {
-        decodeInner(envelope, slot);
-    }
+    private void verifyInner(byte[] envelope, int slot) throws IOException { BufferedMaster.verifyInner(envelope, slot, this.file, this.hashSeed); }
 
-    private static long envelopeTimestamp(byte[] envelope) {
-        if (envelope.length < 12) {
-            return 0L;
-        }
-        return ByteBuffer.wrap(envelope, 4, 8).getLong();
-    }
+    private static long envelopeTimestamp(byte[] envelope) { return BufferedMaster.envelopeTimestamp(envelope); }
 
     /** Outer layer: {@code [int32 decompressedLen][LZ4 bytes]} of a fresh inner envelope. */
-    private byte[] encodeOuter(byte[] payload) throws IOException {
-        byte[] envelope = encodeInner(payload, System.currentTimeMillis());
-        int maxCompressed = LZ4.fastCompressor().maxCompressedLength(envelope.length);
-        byte[] packed = new byte[maxCompressed + 4];
-        ByteBuffer outer = ByteBuffer.wrap(packed);
-        outer.putInt(envelope.length);
-        int n;
-        try {
-            n = LZ4.fastCompressor().compress(envelope, 0, envelope.length, packed, 4, maxCompressed);
-        } catch (RuntimeException e) {
-            throw new IOException("LZ4 compress failed for " + this.file + ": " + e.getMessage(), e);
-        }
-        byte[] out = new byte[n + 4];
-        System.arraycopy(packed, 0, out, 0, n + 4);
-        return out;
-    }
+    private byte[] encodeOuter(byte[] payload) throws IOException { return BufferedMaster.encodeOuter(payload, this.file, this.hashSeed); }
 
     /** Decodes an outer envelope all the way to the raw payload. */
-    private byte[] decodeOuter(byte[] outer, int slot) throws IOException {
-        return decodeInner(decodeOuterToEnvelope(outer, slot), slot);
-    }
+    private byte[] decodeOuter(byte[] outer, int slot) throws IOException { return BufferedMaster.decodeOuter(outer, slot, this.file, this.hashSeed); }
 
-    private byte[] decodeOuterToEnvelope(byte[] outer, int slot) throws IOException {
-        if (outer.length < 4) {
-            throw new IOException("Truncated sector in slot " + slot + " of " + this.file);
-        }
-        int decompressedLen = ByteBuffer.wrap(outer, 0, 4).getInt();
-        if (decompressedLen < 16 || decompressedLen > LinearRegionFile.MAX_CHUNK_SIZE + 16) {
-            throw new IOException("Invalid sector length " + decompressedLen + " in slot " + slot + " of " + this.file);
-        }
-        byte[] envelope = new byte[decompressedLen];
-        int consumed;
-        try {
-            consumed = LZ4.fastDecompressor().decompress(outer, 4, envelope, 0, decompressedLen);
-        } catch (RuntimeException e) {
-            throw new IOException("LZ4 decompress failed in slot " + slot + " of " + this.file + ": " + e.getMessage(),
-                e);
-        }
-        if (consumed != outer.length - 4) {
-            throw new IOException("LZ4 frame mismatch in slot " + slot + " of " + this.file);
-        }
-        return envelope;
-    }
+    private byte[] decodeOuterToEnvelope(byte[] outer, int slot) throws IOException { return BufferedMaster.decodeOuterToEnvelope(outer, slot, this.file); }
 
-    private byte[] lz4Outer(byte[] inner) {
-        int maxCompressed = LZ4.fastCompressor().maxCompressedLength(inner.length);
-        byte[] packed = new byte[maxCompressed + 4];
-        ByteBuffer outer = ByteBuffer.wrap(packed);
-        outer.putInt(inner.length);
-        int n = LZ4.fastCompressor().compress(inner, 0, inner.length, packed, 4, maxCompressed);
-        byte[] out = new byte[n + 4];
-        System.arraycopy(packed, 0, out, 0, n + 4);
-        return out;
-    }
+    private byte[] lz4Outer(byte[] inner) { return BufferedMaster.lz4Outer(inner); }
 
     // small io
 
@@ -1092,15 +950,6 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
                 LinearFlushCoordinator.forFolder(this.parentDir).markDirty(this);
             }
         } catch (RuntimeException ignored) {
-        }
-    }
-
-    private static void deleteQuietly(Path tmp) {
-        try {
-            if (tmp != null) {
-                Files.deleteIfExists(tmp);
-            }
-        } catch (IOException | RuntimeException ignored) {
         }
     }
 

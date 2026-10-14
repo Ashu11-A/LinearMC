@@ -17,15 +17,20 @@ import net.jpountz.lz4.LZ4Factory;
 import net.linear.config.LinearFileConfig;
 import net.linear.config.LinearPolicy;
 import net.linear.versions.ChunkSlotTable;
-import net.linear.versions.PumpkinLinear;
+import net.linear.versions.codecs.PumpkinLinear;
 import net.linear.versions.RegionFormatDetector;
-import net.linear.versions.V1Linear;
-import net.linear.versions.V2Linear;
-import net.linear.versions.V3Linear;
+import net.linear.versions.codecs.V1Linear;
+import net.linear.versions.codecs.V2Linear;
+import net.linear.versions.codecs.V3Linear;
 import net.linear.versions.Version;
 import net.linear.versions.VersionWriteParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import net.linear.bucket.LinearBase;
+import net.linear.bucket.LinearBucketReader;
+import net.linear.bucket.LinearBucketWriter;
+import net.linear.io.LinearDirectStreams;
+import net.linear.probe.LinearBucketGrid;
 
 /**
  * Xymb Linear region file (V1/V2/V3 reader, configurable V1/V2/V3 writer) for the Linear Folia fork.
@@ -238,7 +243,7 @@ public final class LinearRegionFile implements AbstractRegionFile {
      * (adapter: global {@code region-format.linear.compression-workers},
      * default 0 = serial). Test override wins.
      */
-    static int linear$resolveCompressionWorkers() {
+    public static int linear$resolveCompressionWorkers() {
         Integer override = COMPRESSION_WORKERS_OVERRIDE_FOR_TESTS;
         if (override != null) {
             return override;
@@ -256,7 +261,7 @@ public final class LinearRegionFile implements AbstractRegionFile {
      * 0 = off). Valid 10..27; out-of-range yields 0 (off) without calling
      * setLong (JNI would silently disable anyway). Test override wins.
      */
-    static int linear$resolveLongDistanceMatching() {
+    public static int linear$resolveLongDistanceMatching() {
         Integer override = LONG_DISTANCE_MATCHING_OVERRIDE_FOR_TESTS;
         if (override != null) {
             return override;

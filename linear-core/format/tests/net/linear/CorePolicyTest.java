@@ -3,6 +3,7 @@ package net.linear;
 import static org.junit.Assert.assertEquals;
 
 import org.junit.Test;
+import net.linear.probe.AbstractRegionFileFactory;
 
 /**
  * Format selector + factory alias contract (format only; supplier seams

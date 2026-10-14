@@ -15,6 +15,7 @@ import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import net.linear.probe.AbstractRegionFileFactory;
 
 /**
  * Factory dispatch contract: defaults fail loud, legs inject the seams,

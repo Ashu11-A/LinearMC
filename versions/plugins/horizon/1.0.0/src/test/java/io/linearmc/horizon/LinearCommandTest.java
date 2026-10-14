@@ -16,16 +16,17 @@ import net.linear.LinearRegionTimings;
 import net.linear.command.CommandSender;
 import net.linear.command.ConvertDirection;
 import net.linear.command.ConvertJob;
-import net.linear.command.JobQueue;
-import net.linear.command.JobState;
+import net.linear.command.queue.JobQueue;
+import net.linear.command.queue.JobState;
 import net.linear.command.LinearAction;
 import net.linear.command.LinearCommandExecutor;
-import net.linear.command.LinearCommandParser;
-import net.linear.command.LinearPermissions;
-import net.linear.command.LinearTabCompleter;
-import net.linear.command.QueueOp;
-import net.linear.command.StatsProvider;
+import net.linear.command.parse.LinearCommandParser;
+import net.linear.command.parse.LinearPermissions;
+import net.linear.command.parse.LinearTabCompleter;
+import net.linear.command.queue.QueueOp;
+import net.linear.command.stats.StatsProvider;
 import org.junit.jupiter.api.Test;
+import net.linear.command.parse.InvalidUsageException;
 
 /**
  * Contract the Paper-half {@code /linear} tree dispatches: core grammar
@@ -67,9 +68,9 @@ public class LinearCommandTest {
         assertEquals(Optional.of("world"), filtered.worldFilter());
         assertTrue(parser.parse(new String[]{}) instanceof LinearAction.HelpAction);
         assertTrue(parser.parse(new String[]{"help"}) instanceof LinearAction.HelpAction);
-        assertThrows(net.linear.command.InvalidUsageException.class,
+        assertThrows(net.linear.command.parse.InvalidUsageException.class,
             () -> parser.parse(new String[]{"bogus"}));
-        assertThrows(net.linear.command.InvalidUsageException.class,
+        assertThrows(net.linear.command.parse.InvalidUsageException.class,
             () -> parser.parse(new String[]{"stats", "a", "b"}));
     }
 
@@ -91,9 +92,9 @@ public class LinearCommandTest {
         assertEquals(4, full.threads());
         assertFalse(full.dryRun());
 
-        assertThrows(net.linear.command.InvalidUsageException.class,
+        assertThrows(net.linear.command.parse.InvalidUsageException.class,
             () -> parser.parse(new String[]{"convert"}));
-        assertThrows(net.linear.command.InvalidUsageException.class,
+        assertThrows(net.linear.command.parse.InvalidUsageException.class,
             () -> parser.parse(new String[]{"convert", "world", "--level", "99"}));
     }
 
@@ -114,9 +115,9 @@ public class LinearCommandTest {
                 new String[]{"queue", "pause", id.toString().substring(0, 8)});
         assertEquals(QueueOp.PAUSE, prefixPause.op());
         assertEquals(Optional.of(id.toString().substring(0, 8)), prefixPause.jobRef());
-        assertThrows(net.linear.command.InvalidUsageException.class,
+        assertThrows(net.linear.command.parse.InvalidUsageException.class,
             () -> parser.parse(new String[]{"queue", "pause", "  "}));
-        assertThrows(net.linear.command.InvalidUsageException.class,
+        assertThrows(net.linear.command.parse.InvalidUsageException.class,
             () -> parser.parse(new String[]{"queue", "bogus"}));
     }
 

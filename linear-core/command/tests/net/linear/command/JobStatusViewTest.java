@@ -10,6 +10,8 @@ import net.linear.LinearRegionConverter.FileResult;
 import net.linear.LinearRegionConverter.Status;
 
 import org.junit.Test;
+import net.linear.LinearRegionConverter;
+import net.linear.command.queue.JobStatusView;
 
 /** command: plain-words JobStatusView (widths, vocabulary, next actions). */
 public class JobStatusViewTest {

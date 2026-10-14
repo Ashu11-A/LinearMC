@@ -20,11 +20,12 @@ import java.util.HashMap;
 import java.util.Map;
 import net.jpountz.lz4.LZ4Factory;
 import net.linear.versions.ChunkSlotTable;
-import net.linear.versions.PumpkinLinear;
+import net.linear.versions.codecs.PumpkinLinear;
 import net.linear.versions.RegionFormatDetector;
-import net.linear.versions.V2Linear;
+import net.linear.versions.codecs.V2Linear;
 import net.linear.versions.VersionWriteParams;
 import org.junit.Test;
+import net.linear.compression.LinearXxHash64;
 
 /**
  * Pumpkin (wire 2, bucketed) codec tests against hand-built fixtures following

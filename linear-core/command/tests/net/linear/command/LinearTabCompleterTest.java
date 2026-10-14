@@ -9,6 +9,8 @@ import java.util.Set;
 import java.util.function.Supplier;
 
 import org.junit.Test;
+import net.linear.command.parse.LinearTabCompleter;
+import net.linear.command.queue.JobQueue;
 
 /** command: LinearTabCompleter contract. */
 public class LinearTabCompleterTest {

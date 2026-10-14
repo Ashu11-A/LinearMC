@@ -3,6 +3,7 @@ package net.linear.versions;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import net.linear.LinearImplementation;
+import net.linear.bucket.LinearBase;
 
 /**
  * DivineMC-style per-version region codec.

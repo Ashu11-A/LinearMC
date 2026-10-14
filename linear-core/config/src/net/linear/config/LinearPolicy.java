@@ -1,6 +1,6 @@
 package net.linear.config;
 
-import net.linear.LinearBucketGrid;
+import net.linear.probe.LinearBucketGrid;
 import net.linear.LinearImplementation;
 import net.linear.RegionFileFormat;
 

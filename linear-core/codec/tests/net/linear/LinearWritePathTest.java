@@ -16,6 +16,7 @@ import java.util.zip.DeflaterOutputStream;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import net.linear.io.LinearWritePath;
 
 /** Write-path gates: oversize boundary, detached copy, empty-deletes-slot. */
 public class LinearWritePathTest {

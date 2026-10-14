@@ -49,8 +49,8 @@ index 000000000..2e84b0b81
 +import java.util.Optional;
 +import net.linear.LinearFlushCoordinator;
 +import net.linear.LinearRegionTimings;
-+import net.linear.command.LinearStatsCompact;
-+import net.linear.command.LinearStatsHealth;
++import net.linear.command.stats.LinearStatsCompact;
++import net.linear.command.stats.health.LinearStatsHealth;
 +import net.kyori.adventure.text.Component;
 +import net.kyori.adventure.text.format.NamedTextColor;
 +import net.kyori.adventure.text.format.TextDecoration;
@@ -235,15 +235,15 @@ index 000000000..7c1e5a9b2
 +import net.linear.LinearRegionTimings;
 +import net.linear.command.ConvertDirection;
 +import net.linear.command.ConvertJob;
-+import net.linear.command.InvalidUsageException;
-+import net.linear.command.JobQueue;
-+import net.linear.command.JobState;
++import net.linear.command.parse.InvalidUsageException;
++import net.linear.command.queue.JobQueue;
++import net.linear.command.queue.JobState;
 +import net.linear.command.LinearAction;
 +import net.linear.command.LinearCommandExecutor;
-+import net.linear.command.LinearCommandParser;
-+import net.linear.command.LinearPermissions;
-+import net.linear.command.LinearTabCompleter;
-+import net.linear.command.StatsProvider;
++import net.linear.command.parse.LinearCommandParser;
++import net.linear.command.parse.LinearPermissions;
++import net.linear.command.parse.LinearTabCompleter;
++import net.linear.command.stats.StatsProvider;
 +import net.linear.config.LinearPolicy;
 +import org.bukkit.Bukkit;
 +import org.bukkit.World;
@@ -396,7 +396,7 @@ index 000000000..7c1e5a9b2
 +            sender.sendMessage(LinearPolicy.overrideLine(LinearPolicy.SYSPROP_LEVEL, sysLevel,
 +                String.valueOf(convert.level()), String.valueOf(level), "global"));
 +        }
-+        sender.sendMessage(net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
++        sender.sendMessage(net.linear.command.queue.JobStatusView.statusLine(job, System.currentTimeMillis()));
 +        CONVERT_EXECUTOR.execute(() -> runConvert(sender, job, level, worldFolder, convert.world(), convert.threads()));
 +        return true;
 +    }
@@ -440,7 +440,7 @@ index 000000000..7c1e5a9b2
 +            sender.sendMessage(LinearPolicy.overrideLine(LinearPolicy.SYSPROP_LEVEL, sysLevel,
 +                String.valueOf(explicit.level()), String.valueOf(level), "global"));
 +        }
-+        sender.sendMessage(net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
++        sender.sendMessage(net.linear.command.queue.JobStatusView.statusLine(job, System.currentTimeMillis()));
 +        CONVERT_EXECUTOR.execute(() -> runConvert(sender, job, level, worldFolder, explicit.world(), explicit.threads()));
 +        return true;
 +    }
@@ -689,7 +689,7 @@ index 000000000..7c1e5a9b2
 +        try {
 +            job.start();
 +        } catch (IllegalStateException alreadyTerminal) {
-+            Bukkit.getLogger().info("[Linear] " + net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
++            Bukkit.getLogger().info("[Linear] " + net.linear.command.queue.JobStatusView.statusLine(job, System.currentTimeMillis()));
 +            return;
 +        }
 +        try {
@@ -697,8 +697,8 @@ index 000000000..7c1e5a9b2
 +        } catch (RuntimeException gate) {
 +            final String reason = "quiesce flush failed: " + gate.getMessage();
 +            failQuietly(job, reason);
-+            tell(sender, net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
-+            tell(sender, net.linear.command.JobStatusView.failedAction(reason));
++            tell(sender, net.linear.command.queue.JobStatusView.statusLine(job, System.currentTimeMillis()));
++            tell(sender, net.linear.command.queue.JobStatusView.failedAction(reason));
 +            return;
 +        }
 +        long dirty = 0L;
@@ -709,15 +709,15 @@ index 000000000..7c1e5a9b2
 +        } catch (RuntimeException gate) {
 +            final String reason = "quiesce snapshot failed: " + gate.getMessage();
 +            failQuietly(job, reason);
-+            tell(sender, net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
-+            tell(sender, net.linear.command.JobStatusView.failedAction(reason));
++            tell(sender, net.linear.command.queue.JobStatusView.statusLine(job, System.currentTimeMillis()));
++            tell(sender, net.linear.command.queue.JobStatusView.failedAction(reason));
 +            return;
 +        }
 +        if (dirty > 0L) {
 +            final String stillDirty = "quiesce gate: " + dirty + " file(s) still dirty after forced flush; retry when worlds are idle.";
 +            failQuietly(job, stillDirty);
-+            tell(sender, net.linear.command.JobStatusView.statusLine(job, System.currentTimeMillis()));
-+            tell(sender, net.linear.command.JobStatusView.failedAction(stillDirty));
++            tell(sender, net.linear.command.queue.JobStatusView.statusLine(job, System.currentTimeMillis()));
++            tell(sender, net.linear.command.queue.JobStatusView.failedAction(stillDirty));
 +            return;
 +        }
 +        final java.util.List<Path> folders = new java.util.ArrayList<>();
@@ -733,7 +733,7 @@ index 000000000..7c1e5a9b2
 +            }
 +        }
 +        try {
-+            net.linear.command.JobRunner.run(job, folders, level, threads);
++            net.linear.command.queue.JobRunner.run(job, folders, level, threads);
 +        } finally {
 +            if (reverse) {
 +                net.linear.config.LinearFormatOverride.clear(worldName);
@@ -743,9 +743,9 @@ index 000000000..7c1e5a9b2
 +            }
 +        }
 +        final long nowMs = System.currentTimeMillis();
-+        Bukkit.getLogger().info("[Linear] " + net.linear.command.JobStatusView.statusLine(job, nowMs));
-+        tell(sender, net.linear.command.JobStatusView.statusLine(job, nowMs));
-+        for (String line : net.linear.command.JobStatusView.detailLines(job, nowMs)) {
++        Bukkit.getLogger().info("[Linear] " + net.linear.command.queue.JobStatusView.statusLine(job, nowMs));
++        tell(sender, net.linear.command.queue.JobStatusView.statusLine(job, nowMs));
++        for (String line : net.linear.command.queue.JobStatusView.detailLines(job, nowMs)) {
 +            tell(sender, line);
 +        }
 +    }

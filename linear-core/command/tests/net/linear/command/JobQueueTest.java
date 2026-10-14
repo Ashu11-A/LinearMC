@@ -19,6 +19,11 @@ import net.linear.LinearRegionConverter.FileResult;
 import net.linear.LinearRegionConverter.Status;
 
 import org.junit.Test;
+import net.linear.LinearRegionConverter;
+import net.linear.command.parse.LinearPermissions;
+import net.linear.command.queue.JobQueue;
+import net.linear.command.queue.JobState;
+import net.linear.command.stats.LinearStatsFormat;
 
 /** command: in-memory convert queue, job lifecycle, permission/format constants. */
 public class JobQueueTest {

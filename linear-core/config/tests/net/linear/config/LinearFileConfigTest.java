@@ -9,6 +9,7 @@ import java.util.Optional;
 import net.linear.RegionFileFormat;
 import org.junit.After;
 import org.junit.Test;
+import net.linear.LinearImplementation;
 
 /**
  * Cache + no-arg resolution + override-line coverage for the core-owned

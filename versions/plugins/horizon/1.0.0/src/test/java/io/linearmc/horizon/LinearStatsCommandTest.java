@@ -11,7 +11,7 @@ import java.util.Collection;
 import java.util.List;
 
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import net.linear.command.LinearPermissions;
+import net.linear.command.parse.LinearPermissions;
 import org.bukkit.Server;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.PluginDescriptionFile;

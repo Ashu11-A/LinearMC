@@ -12,16 +12,17 @@ import java.util.UUID;
 import net.linear.command.CommandSender;
 import net.linear.command.ConvertDirection;
 import net.linear.command.ConvertJob;
-import net.linear.command.InvalidUsageException;
-import net.linear.command.JobQueue;
-import net.linear.command.JobState;
+import net.linear.command.parse.InvalidUsageException;
+import net.linear.command.queue.JobQueue;
+import net.linear.command.queue.JobState;
 import net.linear.command.LinearAction;
 import net.linear.command.LinearCommandExecutor;
-import net.linear.command.LinearCommandParser;
-import net.linear.command.LinearPermissions;
-import net.linear.command.QueueOp;
+import net.linear.command.parse.LinearCommandParser;
+import net.linear.command.parse.LinearPermissions;
+import net.linear.command.queue.QueueOp;
 
 import org.junit.jupiter.api.Test;
+import net.linear.command.queue.JobRunner;
 
 /**
  * {@code /linear} command-tree binding: parser grammar plus core executor

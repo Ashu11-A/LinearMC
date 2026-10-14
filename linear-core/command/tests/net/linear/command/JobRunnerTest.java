@@ -29,6 +29,8 @@ import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import net.linear.command.queue.JobRunner;
+import net.linear.command.queue.JobState;
 
 /** command: job runner direction routing + quiesce check. */
 public class JobRunnerTest {

@@ -7,6 +7,7 @@ import java.nio.file.Path;
 
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.worldupdate.RegionStorageUpgrader;
+import net.linear.probe.AbstractRegionFileFactory;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

@@ -297,7 +297,7 @@ index c23fc1254ae54ca3996aec8a4a7ffe66c1e8d8f9..5dc94488ce8683ebe5d28f0d1ebfd283
  import net.minecraft.world.level.chunk.storage.RecreatingSimpleRegionStorage;
 -import net.minecraft.world.level.chunk.storage.RegionFile;
 +import net.linear.AbstractRegionFile; // Linear
-+import net.linear.AbstractRegionFileFactory; // Linear
++import net.linear.probe.AbstractRegionFileFactory; // Linear
  import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
  import net.minecraft.world.level.chunk.storage.SimpleRegionStorage;
  import net.minecraft.world.level.storage.LevelStorageSource;
@@ -707,7 +707,7 @@ index eae4963b6d18c5f92871477b93f81c2c79331cd9..63abf1eadd70a7db3a9c450821805949
 +import net.minecraft.util.profiling.jfr.JvmProfiler;
  import net.minecraft.world.level.ChunkPos;
 +import net.linear.AbstractRegionFile;
-+import net.linear.AbstractRegionFileFactory;
++import net.linear.probe.AbstractRegionFileFactory;
 +import net.linear.LinearFlushCoordinator;
 +import net.linear.RegionFileFormat;
  import org.jspecify.annotations.Nullable;

@@ -26,7 +26,7 @@ index 28268de..4d54c2a 100644
 +++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 @@ -19,6 +19,7 @@ import net.minecraft.world.level.ChunkPos;
  import net.linear.AbstractRegionFile;
- import net.linear.AbstractRegionFileFactory;
+ import net.linear.probe.AbstractRegionFileFactory;
  import net.linear.LinearFlushCoordinator;
 +import net.linear.LinearRegionFile;
  import net.linear.RegionFileFormat;
@@ -111,7 +111,7 @@ index 28268de..4d54c2a 100644
 +            return cfg.regionFormat.linear.longDistanceMatching;
 +        });
 +        net.linear.LinearRegionConverter.linear$setRegionOpener((file, openFolder, openSync, format, level) ->
-+            net.linear.AbstractRegionFileFactory.get(file,
++            net.linear.probe.AbstractRegionFileFactory.get(file,
 +                new RegionStorageInfo("converter", net.minecraft.world.level.Level.OVERWORLD, "chunk"),
 +                openFolder, openSync, level));
 +        net.linear.LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) -> new LinearAnvilSink(file, folder));
@@ -340,11 +340,11 @@ index e2b7c67..cc09e27 100644
 +        // linear) plus the converter RegionOpener, and this choke point
 +        // (startup + recreate) can run before any RegionFileStorage exists
 +        // (fail-loud defaults otherwise). Idempotent; mirrors the storage-ctor registration.
-+        net.linear.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) -> (net.linear.AbstractRegionFile)(Object) new net.minecraft.world.level.chunk.storage.RegionFile((net.minecraft.world.level.chunk.storage.RegionStorageInfo) info, file, dir, sync));
-+        net.linear.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
-+        net.linear.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
++        net.linear.probe.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) -> (net.linear.AbstractRegionFile)(Object) new net.minecraft.world.level.chunk.storage.RegionFile((net.minecraft.world.level.chunk.storage.RegionStorageInfo) info, file, dir, sync));
++        net.linear.probe.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
++        net.linear.probe.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
 +        net.linear.LinearRegionConverter.linear$setRegionOpener((file, openFolder, openSync, format, level) ->
-+            net.linear.AbstractRegionFileFactory.get(file,
++            net.linear.probe.AbstractRegionFileFactory.get(file,
 +                new RegionStorageInfo("converter", net.minecraft.world.level.Level.OVERWORLD, "chunk"),
 +                openFolder, openSync, level));
 +        net.linear.LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) -> new net.minecraft.world.level.chunk.storage.LinearAnvilSink(file, folder));

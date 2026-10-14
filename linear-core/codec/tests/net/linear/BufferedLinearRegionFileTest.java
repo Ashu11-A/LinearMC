@@ -20,6 +20,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import org.junit.Test;
+import net.linear.buffered.BufferedRegionOutput;
 
 /**
  * Buffered-linear tier ({@code .b_linear} + {@code .b_linear.swp}):

@@ -17,6 +17,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.Test;
+import net.linear.bucket.LinearBucketReader;
+import net.linear.compression.LinearXxHash64;
+import net.linear.versions.codecs.V2Linear;
+import net.linear.versions.codecs.V3Linear;
 
 /**
  * V2/V3 bucketed read (DivineMC wire 3/4) into V1 slot tables.

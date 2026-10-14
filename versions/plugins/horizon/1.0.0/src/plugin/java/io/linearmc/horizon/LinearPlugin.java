@@ -9,12 +9,30 @@ import net.linear.LinearRegionConverter;
 import net.linear.LinearRegionFile;
 import net.linear.LinearRegionTimings;
 import net.linear.RegionFileFormat;
-import net.linear.command.JobQueue;
+import net.linear.command.queue.JobQueue;
 import net.linear.config.LinearFileConfig;
 import net.linear.config.LinearPolicy;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
 import org.bukkit.plugin.java.JavaPlugin;
+import net.linear.command.parse.LinearCommandParser;
+import net.linear.command.parse.LinearPermissions;
+import net.linear.command.parse.LinearTabCompleter;
+import net.linear.command.queue.JobRunner;
+import net.linear.command.queue.JobState;
+import net.linear.command.queue.JobStatusView;
+import net.linear.command.queue.QueueOp;
+import net.linear.command.stats.LinearStatsCompact;
+import net.linear.command.stats.LinearStatsFormat;
+import net.linear.command.stats.LinearStatsView;
+import net.linear.command.stats.StatsProvider;
+import net.linear.command.stats.health.LinearStatsHealth;
+import net.linear.command.stats.health.LinearStatsStatus;
+import net.linear.command.CommandSender;
+import net.linear.command.ConvertDirection;
+import net.linear.command.ConvertJob;
+import net.linear.command.LinearAction;
+import net.linear.command.LinearCommandExecutor;
 
 public class LinearPlugin extends JavaPlugin {
 
@@ -47,25 +65,25 @@ public class LinearPlugin extends JavaPlugin {
             "net.linear.config.LinearPolicy",
             "net.linear.config.LinearFileConfig",
             "net.linear.config.LinearFormatOverride",
-            "net.linear.command.JobQueue",
+            "net.linear.command.queue.JobQueue",
             "net.linear.command.ConvertJob",
-            "net.linear.command.JobRunner",
-            "net.linear.command.LinearCommandParser",
+            "net.linear.command.queue.JobRunner",
+            "net.linear.command.parse.LinearCommandParser",
             "net.linear.command.LinearCommandExecutor",
-            "net.linear.command.LinearTabCompleter",
-            "net.linear.command.LinearStatsView",
-            "net.linear.command.LinearStatsCompact",
-            "net.linear.command.LinearStatsFormat",
-            "net.linear.command.LinearStatsHealth",
-            "net.linear.command.LinearStatsStatus",
-            "net.linear.command.LinearPermissions",
-            "net.linear.command.JobStatusView",
+            "net.linear.command.parse.LinearTabCompleter",
+            "net.linear.command.stats.LinearStatsView",
+            "net.linear.command.stats.LinearStatsCompact",
+            "net.linear.command.stats.LinearStatsFormat",
+            "net.linear.command.stats.health.LinearStatsHealth",
+            "net.linear.command.stats.health.LinearStatsStatus",
+            "net.linear.command.parse.LinearPermissions",
+            "net.linear.command.queue.JobStatusView",
             "net.linear.command.ConvertDirection",
-            "net.linear.command.JobState",
-            "net.linear.command.QueueOp",
+            "net.linear.command.queue.JobState",
+            "net.linear.command.queue.QueueOp",
             "net.linear.command.LinearAction",
             "net.linear.command.CommandSender",
-            "net.linear.command.StatsProvider",
+            "net.linear.command.stats.StatsProvider",
             "io.linearmc.horizon.HorizonLinearRegionFile",
             "io.linearmc.horizon.HorizonBufferedRegionFile",
             "io.linearmc.horizon.ChunkPosCoords",

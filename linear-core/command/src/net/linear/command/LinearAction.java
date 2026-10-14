@@ -1,6 +1,9 @@
 package net.linear.command;
 
 import java.util.Optional;
+import net.linear.LinearRegionConverter;
+import net.linear.command.parse.LinearCommandParser;
+import net.linear.command.queue.QueueOp;
 
 /**
  * Parsed form of the {@code /linear} family. Pure JDK (no Bukkit): legs map

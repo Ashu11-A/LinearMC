@@ -16,7 +16,7 @@ diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/min
  import net.minecraft.world.level.chunk.storage.RecreatingSimpleRegionStorage;
 -import net.minecraft.world.level.chunk.storage.RegionFile;
 +import net.linear.AbstractRegionFile; // Linear
-+import net.linear.AbstractRegionFileFactory; // Linear
++import net.linear.probe.AbstractRegionFileFactory; // Linear
  import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
  import net.minecraft.world.level.chunk.storage.SimpleRegionStorage;
  import net.minecraft.world.level.storage.LevelStorageSource;
@@ -181,12 +181,12 @@ diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/min
 +        // exists. Idempotent; mirrors the storage-ctor registration (core owns
 +        // dispatch, legs own NMS construction — RegionFile is FQN here since the
 +        // widened FileToUpgrade import dropped the NMS RegionFile import).
-+        net.linear.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) ->
++        net.linear.probe.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) ->
 +            (AbstractRegionFile)(Object) new net.minecraft.world.level.chunk.storage.RegionFile((RegionStorageInfo) info, file, dir, sync));
-+        net.linear.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
-+        net.linear.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
++        net.linear.probe.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
++        net.linear.probe.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
 +        net.linear.LinearRegionConverter.linear$setRegionOpener((file, openFolder, openSync, format, level) ->
-+            net.linear.AbstractRegionFileFactory.get(file,
++            net.linear.probe.AbstractRegionFileFactory.get(file,
 +                new RegionStorageInfo("converter", net.minecraft.world.level.Level.OVERWORLD, "chunk"),
 +                openFolder, openSync, level));
 +        // Linear - reverse writer injection, same as the storage-ctor seam:
@@ -235,10 +235,10 @@ diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/min
 +        final int compressionLevel,
 +        final net.linear.LinearRegionConverter.Listener listener
 +    ) throws net.linear.LinearRegionConverter.ConversionProtectionException {
-+        net.linear.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) ->
++        net.linear.probe.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) ->
 +            (AbstractRegionFile)(Object) new net.minecraft.world.level.chunk.storage.RegionFile((RegionStorageInfo) info, file, dir, sync));
-+        net.linear.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
-+        net.linear.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
++        net.linear.probe.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
++        net.linear.probe.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
 +        return net.linear.LinearRegionConverter.convertRegionFolderToFormat(
 +            regionFolder, AbstractRegionFileFactory.clampCompressionLevel(compressionLevel), listener, true,
 +            net.linear.RegionFileFormat.B_LINEAR);
@@ -319,8 +319,8 @@ diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/min
 +            // the forward arms are core-owned (LinearStorageProbe.targetForSource,
 +            // LinearStorageProbe.bufferedTargetForSource),
 +            // the reverse arm stays inline (no core helper covers linear -> mca).
-+            Path newLinearPath = net.linear.LinearStorageProbe.targetForSource(newFilePath);
-+            Path newBufferedPath = net.linear.LinearStorageProbe.bufferedTargetForSource(newFilePath);
++            Path newLinearPath = net.linear.probe.LinearStorageProbe.targetForSource(newFilePath);
++            Path newBufferedPath = net.linear.probe.LinearStorageProbe.bufferedTargetForSource(newFilePath);
 +            Path newAnvilPath = replaceExtension(newFilePath, ".linear", ".mca");
 +            Path actualNew = null;
 +            if (newFilePath.toFile().exists()) {

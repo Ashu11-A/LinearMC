@@ -17,6 +17,7 @@ import java.nio.file.StandardOpenOption;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.junit.Rule;
+import net.linear.io.LinearDirectStreams;
 
 /** Zero-copy stream bridges (no per-chunk heap arrays). */
 public class CoreStreamsTest {

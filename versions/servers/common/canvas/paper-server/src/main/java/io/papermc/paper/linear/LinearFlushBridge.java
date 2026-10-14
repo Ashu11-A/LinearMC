@@ -94,8 +94,8 @@ public final class LinearFlushBridge {
             return;
         }
         final FlushEvent event = payload(folderKey, totals, filesAttempted, elapsedMicros);
-        final String folderType = net.linear.LinearFolderNames.inferFolderType(folderKey);
-        final String worldName = net.linear.LinearFolderNames.inferWorld(folderKey);
+        final String folderType = net.linear.probe.LinearFolderNames.inferFolderType(folderKey);
+        final String worldName = net.linear.probe.LinearFolderNames.inferWorld(folderKey);
         // OFF IO threads: async scheduler (falls back to sync fire when absent).
         try {
             Bukkit.getAsyncScheduler().runNow(
@@ -139,8 +139,8 @@ public final class LinearFlushBridge {
         final String folderType;
         final String worldName;
         try {
-            folderType = net.linear.LinearFolderNames.inferFolderType(folderKey);
-            worldName = net.linear.LinearFolderNames.inferWorld(folderKey);
+            folderType = net.linear.probe.LinearFolderNames.inferFolderType(folderKey);
+            worldName = net.linear.probe.LinearFolderNames.inferWorld(folderKey);
         } catch (RuntimeException ignored) {
             return;
         }

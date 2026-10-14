@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.Optional;
 import net.linear.LinearFlushCoordinator;
 import net.linear.LinearRegionTimings;
-import net.linear.command.LinearStatsView;
+import net.linear.command.stats.LinearStatsView;
 import org.jetbrains.annotations.NotNull;
 
 /**

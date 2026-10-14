@@ -10,6 +10,8 @@ import java.util.Optional;
 
 import net.linear.LinearRegionTimings;
 import org.junit.Test;
+import net.linear.command.parse.LinearPermissions;
+import net.linear.command.stats.LinearStatsView;
 
 /** command: stats view-model rows (grouping, totals, filter, infer helpers). */
 public class LinearStatsViewTest {

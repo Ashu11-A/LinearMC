@@ -11,6 +11,10 @@ import java.util.List;
 import org.junit.Test;
 
 import net.linear.LinearRegionConverter;
+import net.linear.command.parse.InvalidUsageException;
+import net.linear.command.parse.LinearCommandParser;
+import net.linear.command.parse.LinearTabCompleter;
+import net.linear.command.queue.JobQueue;
 
 /** command: explicit --from/--to/--grid (Phase-3, new files only). */
 public class LinearConvertExplicitTest {

@@ -14,7 +14,7 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import net.linear.LinearRegionConverter;
 import net.linear.command.ConvertJob;
 import net.linear.command.LinearAction;
-import net.linear.command.LinearCommandParser;
+import net.linear.command.parse.LinearCommandParser;
 import org.bukkit.Server;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.PluginDescriptionFile;

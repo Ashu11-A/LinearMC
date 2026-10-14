@@ -14,6 +14,7 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import net.linear.flush.FlushReports;
 
 /** Quiet reporters never throw; event record carries its fields. */
 public class FlushReportsTest {

@@ -11,6 +11,9 @@ import java.util.Optional;
 
 import net.linear.LinearRegionTimings;
 import org.junit.Test;
+import net.linear.command.stats.LinearStatsCompact;
+import net.linear.command.stats.health.LinearStatsHealth;
+import net.linear.command.stats.health.LinearStatsStatus;
 
 /** command: compact proposal-A view (health classifier + widths + line counts). */
 public class LinearStatsCompactTest {
@@ -184,7 +187,7 @@ public class LinearStatsCompactTest {
         LinearStatsCompact.CompactRow totals = rows.get(rows.size() - 1);
         assertEquals(LinearStatsCompact.RowKind.TOTALS, totals.kind());
         assertEquals(java.util.Set.of("files", "fail", "saved"), totals.parts().keySet());
-        assertEquals(net.linear.command.LinearStatsHealth.WARN, totals.health().get("fail"));
+        assertEquals(net.linear.command.stats.health.LinearStatsHealth.WARN, totals.health().get("fail"));
         assertTrue(totals.health().containsKey("saved"));
         assertTrue(totals.text().contains("files=3"));
         assertTrue(totals.text().contains("fail=1"));

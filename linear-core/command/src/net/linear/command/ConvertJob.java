@@ -7,6 +7,9 @@ import java.util.UUID;
 
 import net.linear.LinearRegionConverter.FileResult;
 import net.linear.LinearRegionConverter.Status;
+import net.linear.LinearRegionConverter;
+import net.linear.command.queue.JobState;
+import net.linear.command.stats.LinearStatsFormat;
 
 /**
  * One conversion job: immutable spec plus mutable progress.

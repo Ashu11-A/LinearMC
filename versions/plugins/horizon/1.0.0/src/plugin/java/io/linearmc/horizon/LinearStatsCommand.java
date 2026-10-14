@@ -9,8 +9,8 @@ import java.util.Optional;
 
 import net.linear.LinearFlushCoordinator;
 import net.linear.LinearRegionTimings;
-import net.linear.command.LinearPermissions;
-import net.linear.command.LinearStatsCompact;
+import net.linear.command.parse.LinearPermissions;
+import net.linear.command.stats.LinearStatsCompact;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.TabExecutor;
@@ -18,6 +18,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
+import net.linear.command.CommandSender;
 
 /**
  * Standalone {@code /linearstats} command (Horizon parity with Folia/Canvas).

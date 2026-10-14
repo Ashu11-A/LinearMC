@@ -11,6 +11,7 @@ import java.util.zip.DeflaterOutputStream;
 import java.util.zip.GZIPOutputStream;
 import net.jpountz.lz4.LZ4BlockOutputStream;
 import org.junit.Test;
+import net.linear.compression.LinearEnvelopeCodec;
 
 /** Envelope matrix for {@link LinearEnvelopeCodec} (JUnit4 port of the horizon suite). */
 public class EnvelopeCodecTest {

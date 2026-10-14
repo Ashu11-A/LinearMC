@@ -29,7 +29,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +import net.minecraft.util.profiling.jfr.JvmProfiler;
  import net.minecraft.world.level.ChunkPos;
 +import net.linear.AbstractRegionFile;
-+import net.linear.AbstractRegionFileFactory;
++import net.linear.probe.AbstractRegionFileFactory;
 +import net.linear.LinearFlushCoordinator;
 +import net.linear.RegionFileFormat;
  import org.jspecify.annotations.Nullable;
@@ -161,7 +161,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +        // Linear - triple-read probe owned by core (LinearStorageProbe.probeExisting:
 +        // .mca preferred, else .linear, else .b_linear; null means "no extension exists").
 +        // The negative cache stays keyed by region long.
-+        final Path regionPath = net.linear.LinearStorageProbe.probeExisting(
++        final Path regionPath = net.linear.probe.LinearStorageProbe.probeExisting(
 +            this.folder, chunkX >> REGION_SHIFT, chunkZ >> REGION_SHIFT);
 +        if (regionPath == null) {
              this.markNonExisting(key);
@@ -209,7 +209,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +            // behaviour unchanged (DELETE + log, anvil parity). Early return
 +            // matters: throwing later in finishWrite sets failedWrite and retries
 +            // forever via scheduleWriteCompress (MoonriseRegionFileIO.runWriteIO).
-+            if (net.linear.LinearWritePath.oversized(linearStaged)) {
++            if (net.linear.io.LinearWritePath.oversized(linearStaged)) {
 +                try {
 +                    LinearFlushCoordinator.forFolder(this.folder).reportOversizeReject();
 +                } catch (RuntimeException ignored) {
@@ -223,7 +223,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +            }
 +            // Linear - defensive capture owned by core (LinearWritePath.copyOf);
 +            // the copy is detached so the staged buffer may be reused after return.
-+            final ByteBuffer linearBytes = net.linear.LinearWritePath.copyOf(linearStaged);
++            final ByteBuffer linearBytes = net.linear.io.LinearWritePath.copyOf(linearStaged);
 +            JvmProfiler.INSTANCE.onRegionFileWrite(this.info, pos, RegionFileVersion.DEFAULT, linearBytes.remaining()); // Linear - linear has no RegionFileVersion; report DEFAULT for JFR continuity
 +            return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData(
 +                compound, ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData.WriteResult.WRITE,
@@ -400,16 +400,16 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +            }
 +        });
 +        net.linear.LinearRegionConverter.linear$setRegionOpener((file, openFolder, openSync, format, level) ->
-+            net.linear.AbstractRegionFileFactory.get(file,
++            net.linear.probe.AbstractRegionFileFactory.get(file,
 +                new RegionStorageInfo("converter", net.minecraft.world.level.Level.OVERWORLD, "chunk"),
 +                openFolder, openSync, level));
 +        // Linear - fail-loud opener injection (core owns dispatch, legs own NMS):
 +        // anvil opens construct the NMS RegionFile (same-package, no import);
 +        // linear opens construct the core LinearRegionFile (FQN, no import).
-+        net.linear.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) ->
++        net.linear.probe.AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) ->
 +            (AbstractRegionFile)(Object) new RegionFile((RegionStorageInfo) info, file, dir, sync));
-+        net.linear.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
-+        net.linear.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
++        net.linear.probe.AbstractRegionFileFactory.linear$setLinearOpener(net.linear.LinearRegionFile::new);
++        net.linear.probe.AbstractRegionFileFactory.linear$setBufferedOpener(net.linear.BufferedLinearRegionFile::new);
 +        // Linear - reverse writer injection (core owns dispatch, legs own NMS):
 +        // raw NBT from the linear source is enveloped by the NMS sink.
 +        net.linear.LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) ->
@@ -637,7 +637,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +                // vanilla parity is delete + log (cf. the anvil
 +                // catch(RegionFileSizeException) arm). The slot clear persists on
 +                // the next flushDirty()/eviction (deferred linear durability).
-+                if (net.linear.LinearWritePath.oversized(linearStaged)) {
++                if (net.linear.io.LinearWritePath.oversized(linearStaged)) {
 +                    try {
 +                        LinearFlushCoordinator.forFolder(this.folder).reportOversizeReject();
 +                    } catch (RuntimeException ignored) {
@@ -648,7 +648,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +                    LinearFlushCoordinator.forFolder(this.folder).markDirty(region);
 +                } else {
 +                    // Linear - defensive capture owned by core (LinearWritePath.copyOf).
-+                    final ByteBuffer linearBytes = net.linear.LinearWritePath.copyOf(linearStaged);
++                    final ByteBuffer linearBytes = net.linear.io.LinearWritePath.copyOf(linearStaged);
 +                    JvmProfiler.INSTANCE.onRegionFileWrite(this.info, pos, RegionFileVersion.DEFAULT, linearBytes.remaining());
 +                    region.write(net.linear.ChunkKey.of(pos.x(), pos.z()), linearBytes);
 +                    LinearFlushCoordinator.forFolder(this.folder).markDirty(region);

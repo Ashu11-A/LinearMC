@@ -33,7 +33,7 @@ index 000000000..aaebc7dd1
 +import java.nio.file.Files;
 +import java.nio.file.Path;
 +import java.util.List;
-+import net.linear.AbstractRegionFileFactory;
++import net.linear.probe.AbstractRegionFileFactory;
 +import net.linear.LinearRegionConverter;
 +import net.minecraft.core.registries.Registries;
 +import net.minecraft.resources.ResourceKey;
@@ -91,7 +91,7 @@ index 000000000..aaebc7dd1
 +     */
 +    public static boolean runPrePluginConversion(final MinecraftServer server) {
 +        // Linear - the /linear convert queue is in-memory only: name the drop once per boot.
-+        LOGGER.info(net.linear.command.JobQueue.droppedByRestartLine(0));
++        LOGGER.info(net.linear.command.queue.JobQueue.droppedByRestartLine(0));
 +        final var stemRegistry = server.registryAccess().lookupOrThrow(Registries.LEVEL_STEM);
 +        for (final LevelStem stem : stemRegistry) {
 +            if (!server.isRunning()) {

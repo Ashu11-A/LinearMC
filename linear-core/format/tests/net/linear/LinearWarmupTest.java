@@ -3,6 +3,7 @@ package net.linear;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
+import net.linear.probe.LinearWarmup;
 
 /** Class warm-up: loads listed classes, tolerates missing ones. */
 public class LinearWarmupTest {

@@ -12,6 +12,7 @@ import java.util.zip.DeflaterOutputStream;
 import java.util.zip.GZIPOutputStream;
 import net.jpountz.lz4.LZ4BlockOutputStream;
 import org.junit.Test;
+import net.linear.compression.LinearEnvelopeCodec;
 
 /**
  * Property/fuzz coverage for {@link LinearEnvelopeCodec}.

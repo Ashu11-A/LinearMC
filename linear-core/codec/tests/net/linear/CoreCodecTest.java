@@ -8,6 +8,7 @@ import static org.junit.Assert.fail;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import org.junit.Test;
+import net.linear.compression.ZstdChunkCodec;
 
 /** Direct-only zstd codec contract (avoids per-chunk heap allocation on hot paths). */
 public class CoreCodecTest {
