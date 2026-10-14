@@ -316,6 +316,60 @@ for v in $VERSIONS; do
   done
 done
 
+# 4b. Leg parity (move together): Horizon stays wired to the same surface as
+# the server legs. Past drift: the Horizon config.yml template carried dead
+# keys the Canvas leg wired while the plugin ignored them, and the plugin
+# version sat at 1.0.0 under v1.1.x tags. Both lists below are derived by
+# grep at check time so the gate self-updates with the table and the patches;
+# the key list is not hardcoded twice.
+HORIZON_CFG="$SUPPLEMENT_DIR/versions/plugins/horizon/1.0.0/src/plugin/resources/config.yml"
+HORIZON_SRC="$SUPPLEMENT_DIR/versions/plugins/horizon/1.0.0/src"
+# 4b(i). Every key in the docs/configuration.md settings table must exist in
+# the Horizon config.yml template (compared on the leaf after the last dot:
+# region-format.format -> format:, linear.flush-frequency -> flush-frequency:).
+if [ -f "$SUPPLEMENT_DIR/docs/configuration.md" ] && [ -f "$HORIZON_CFG" ]; then
+  while IFS= read -r full_key; do
+    [ -n "$full_key" ] || continue
+    leaf="${full_key##*.}"
+    if grep -qE "^[[:space:]]*$leaf[[:space:]]*:" "$HORIZON_CFG"; then
+      ok "leg parity config key: $leaf"
+    else
+      nope "leg parity config key missing from Horizon template: $full_key (leaf $leaf:)"
+    fi
+  done < <(grep -oE '^\| (region-format|linear)\.[^ |]+' "$SUPPLEMENT_DIR/docs/configuration.md" | sed 's/^| //')
+else
+  nope "leg parity config keys (docs table or Horizon template missing)"
+fi
+# 4b(ii). Every linear$set*Supplier / linear$setFlushListener seam the Canvas
+# RegionFileStorage patches register must have a matching registration string
+# in the Horizon sources. Registrations live in src/plugin (LinearPlugin
+# onEnable) while selectors live in src/main (mixins), so the whole src tree
+# is searched. Exception list for architecturally N/A seams, with
+# reasons (add a case arm, never delete the reason): none today.
+is_parity_exempt() { # $1 = seam -> return 0 if exempt
+  case "$1" in
+    # linear$setFlushListener wires the Paper flush-completion event bridge
+    # (LinearFlushBridge) on fork legs; the Horizon leg has no equivalent
+    # event to deliver to, so the core default no-op listener stands.
+    linear\$setFlushListener) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+canvas_seams=$(grep -rhoE 'linear\$set[A-Za-z]*Supplier|linear\$setFlushListener' "$SUPPLEMENT_DIR"/versions/servers/*/canvasmc/overlay/nms/*RegionFileStorage*.patch 2>/dev/null | sort -u || true)
+if [ -z "$canvas_seams" ]; then
+  nope "leg parity seams (no Canvas RegionFileStorage seams found)"
+else
+  for seam in $canvas_seams; do
+    if is_parity_exempt "$seam"; then
+      skip "leg parity seam exempt: $seam"
+    elif grep -rqF "$seam" "$HORIZON_SRC" 2>/dev/null; then
+      ok "leg parity seam wired in Horizon: $seam"
+    else
+      nope "leg parity seam missing from Horizon sources: $seam (Canvas wires it, Horizon does not)"
+    fi
+  done
+fi
+
 # 5. Workflow self-checks (same greps as CI preflight job).
 python3 -c "import yaml; yaml.safe_load(open('$SUPPLEMENT_DIR/.github/workflows/build.yml'))" 2>/dev/null \
   && ok "workflow YAML parses" || echo "SKIP: workflow YAML parse (no pyyaml)"

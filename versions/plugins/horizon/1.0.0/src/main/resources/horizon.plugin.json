@@ -1,6 +1,6 @@
 {
   "name": "LinearMC",
-  "version": "1.0.0-SNAPSHOT",
+  "version": "@PROJECT_VERSION@",
   "description": "Linear-format region compression via Horizon mixins",
   "authors": [
     "LinearMC"

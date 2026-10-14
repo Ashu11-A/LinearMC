@@ -21,6 +21,7 @@ public class LinearFileConfigTest {
     public void clearState() {
         LinearFileConfig.setFileValues(null, null);
         LinearFileConfig.setFileWriterValues(null, null);
+        LinearFileConfig.setFileSymlinkGuard(null);
         System.clearProperty(LinearPolicy.SYSPROP_FORMAT);
         System.clearProperty(LinearPolicy.SYSPROP_LEVEL);
         System.clearProperty(LinearPolicy.SYSPROP_IMPLEMENTATION);
@@ -157,5 +158,16 @@ public class LinearFileConfigTest {
         assertEquals(4, LinearFileConfig.resolveGridSize());
         System.setProperty(LinearPolicy.SYSPROP_GRID_SIZE, "9");
         assertEquals(8, LinearFileConfig.resolveGridSize());
+    }
+
+    @Test
+    public void symlinkGuardDefaultsTrueAndFollowsFile() {
+        assertNull(LinearFileConfig.fileSymlinkGuard());
+        assertTrue(LinearFileConfig.resolveCrashOnBrokenSymlink());
+        LinearFileConfig.setFileSymlinkGuard(Boolean.FALSE);
+        assertEquals(Boolean.FALSE, LinearFileConfig.fileSymlinkGuard());
+        assertFalse(LinearFileConfig.resolveCrashOnBrokenSymlink());
+        LinearFileConfig.setFileSymlinkGuard(Boolean.TRUE);
+        assertTrue(LinearFileConfig.resolveCrashOnBrokenSymlink());
     }
 }

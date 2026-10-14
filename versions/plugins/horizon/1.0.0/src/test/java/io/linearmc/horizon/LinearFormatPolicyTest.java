@@ -95,4 +95,27 @@ public class LinearFormatPolicyTest {
         assertEquals(8, LinearFormatPolicy.resolveGridSize());
         LinearFormatPolicy.setFileWriterValues(null, null);
     }
+
+    @Test
+    public void flushSeamMappingMatchesDocsDefaults() {
+        int ncpu = Runtime.getRuntime().availableProcessors();
+        // Shipped config.yml values pass through unchanged.
+        assertEquals(1, LinearFormatPolicy.resolveFlushThreads(1, ncpu));
+        assertEquals(10, LinearFormatPolicy.resolveFlushFrequency(10));
+        assertEquals(0, LinearFormatPolicy.resolveCompressionWorkers(0));
+        assertEquals(0, LinearFormatPolicy.resolveLongDistanceMatching(0));
+        // Bad file values fall back exactly like the fork config layer.
+        assertEquals(10, LinearFormatPolicy.resolveFlushFrequency(0));
+        assertEquals(10, LinearFormatPolicy.resolveFlushFrequency(-3));
+        assertEquals(0, LinearFormatPolicy.resolveCompressionWorkers(-1));
+        assertEquals(0, LinearFormatPolicy.resolveLongDistanceMatching(-1));
+        assertEquals(1, LinearFormatPolicy.resolveFlushThreads(0, ncpu));
+        // Kaiiju relative threads: negative means ncpu plus the value.
+        assertEquals(Math.max(ncpu - 1, 1), LinearFormatPolicy.resolveFlushThreads(-1, ncpu));
+        // Healthy values pass through.
+        assertEquals(4, LinearFormatPolicy.resolveFlushThreads(4, ncpu));
+        assertEquals(30, LinearFormatPolicy.resolveFlushFrequency(30));
+        assertEquals(2, LinearFormatPolicy.resolveCompressionWorkers(2));
+        assertEquals(12, LinearFormatPolicy.resolveLongDistanceMatching(12));
+    }
 }

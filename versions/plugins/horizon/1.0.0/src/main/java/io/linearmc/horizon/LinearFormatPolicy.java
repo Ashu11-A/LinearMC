@@ -121,4 +121,45 @@ public final class LinearFormatPolicy {
     public static int resolveLevel(String syspropValue, Integer fileValue, int defaultValue) {
         return LinearPolicy.resolveLevel(syspropValue, fileValue, defaultValue);
     }
+
+    /**
+     * Flush width for the shared pool behind
+     * {@code region-format.linear.flush-max-threads} (docs default 1):
+     * Kaiiju relative-value semantics (negative means
+     * {@code ncpu + raw}, floored at 1; otherwise at least 1). Pure mapping
+     * for the {@code LinearFlushCoordinator} threads supplier; never throws.
+     */
+    public static int resolveFlushThreads(int raw, int ncpu) {
+        return LinearPolicy.resolveThreads(raw, ncpu);
+    }
+
+    /**
+     * Age gate in seconds behind
+     * {@code region-format.linear.flush-frequency} (docs default 10): below
+     * 1 falls back to 10. Pure mapping for the
+     * {@code LinearFlushCoordinator} frequency supplier; never throws.
+     */
+    public static int resolveFlushFrequency(long raw) {
+        return LinearPolicy.clampFrequency(raw);
+    }
+
+    /**
+     * zstd worker count behind
+     * {@code region-format.linear.compression-workers} (docs default 0 =
+     * serial): negative falls back to 0. Pure mapping for the codec workers
+     * supplier; never throws.
+     */
+    public static int resolveCompressionWorkers(int raw) {
+        return LinearPolicy.clampNonNegative(raw, LinearPolicy.DEFAULT_WORKERS);
+    }
+
+    /**
+     * zstd LDM windowLog behind
+     * {@code region-format.linear.long-distance-matching} (docs default 0 =
+     * off): negative falls back to 0. Pure mapping for the codec LDM
+     * supplier; never throws.
+     */
+    public static int resolveLongDistanceMatching(int raw) {
+        return LinearPolicy.clampNonNegative(raw, LinearPolicy.DEFAULT_LDM);
+    }
 }

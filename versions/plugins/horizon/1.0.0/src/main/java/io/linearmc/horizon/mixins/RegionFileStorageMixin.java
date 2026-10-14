@@ -218,9 +218,14 @@ public abstract class RegionFileStorageMixin {
      * server). Takes the already-resolved effective format so the guard can
      * never disagree with the dispatch decision above (same scopes, same
      * value — a scope mismatch here once meant the guard and the opener
-     * could pick different formats for one path).
+     * could pick different formats for one path). Honors
+     * {@code region-format.linear.crash-on-broken-symlink} (default true):
+     * false skips the guard, mirroring the Canvas early-return.
      */
     private void linear$guardSymlink(final Path path, final RegionFileFormat configured) throws IOException {
+        if (!LinearFileConfig.resolveCrashOnBrokenSymlink()) {
+            return;
+        }
         if (LinearStorageProbe.shouldRefuseSymlink(configured, path)) {
             throw new IOException("LinearMC: refusing broken region symlink: " + path);
         }

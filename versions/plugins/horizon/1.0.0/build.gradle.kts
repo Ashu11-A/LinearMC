@@ -1,3 +1,6 @@
+import org.apache.tools.ant.filters.ReplaceTokens
+import org.gradle.language.jvm.tasks.ProcessResources
+
 plugins {
     id("java-library")
     // Mixin selectors verified against the pinned Horizon ref (see MIXIN-CONTRACT.md).
@@ -13,7 +16,7 @@ java {
     toolchain { languageVersion.set(JavaLanguageVersion.of(25)) }
 }
 
-version = "1.0.0-SNAPSHOT"
+version = providers.environmentVariable("LINEARMC_PROJECT_VERSION").getOrElse("1.0.0-SNAPSHOT")
 
 repositories {
     mavenCentral()
@@ -108,6 +111,25 @@ sourceSets {
     named("test") {
         compileClasspath += sourceSets["plugin"].output
         runtimeClasspath += sourceSets["plugin"].output
+    }
+}
+
+// Version stamp: LINEARMC_PROJECT_VERSION (fallback "1.0.0-SNAPSHOT")
+// is expanded into both plugin descriptors at build time. paper-plugin.yml
+// rides the split "plugin" source set (src/plugin/resources -> plugin jar
+// root, verified in build/libs); horizon.plugin.json rides main resources.
+tasks.named<ProcessResources>("processPluginResources") {
+    // Tracked so an env-only version change re-expands (filter params alone
+    // do not invalidate the up-to-date check).
+    inputs.property("projectVersion", project.version.toString())
+    filesMatching("paper-plugin.yml") {
+        filter<ReplaceTokens>("tokens" to mapOf("PROJECT_VERSION" to project.version.toString()))
+    }
+}
+tasks.named<ProcessResources>("processResources") {
+    inputs.property("projectVersion", project.version.toString())
+    filesMatching("horizon.plugin.json") {
+        filter<ReplaceTokens>("tokens" to mapOf("PROJECT_VERSION" to project.version.toString()))
     }
 }
 

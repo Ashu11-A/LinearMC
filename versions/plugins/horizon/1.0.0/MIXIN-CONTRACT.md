@@ -18,6 +18,19 @@ Current proven trace, bytecode verified on the dev bundle:
 | Access wideners | Build access entries | Replaces access transformer entries |
 | Format mapping | Local format policy | Server has no paper region format type, so mapping lives in plugin policy with an owned factory fork |
 
+Per-MC retrace (HORIZON_REF `31d1a1b7`; pins in `versions/plugins/horizon/upstream.horizon[-<mc>].properties`):
+
+| Selector | Target method | 26.3 | 26.1 | 26.2 |
+| --- | --- | --- | --- | --- |
+| `getRegionFileName` overwrite | Region file naming routine | verified | PENDING | PENDING |
+| Create-path redirect | Region file creation routine | verified | PENDING | PENDING |
+| Exists-path redirect | Exists/read/write creation site | verified | PENDING | PENDING |
+| `close` tail inject | Region storage close routine | verified | PENDING | PENDING |
+| `flush` head inject | Region storage flush routine | verified | PENDING | PENDING |
+| Folder / shift shadows | Region storage folder, info, sync fields; region coordinate shift | verified | PENDING | PENDING |
+
+26.3 verified per the trace above (bytecode verified on the 26.3 dev bundle). 26.1/26.2 stay PENDING until the first green per-MC build retraces them; the two-site shape (create + exists paths, audited against 26.1.2-shaped storage) is already handled, not yet proven.
+
 Retired selectors, kept for provenance only:
 
 - The Moonrise exists-path redirect is deleted. That routine only delegates now.

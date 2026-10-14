@@ -91,6 +91,19 @@ Porting checklist:
   three inherited-bug grep gates), then build the new line explicitly:
   `scripts/build.sh --mc 26.2.x`. Plain `scripts/build.sh` builds all lines.
 
+## Leg parity (move together)
+
+Every surface change moves together: a new or changed player-facing surface
+(command grammar, flags, permissions, config keys with defaults, `linear$`
+seams) must land on the Folia patches, the Canvas overlay, and the Horizon
+plugin in the same change. The Horizon `plugins/LinearMC/config.yml` template
+(`versions/plugins/horizon/1.0.0/src/plugin/resources/config.yml`) must stay
+key-identical with the `docs/configuration.md` settings table. The
+plugin-internal version (`paper-plugin.yml`, `horizon.plugin.json`,
+`build.gradle.kts`) must follow the project tag; a `v1.1.x` tag carrying a
+`1.0.0` plugin version is drift. `scripts/preflight.sh` enforces the
+config-key and seam halves of this rule.
+
 ## Tests
 
 Test sources in `versions/<line>/folia/tests/` are copied into
@@ -111,7 +124,7 @@ no-compile preflight gates), `unit` (staging, `applyAllPatches`, fork compile,
 `LinearNmsTestSuite`), `config-check`. `build.yml` runs on `v*` tags,
 published releases and manual dispatch: `discover` (version matrix), `build`
 (pinned clone, `applyAllPatches`, full build, paperclip jar, Linear suites,
-ANVIL + LINEAR boot smokes), `release` (jar + sha256 attached to the GitHub
+ANVIL + LINEAR boot smokes), `release` (jars attached to the GitHub
 release on tags).
 
 Two self-checks exist because of past breakage and are enforced in both the
@@ -125,10 +138,12 @@ workflow and `preflight.sh`:
 
 1. Preflight green, then push to `main`.
 2. Tag `v1.x.y` and push the tag.
-3. The tag push triggers `build.yml`, which attaches
-   `folia-linear-<mcversion>-<project>.jar` and its sha256 to the GitHub
-   release (one pair per supported version line). `v1.0.0` produces
-   `folia-linear-26.1.2-1.0.0.jar`.
+3. The tag push triggers `build.yml`, which attaches one jar per matrix leg
+   to the GitHub release: fork legs as
+   `linearmc-<server>-<mcversion>-<project>.jar` (so `v1.0.0` with `26.1.x`
+   at MC `26.1.2` ships `linearmc-folia-26.1.2-1.0.0.jar`), the Horizon
+   plugin as `linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`
+   (e.g. `linearmc-horizon-1.0.0-26.3-1.0.0.jar`).
 Update `CHANGELOG.md` in the same change that introduces the behaviour, not
 at tag time.
 

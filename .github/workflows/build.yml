@@ -93,11 +93,13 @@ jobs:
           # Reorganized LinearMC legs: versions/servers/<line>/
           # upstream.properties (folia, legacy name) plus
           # versions/servers/<line>/upstream.<server>.properties (canvas),
-          # and versions/plugins/horizon/upstream.horizon.properties. Matrix
-          # `server` ids stay stable (folia/canvas/horizon): the canvas leg
+          # and versions/plugins/horizon/upstream.horizon[-<mc>].properties.
+          # Matrix `server` ids stay stable (folia/canvas/horizon): the canvas leg
           # directory is now `canvasmc/`, mapped explicitly via
           # SERVER_DIR_MAP so release asset names (linearmc-<server>-<mc>)
-          # never change. `version` is the grandparent line dir for servers
+          # never change. Per-MC horizon stems (`horizon-26.1`) likewise map
+          # to the stable `horizon` id with HORIZON key lookup, so asset
+          # names keep their shape. `version` is the grandparent line dir for servers
           # (26.1.x) and the plugin version dir (1.0.0) for horizon. A leg
           # is emitted only when it actually has content (see below). Legs
           # without content (pins but no patches, e.g. 26.2; status-only
@@ -110,13 +112,19 @@ jobs:
               parts = prop.split('/')
               stem = parts[-1][len('upstream'):-len('.properties')]
               server = stem.lstrip('.') or 'folia'
+              if server == 'horizon' or server.startswith('horizon-'):
+                  # Per-MC pin (upstream.horizon-<mc>.properties): stable id,
+                  # HORIZON prefix for key lookup; mc + dev_bundle come from
+                  # that pin file (one matrix entry per pin file x plugin
+                  # version dir below).
+                  server = 'horizon'
               if parts[1] == 'servers':
                   version = parts[2]
               elif server == 'horizon':
                   # Plugin version dir(s) holding the standalone Gradle
                   # project (versions/plugins/horizon/<ver>/
-                  # build.gradle.kts). One matrix entry per plugin version;
-                  # all share this pin file's repo/branch/ref/bundle.
+                  # build.gradle.kts). One matrix entry per pin file x
+                  # plugin version; mc + dev_bundle come from this pin file.
                   version = None
               else:
                   raise SystemExit(f'discover: unexpected pin path {prop}')
@@ -138,12 +146,16 @@ jobs:
                       f"(got {kv[f'{prefix}_REF']!r})")
               # Horizon is a standalone Gradle project, not a fork checkout:
               # its MC target is the paper dev bundle, pinned here (not in
-              # build.gradle.kts) so another versions/plugins/horizon/
-              # upstream.horizon.properties fans out with no workflow edit.
+              # build.gradle.kts) so another upstream.horizon[-<mc>].
+              # properties pin fans out (per pin file x plugin version dir)
+              # with no workflow edit.
               dev_bundle = ''
               if server == 'horizon':
                   dev_bundle = kv.get('HORIZON_DEV_BUNDLE', '')
-                  if not re.fullmatch(r'[0-9]+\.[0-9]+\.build\.[0-9]+(-beta)?', dev_bundle):
+                  # Bundle coordinate: X.Y[.Z].build.N with an optional
+                  # channel suffix (26.1.2 carries its patch version:
+                  # 26.1.2.build.74-stable; 26.2/26.3 are X.Y.build.N).
+                  if not re.fullmatch(r'[0-9]+\.[0-9]+(\.[0-9]+)?\.build\.[0-9]+(-beta|-stable|-alpha)?', dev_bundle):
                       raise SystemExit(
                           f"discover: {prop} HORIZON_DEV_BUNDLE must be a "
                           f"pinned dev bundle (got {dev_bundle!r})")
@@ -174,6 +186,7 @@ jobs:
                           'ref': kv[f'{prefix}_REF'],
                           'dev_bundle': dev_bundle,
                       })
+                  print(f'discover: horizon pin {prop} -> mc {kv["MC_VERSION"]} bundle {dev_bundle} x plugin {", ".join(plugin_vers)}')
               else:
                   legdir = SERVER_DIR_MAP.get(server, server)
                   leg_content = glob.glob(f'versions/servers/{version}/{legdir}/patches/**/*.patch', recursive=True)
@@ -250,10 +263,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     concurrency:
-      # One in-flight build per ref+version+server: re-pushed tags queue instead of
+      # One in-flight build per ref+version+server+mc: re-pushed tags queue instead of
       # racing each other on the same release assets. Never cancel: a release
-      # build must run to completion.
-      group: build-${{ github.ref }}-${{ matrix.version }}-${{ matrix.server }}
+      # build must run to completion. The mc slot keeps the per-MC horizon
+      # legs (same version+server, one pin each) parallel.
+      group: build-${{ github.ref }}-${{ matrix.version }}-${{ matrix.server }}-${{ matrix.mc }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -414,9 +428,10 @@ jobs:
           # full 55s setup is proven green). Dependency jars stay cached.
           rm -rf ~/.gradle/caches/paperweight-userdev
           # Multi-version matrix: the MC target is the pinned dev bundle from
-          # versions/plugins/horizon/upstream.horizon.properties (discover
-          # fans it out as matrix.dev_bundle); substitute it so another
-          # plugin version builds its own bundle with no workflow edit.
+          # the per-MC pin (versions/plugins/horizon/upstream.horizon[-<mc>].
+          # properties; discover fans it out as matrix.dev_bundle) plus the
+          # MC itself (matrix.mc, used for api-version); substitute both so
+          # another pin builds its own bundle with no workflow edit.
           # Folia/canvas legs carry an empty dev_bundle and never reach
           # this step. Project dir is versions/plugins/horizon/<ver>
           # (matrix.version is the plugin version dir, e.g. 1.0.0).
@@ -424,6 +439,21 @@ jobs:
           test -n "$PIN" || { echo "::error::matrix.dev_bundle is empty (discover must pin HORIZON_DEV_BUNDLE)"; exit 1; }
           sed -i -E "s|paperweight\.paperDevBundle\(\"[^\"]+\"\)|paperweight.paperDevBundle(\"$PIN\")|" build.gradle.kts
           grep -F "paperDevBundle(\"$PIN\")" build.gradle.kts
+          # api-version is the major.minor of matrix.mc (26.1.2 -> 26.1;
+          # 26.2 / 26.3 pass through). runServer minecraftVersion stays
+          # local-only (never substituted).
+          API="$(echo "${{ matrix.mc }}" | cut -d. -f1,2)"
+          test -n "$API" || { echo "::error::matrix.mc is empty (discover must pin MC_VERSION)"; exit 1; }
+          sed -i -E "s|^api-version: \".*\"|api-version: \"$API\"|" src/plugin/resources/paper-plugin.yml
+          grep -F "api-version: \"$API\"" src/plugin/resources/paper-plugin.yml
+          # Internal plugin version follows the project tag (build.gradle.kts
+          # reads LINEARMC_PROJECT_VERSION with a 1.0.0-SNAPSHOT fallback for
+          # local builds). Tag builds stamp the release version into
+          # paper-plugin.yml + horizon.plugin.json via processResources.
+          TAG="${{ github.event.release.tag_name || github.ref_name }}"
+          case "$TAG" in v*) PROJ="${TAG#v}";; *) PROJ="$TAG";; esac
+          export LINEARMC_PROJECT_VERSION="$PROJ"
+          echo "project-version=$LINEARMC_PROJECT_VERSION"
           ./gradlew build --stacktrace
           ls -la build/libs/ | grep -iE 'horizon-plugin-.*\.jar'
 
@@ -483,7 +513,9 @@ jobs:
         if: matrix.server == 'horizon'
         uses: actions/upload-artifact@v4
         with:
-          name: linearmc-${{ matrix.server }}-${{ matrix.mc }}
+          # Per-MC artifact: plugin version dir + MC disambiguate the three
+          # horizon legs (release downloads this exact name).
+          name: linearmc-horizon-${{ matrix.version }}-${{ matrix.mc }}
           # Only the mixin jar ships. The splitPluginSourceSets side-product
           # (horizon-plugin-*-plugin.jar, ~25 KB, Paper half without its
           # dependencies) never worked standalone and is not published.
@@ -501,7 +533,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     concurrency:
-      group: release-${{ github.ref }}-${{ matrix.version }}-${{ matrix.server }}
+      group: release-${{ github.ref }}-${{ matrix.version }}-${{ matrix.server }}-${{ matrix.mc }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -509,10 +541,18 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
-      - name: Download build artifact
+      - name: Download build artifact (fork legs)
+        if: matrix.server != 'horizon'
         uses: actions/download-artifact@v4
         with:
           name: linearmc-${{ matrix.server }}-${{ matrix.mc }}
+          path: dist
+
+      - name: Download build artifact (horizon leg)
+        if: matrix.server == 'horizon'
+        uses: actions/download-artifact@v4
+        with:
+          name: linearmc-horizon-${{ matrix.version }}-${{ matrix.mc }}
           path: dist
 
       - name: Attach jar to GitHub Release
@@ -522,7 +562,10 @@ jobs:
           # Release asset name depends on the tag scheme:
           #   project tags  v<project> (e.g. v1.0.0): every
           #     matrix leg uploads its own per-version asset,
-          #     linearmc-<server>-<mcversion>-<project>.jar
+          #     linearmc-<server>-<mcversion>-<project>.jar for fork legs
+          #     (e.g. linearmc-folia-26.1.2-1.0.0.jar) and
+          #     linearmc-horizon-<pluginver>-<mcversion>-<project>.jar for
+          #     horizon (e.g. linearmc-horizon-1.0.0-26.3-1.0.0.jar)
           #   legacy tags   v<mcversion>-linear.<build> (history only): the
           #     matching MC leg uploads folia-<mcversion>-<build>.jar
           # A manual dispatch on a tag (`gh workflow run build.yml
@@ -556,13 +599,16 @@ jobs:
             case "$TAG" in
               v*-linear.*) echo "Legacy tag targets a fork build; horizon has no asset — skipping upload."; exit 0;;
             esac
-            # Horizon channel ships ONE jar: the mixin jar (plugins/). The
-            # splitPluginSourceSets side-product (-plugin jar, ~25 KB without
-            # dependencies) never worked standalone and is not published.
+            # Horizon channel ships ONE jar per MC leg: the mixin jar
+            # (plugins/). The splitPluginSourceSets side-product (-plugin
+            # jar, ~25 KB without dependencies) never worked standalone and
+            # is not published. Asset carries the plugin version dir + MC:
+            # linearmc-horizon-<pluginver>-<mcversion>-<project>.jar
+            # (e.g. linearmc-horizon-1.0.0-26.3-1.0.0.jar).
             MAIN=$(ls dist/horizon-plugin-*.jar | grep -v -- '-plugin\.jar$' | head -1)
             test -f "$MAIN" || { echo "::error::horizon mixin jar missing:"; ls -la dist/ || true; exit 1; }
-            cp "$MAIN" "linearmc-horizon-${{ matrix.mc }}-${PROJ}.jar"
-            gh release upload "$TAG" linearmc-horizon-${{ matrix.mc }}-${PROJ}.jar --repo Ashu11-A/LinearMC --clobber
+            cp "$MAIN" "linearmc-horizon-${{ matrix.version }}-${{ matrix.mc }}-${PROJ}.jar"
+            gh release upload "$TAG" linearmc-horizon-${{ matrix.version }}-${{ matrix.mc }}-${PROJ}.jar --repo Ashu11-A/LinearMC --clobber
             exit 0
           fi
           JAR=$(ls dist/*-paperclip-*.jar | head -1)

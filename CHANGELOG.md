@@ -1,7 +1,48 @@
 # Changelog
 
-Tags are project versions (`v1.0.0`, `v1.1.0`, `v1.1.1`). Each release attaches one jar
-per supported version line, named `folia-linear-<mcversion>-<project>.jar`.
+Tags are project versions (`v1.0.0`, `v1.1.0`, `v1.1.1`, `v1.1.2`). Each release attaches one jar
+per matrix leg: fork legs are named `linearmc-<server>-<mcversion>-<project>.jar`
+(e.g. `linearmc-folia-26.1.2-1.0.0.jar`), the Horizon plugin is
+`linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`
+(e.g. `linearmc-horizon-1.0.0-26.3-1.0.0.jar`).
+
+## v1.1.2
+
+### Horizon plugin parity + multi-MC (26.1.2 / 26.2 / 26.3)
+
+The Horizon plugin lagged the server legs: five `config.yml` keys existed
+in its template but did nothing, and its internal version sat at `1.0.0`
+under `v1.1.x` tags. This release closes the gap and builds one plugin jar
+per MC line.
+
+- **Wired settings:** `flush-max-threads`, `flush-frequency` (coordinator
+  age gate; the heartbeat already followed the file),
+  `compression-workers` and `long-distance-matching` now register the same
+  live core seams the Canvas leg registers, with the documented defaults
+  (1 / 10 / 0 / 0). `crash-on-broken-symlink: false` is honored (forensic
+  boot skips the guard); the default `true` still throws fail-closed.
+  The flush-completion listener stays no-op: this leg has no event bridge
+  to deliver to.
+- **Version follows the tag:** the Gradle project version, `paper-plugin.yml`
+  and `horizon.plugin.json` stamp `LINEARMC_PROJECT_VERSION` at build time
+  (tag builds; local builds keep `1.0.0-SNAPSHOT`).
+- **One jar per MC:** new pins `upstream.horizon-26.1.properties`
+  (`26.1.2.build.74-stable`) and `upstream.horizon-26.2.properties`
+  (`26.2.build.133-stable`); the 26.3 pin is untouched. Assets are named
+  `linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`, so this release
+  carries `linearmc-horizon-1.0.0-26.1.2-1.1.2.jar`,
+  `linearmc-horizon-1.0.0-26.2-1.1.2.jar` and
+  `linearmc-horizon-1.0.0-26.3-1.1.2.jar` next to the four fork jars.
+  `api-version` is substituted per MC at build time.
+- **Move-together rule:** new `CONTRIBUTING.md` section requires every
+  surface change (commands, config keys, `linear$` seams) to land on all
+  legs in the same change; `scripts/preflight.sh` gate `4b` enforces the
+  config-key and seam halves mechanically.
+- **Known limits:** mixin selectors are verified against the pinned Horizon
+  ref on 26.3 only; 26.1/26.2 stay PENDING in `MIXIN-CONTRACT.md` until the
+  first green per-MC build retraces them (selectors are `defaultRequire`,
+  so a miss fails the boot loudly instead of silently). The `v1.1.0`/`v1.1.1`
+  Horizon assets are unchanged history.
 
 ## v1.1.1
 

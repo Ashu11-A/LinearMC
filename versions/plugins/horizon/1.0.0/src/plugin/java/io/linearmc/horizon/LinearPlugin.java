@@ -117,6 +117,50 @@ public class LinearPlugin extends JavaPlugin {
             getConfig().isInt("region-format.linear.grid-size")
                 ? getConfig().getInt("region-format.linear.grid-size")
                 : null);
+        LinearFileConfig.setFileSymlinkGuard(
+            getConfig().isBoolean("region-format.linear.crash-on-broken-symlink")
+                ? getConfig().getBoolean("region-format.linear.crash-on-broken-symlink")
+                : null);
+        // Live core seams (Canvas parity): the suppliers below read
+        // config.yml live on every call with the docs defaults
+        // (flush-max-threads 1, flush-frequency 10, compression-workers 0,
+        // long-distance-matching 0); mapping/clamping is core-owned
+        // (LinearPolicy via LinearFormatPolicy). No flush-completion bridge
+        // exists on this leg, so the coordinator listener stays no-op.
+        final LinearPlugin self = this;
+        LinearFlushCoordinator.linear$setFlushThreadsSupplier(() -> {
+            try {
+                return LinearFormatPolicy.resolveFlushThreads(
+                    self.getConfig().getInt("region-format.linear.flush-max-threads", 1),
+                    Runtime.getRuntime().availableProcessors());
+            } catch (RuntimeException e) {
+                return 1;
+            }
+        });
+        LinearFlushCoordinator.linear$setFlushFrequencySupplier(() -> {
+            try {
+                return (long) LinearFormatPolicy.resolveFlushFrequency(
+                    self.getConfig().getInt("region-format.linear.flush-frequency", 10));
+            } catch (RuntimeException e) {
+                return 10L;
+            }
+        });
+        LinearRegionFile.linear$setCompressionWorkersSupplier(() -> {
+            try {
+                return LinearFormatPolicy.resolveCompressionWorkers(
+                    self.getConfig().getInt("region-format.linear.compression-workers", 0));
+            } catch (RuntimeException e) {
+                return 0;
+            }
+        });
+        LinearRegionFile.linear$setLongDistanceMatchingSupplier(() -> {
+            try {
+                return LinearFormatPolicy.resolveLongDistanceMatching(
+                    self.getConfig().getInt("region-format.linear.long-distance-matching", 0));
+            } catch (RuntimeException e) {
+                return 0;
+            }
+        });
         // Wire the core construction seam: anvil opens go through the
         // HorizonAnvilRegionFile adapter (composition over vanilla
         // RegionFile, mirroring the fork legs where RegionFile implements

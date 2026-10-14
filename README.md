@@ -85,9 +85,9 @@ Four JVM flags, passed on the `java` command line before `-jar`. Each one beats 
 Examples:
 
 ```bash
-java -Xmx4G -Dlinearmc.format=LINEAR -jar folia-linear-26.1.2-<version>.jar --nogui
-java -Xmx4G -Dlinearmc.format=LINEAR -Dlinearmc.implementation=V2 -Dlinearmc.grid-size=8 -jar folia-linear-26.1.2-<version>.jar --nogui
-java -Xmx4G -Dlinearmc.format=B_LINEAR -jar folia-linear-26.1.2-<version>.jar --nogui
+java -Xmx4G -Dlinearmc.format=LINEAR -jar linearmc-folia-26.1.2-<version>.jar --nogui
+java -Xmx4G -Dlinearmc.format=LINEAR -Dlinearmc.implementation=V2 -Dlinearmc.grid-size=8 -jar linearmc-folia-26.1.2-<version>.jar --nogui
+java -Xmx4G -Dlinearmc.format=B_LINEAR -jar linearmc-folia-26.1.2-<version>.jar --nogui
 ```
 
 ## ⚙️ Settings

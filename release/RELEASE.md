@@ -20,7 +20,7 @@ Referenced but not included:
 
 | Artifact | Where |
 | --- | --- |
-| Paperclip jar | Built locally, or `folia-linear-<mcversion>-<project>.jar` from the GitHub release for a project `v*` tag |
+| Paperclip jar | Built locally, or `linearmc-<server>-<mcversion>-<project>.jar` from the GitHub release for a project `v*` tag (the Horizon plugin is `linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`) |
 | Tree converter | `convert.py`, modes `mca2linear`, `linear2mca`, `verify`. Not part of this repository |
 
 ## 2. Version pins
@@ -126,12 +126,14 @@ scripts/build.sh               # every folder in versions/
 ```
 
 Each line produces its own paperclip jar. Release tags carry the **project
-version only** (`v1.0.0`); one release attaches one jar + `.sha256` per
-supported version line, named `folia-linear-<mcversion>-<project>.jar` (so a
+version only** (`v1.0.0`); one release attaches one jar per matrix leg: fork
+legs are named `linearmc-<server>-<mcversion>-<project>.jar` (so a
 `v1.0.0` release containing `26.1.x` at MC `26.1.2` ships
-`folia-linear-26.1.2-1.0.0.jar` + `.sha256`; a future `26.2.x` line at MC
-`26.2.1` would add `folia-linear-26.2.1-1.0.0.jar` + `.sha256` to the same
-release). Verify the sha256 shipped alongside the jar before deploying it.
+`linearmc-folia-26.1.2-1.0.0.jar`; a future `26.2.x` line at MC
+`26.2.1` would add `linearmc-folia-26.2.1-1.0.0.jar` to the same
+release), the Horizon plugin is
+`linearmc-horizon-<pluginver>-<mcversion>-<project>.jar`. Deploy the jar
+matching your server line and MC.
 
 To release only some folders (a fix that applies to one line), dispatch the
 workflow manually on the tag with the `versions` input:

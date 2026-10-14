@@ -21,6 +21,7 @@ public final class LinearFileConfig {
     private static volatile Integer fileLevelRaw;
     private static volatile String fileImplementationRaw;
     private static volatile Integer fileGridSizeRaw;
+    private static volatile Boolean fileSymlinkGuardRaw;
 
     private LinearFileConfig() {
     }
@@ -84,6 +85,32 @@ public final class LinearFileConfig {
     /** Raw {@code region-format.linear.grid-size} from the file, or {@code null}. */
     public static Integer fileGridSize() {
         return fileGridSizeRaw;
+    }
+
+    /**
+     * Pushes the raw file value ({@code null} when unset):
+     * {@code region-format.linear.crash-on-broken-symlink}. Additive:
+     * existing {@link #setFileValues} / {@link #setFileWriterValues} call
+     * sites keep working.
+     */
+    public static void setFileSymlinkGuard(Boolean crashOnBrokenSymlink) {
+        fileSymlinkGuardRaw = crashOnBrokenSymlink;
+    }
+
+    /** Raw {@code region-format.linear.crash-on-broken-symlink}, or {@code null}. */
+    public static Boolean fileSymlinkGuard() {
+        return fileSymlinkGuardRaw;
+    }
+
+    /**
+     * No-arg convenience: the cached file value wins over the shipped
+     * {@code true} default. Sysprop-free by design (there is no
+     * {@code linearmc.*} override for this key): the file value wins when
+     * non-null, else {@link LinearPolicy#DEFAULT_CRASH_ON_BROKEN_SYMLINK}.
+     */
+    public static boolean resolveCrashOnBrokenSymlink() {
+        return LinearPolicy.resolveFlag(null, fileSymlinkGuardRaw,
+            LinearPolicy.DEFAULT_CRASH_ON_BROKEN_SYMLINK);
     }
 
     /**
