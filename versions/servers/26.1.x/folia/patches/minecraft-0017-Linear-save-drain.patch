@@ -16,7 +16,7 @@ diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/pap
 index f2208bc..c0cce95 100644
 --- a/io/papermc/paper/threadedregions/RegionShutdownThread.java
 +++ b/io/papermc/paper/threadedregions/RegionShutdownThread.java
-@@ -161,6 +161,16 @@ public final class RegionShutdownThread extends ca.spottedleaf.moonrise.common.u
+@@ -161,6 +161,21 @@ public final class RegionShutdownThread extends ca.spottedleaf.moonrise.common.u
          }
  
          MinecraftServer.getServer().stopServer(); // stop part 1: most logic, kicking players, plugins, etc
