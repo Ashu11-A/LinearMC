@@ -15,7 +15,6 @@ import net.linear.config.LinearFileConfig;
 import net.minecraft.world.level.chunk.storage.RegionFile;
 import net.minecraft.world.level.chunk.storage.RegionFileStorage;
 import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
-import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Overwrite;
 import org.spongepowered.asm.mixin.Shadow;
@@ -47,11 +46,9 @@ public abstract class RegionFileStorageMixin {
         Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear|b_linear)$");
 
     @Shadow
-    @Final
     private Path folder;
 
     @Shadow
-    @Final
     private static int REGION_SHIFT;
 
     /**
@@ -263,8 +260,16 @@ public abstract class RegionFileStorageMixin {
         return this.linear$openProbed(openInfo, regionPath, openFolder, openSync);
     }
 
+    // Exists/read/write path. Host-shape tolerant (require = 0 above): some
+    // live hosts carry no Moonrise bridge method here (observed: the whole
+    // mixin was rejected, killing the create path too). Absence of the
+    // method means absence of the path, so skipping is correct — but a typo
+    // would skip identically, hence the CI per-bundle reflection gate
+    // (MixinDescriptorsTest#mixinTargetsExistInThisBundle) owns typo
+    // protection, and LinearPlugin logs the live coverage at enable.
     @Redirect(
         method = "moonrise$getRegionFileIfExists(II)Lnet/minecraft/world/level/chunk/storage/RegionFile;",
+        require = 0,
         at = @At(
             value = "NEW",
             // Same BeforeNew-takes-CLASS rule as above.

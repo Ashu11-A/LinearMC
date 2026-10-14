@@ -200,6 +200,13 @@ public class LinearPlugin extends JavaPlugin {
         if (!linearFamily) {
             getLogger().warning("LinearMC: format is ANVIL — no .linear/.b_linear files will be written.");
         }
+        // Storage-interception coverage: the exists-path redirect applies
+        // only where the host exposes the Moonrise bridge method (its
+        // injector is require = 0, so absence skips instead of failing the
+        // whole mixin). Log which paths are live so a silent gap is visible.
+        getLogger().info("LinearMC: storage interception: create-path armed"
+            + (hasMoonriseExistsBridge() ? ", exists-path armed"
+                : ", no Moonrise exists bridge on this host (create-path covers all opens)"));
         LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_FORMAT)
             .ifPresent(getLogger()::info);
         LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_LEVEL)
@@ -245,6 +252,22 @@ public class LinearPlugin extends JavaPlugin {
         this.registerCommand("linear", "Linear region tools (stats, convert, queue)", command);
         this.registerCommand(
             "linearstats", "Shows Linear region timing stats", new LinearStatsCommand(this));
+    }
+
+    /**
+     * Whether the host NMS exposes the Moonrise exists-path bridge
+     * ({@code moonrise$getRegionFileIfExists(int, int)}): false means the
+     * exists-path redirect had no target and the create path covers all
+     * opens on this host. Reflective probe only, never fatal.
+     */
+    private static boolean hasMoonriseExistsBridge() {
+        try {
+            net.minecraft.world.level.chunk.storage.RegionFileStorage.class
+                .getDeclaredMethod("moonrise$getRegionFileIfExists", int.class, int.class);
+            return true;
+        } catch (final ReflectiveOperationException | LinkageError missed) {
+            return false;
+        }
     }
 
     /** Heartbeat service for the flush drain (shut down on disable). */
