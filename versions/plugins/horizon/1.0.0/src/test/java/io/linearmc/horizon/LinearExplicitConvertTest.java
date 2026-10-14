@@ -17,9 +17,7 @@ import net.linear.command.LinearAction;
 import net.linear.command.parse.LinearCommandParser;
 import org.bukkit.Server;
 import org.bukkit.command.CommandSender;
-import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.plugin.java.JavaPluginLoader;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -101,13 +99,8 @@ public class LinearExplicitConvertTest {
                             return null;
                     }
                 });
-            JavaPlugin plugin = new JavaPlugin(
-                new JavaPluginLoader(server),
-                new PluginDescriptionFile(
-                    "LinearMC", "1.0.0", "io.linearmc.horizon.LinearPlugin"),
-                new java.io.File("build/tmp-test-plugin"),
-                new java.io.File("build/tmp-test-plugin.jar")) {
-            };
+            JavaPlugin plugin = TestPluginStubs.stub(
+                java.util.logging.Logger.getLogger("TestServer"), server);
             command = new LinearCommand(plugin);
         }
     }

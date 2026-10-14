@@ -14,9 +14,7 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import net.linear.command.parse.LinearPermissions;
 import org.bukkit.Server;
 import org.bukkit.command.CommandSender;
-import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.plugin.java.JavaPluginLoader;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -92,13 +90,8 @@ public class LinearStatsCommandTest {
                     }
                     return null;
                 });
-            plugin = new JavaPlugin(
-                new JavaPluginLoader(server),
-                new PluginDescriptionFile(
-                    "LinearMC", "1.0.0", "io.linearmc.horizon.LinearPlugin"),
-                new java.io.File("build/tmp-test-plugin"),
-                new java.io.File("build/tmp-test-plugin.jar")) {
-            };
+            plugin = TestPluginStubs.stub(
+                java.util.logging.Logger.getLogger("TestServer"), server);
             command = new LinearStatsCommand(plugin);
         }
     }

@@ -13,9 +13,7 @@ import java.util.List;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.bukkit.Server;
 import org.bukkit.command.CommandSender;
-import org.bukkit.plugin.PluginDescriptionFile;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.plugin.java.JavaPluginLoader;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -75,11 +73,12 @@ public class LinearBrigadierTest {
                     }
                     return null;
                 });
-            // Server-free plugin instance: a real loader (backed by a
-            // dynamic Server proxy) satisfies the JavaPlugin constructor's
-            // loader dereference. getServer() returns the proxy, whose
-            // getWorlds() null falls back to empty via the adapter's
-            // RuntimeException catch — no server ever boots.
+            // Server-free plugin instance: allocated without running any
+            // JavaPlugin ctor (the 26.1/26.2 ctor needs Bukkit.getUnsafe()
+            // plus a PluginClassLoader; 26.3 uses a server-free bridge) and
+            // injected with the two fields the command reads. getServer()
+            // returns the proxy, whose getWorlds() null falls back to empty
+            // via the adapter's RuntimeException catch — no server boots.
             Server server = (Server) Proxy.newProxyInstance(
                 getClass().getClassLoader(), new Class<?>[]{Server.class},
                 (proxy, method, args) -> {
@@ -92,13 +91,8 @@ public class LinearBrigadierTest {
                     }
                     return null;
                 });
-            JavaPlugin plugin = new JavaPlugin(
-                new JavaPluginLoader(server),
-                new PluginDescriptionFile(
-                    "LinearMC", "1.0.0", "io.linearmc.horizon.LinearPlugin"),
-                new java.io.File("build/tmp-test-plugin"),
-                new java.io.File("build/tmp-test-plugin.jar")) {
-            };
+            JavaPlugin plugin = TestPluginStubs.stub(
+                java.util.logging.Logger.getLogger("TestServer"), server);
             command = new LinearCommand(plugin);
         }
     }
