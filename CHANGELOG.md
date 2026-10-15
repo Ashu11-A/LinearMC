@@ -7,7 +7,7 @@ for every supported MC line, `linearmc-horizon-<pluginver>-<project>.jar`
 (e.g. `linearmc-horizon-1.0.0-1.0.0.jar`), built against the oldest bundle
 with `api-version` set to its major.minor.
 
-## Unreleased (v1.1.3)
+## v1.1.3
 
 ### Direct-memory exhaustion fix (all legs, V1/V2/V3)
 
