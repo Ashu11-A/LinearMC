@@ -423,12 +423,9 @@ public final class LinearRegionFile implements AbstractRegionFile {
         final byte[] staging = new byte[size];
         buf.duplicate().get(staging);
         final ByteBuffer plain = ByteBuffer.wrap(staging);
-        final int maxCompressed = LZ4.fastCompressor().maxCompressedLength(size);
-        final ByteBuffer packed = ByteBuffer.allocateDirect(maxCompressed);
-        LinearDirect.recordAlloc(maxCompressed);
-        final int packedSize = LZ4.fastCompressor().compress(plain, 0, size, packed, 0, maxCompressed);
-        packed.position(0);
-        packed.limit(packedSize);
+        // Single shared pack path (tight root + recorded): the slot retains
+        // only the used prefix, never the worst-case staging.
+        final ByteBuffer packed = net.linear.compression.Lz4SlotCodec.pack(plain);
         // View for shared readers; the root is retained alongside because
         // only it can be deterministically freed (slices are rejected).
         final ByteBuffer stored = packed.asReadOnlyBuffer();

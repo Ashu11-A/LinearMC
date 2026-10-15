@@ -34,11 +34,18 @@ public final class Lz4SlotCodec {
         int size = plain.remaining();
         int maxCompressed = LZ4.fastCompressor().maxCompressedLength(size);
         ByteBuffer packed = ByteBuffer.allocateDirect(maxCompressed);
-        net.linear.io.LinearDirect.recordAlloc(maxCompressed);
         int packedSize = LZ4.fastCompressor().compress(plain, plain.position(), size, packed, 0, maxCompressed);
         packed.position(0);
         packed.limit(packedSize);
-        return packed;
+        // Tight copy: retain only the used prefix. The worst-case staging is
+        // freed immediately; compressible payloads (typical chunk NBT) would
+        // otherwise pin multiples of their stored size per slot forever.
+        final ByteBuffer tight = ByteBuffer.allocateDirect(packedSize);
+        net.linear.io.LinearDirect.recordAlloc(packedSize);
+        tight.put(packed.duplicate());
+        tight.flip();
+        net.linear.io.LinearDirect.free(packed);
+        return tight;
     }
 
     /** Alias for {@link #pack(ByteBuffer)} (matches the historic helper name). */

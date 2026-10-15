@@ -179,6 +179,21 @@ public class DirectMemoryTest {
     }
 
     @Test
+    public void writeRetainsTightPrefixNotWorstCase() throws Exception {
+        final File file = this.temporaryFolder.newFile("r.0.6.linear");
+        // 64 KiB of zeros compresses to a few hundred bytes; the retained
+        // root must be the used prefix, not the ~66 KiB worst-case staging.
+        final byte[] zeros = new byte[64 * 1024];
+        final long usedBefore = directUsed();
+        try (LinearRegionFile region = new LinearRegionFile(file.toPath(), 6)) {
+            region.write(ChunkKey.of(6, 6), ByteBuffer.wrap(zeros));
+            final long delta = directUsed() - usedBefore;
+            assertTrue("retained must be the tight prefix, +" + delta, delta <= 4L * 1024L);
+            assertArrayEquals(zeros, readChunk(region, ChunkKey.of(6, 6)));
+        }
+    }
+
+    @Test
     public void soakWriteReadFlushAcrossImplementations() throws Exception {
         for (final LinearImplementation impl : LinearImplementation.values()) {
             final File file = this.temporaryFolder.newFile("r.1." + impl.version() + ".linear");
