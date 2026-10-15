@@ -50,10 +50,14 @@ public final class V1Encoder {
             }
         }
 
-        // Linear - decompress each LZ4 slot straight into its
-        // final offset in image (removes one full region copy; previously
-        // held plain[] AND image ~2x). Absolute LZ4 calls leave positions
-        // untouched, so the table puts + absolute decompresses compose.
+        // Linear - stream the decompressed region image straight into the
+        // zstd frame slot by slot: table first, then each payload
+        // decompressed into a per-slot heap scratch. No whole-image direct
+        // buffer is ever assembled (that staging was the largest single
+        // transient direct allocation per flush and the first thing to
+        // exhaust the direct cap under generation-speed writeback).
+        // The frame bytes are identical: zstd output depends only on the
+        // input bytes and settings, never on write() chunking.
         long totalRaw = 0L;
         for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
             if (snapSize[i] > 0) {
@@ -64,31 +68,10 @@ public final class V1Encoder {
             }
         }
 
-        // Assemble the decompressed region image in one direct buffer.
-        final ByteBuffer image = ByteBuffer.allocateDirect(TABLE_SIZE + (int) totalRaw);
-        for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
-            image.putInt(snapSize[i]);
-            image.putInt(snapTime[i]);
-        }
-        long writeOffset = TABLE_SIZE;
-        for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
-            if (snapSize[i] > 0) {
-                final ByteBuffer frame = snapPacked[i].duplicate();
-                final int consumed = Lz4SlotCodec.unpack(frame, image, (int) writeOffset, snapSize[i]);
-                if (consumed != frame.remaining()) {
-                    throw new IOException("LZ4 frame mismatch in slot " + i);
-                }
-                writeOffset += snapSize[i];
-            }
-        }
-        // Table puts advanced position to TABLE_SIZE; absolute decompresses
-        // did not move it, so position explicitly to the end before flip.
-        image.position((int) (TABLE_SIZE + totalRaw));
-        image.flip();
-
-        // Compress the image: same 32 KiB pump the old streaming flush used,
-        // so frame bytes are identical; the caller persists the returned
-        // header + frame + footer image via tmp + fsync + atomic move.
+        // Compress the image: table plus per-slot payloads pumped through
+        // one checksummed zstd frame with the caller's worker/LDM tuning;
+        // the caller persists the returned header + frame + footer image
+        // via tmp + fsync + atomic move.
         final byte[] frame;
         final ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (ZstdOutputStream zstd = new ZstdOutputStream(baos, level)) {
@@ -114,11 +97,25 @@ public final class V1Encoder {
             }
             // 0 or out-of-range = LDM off (do not call; JNI would
             // silently disable and reset windowLog to 0 anyway).
-            final byte[] scratch = new byte[32 * 1024]; // single bounded pump buffer per flush
-            while (image.hasRemaining()) {
-                final int n = Math.min(scratch.length, image.remaining());
-                image.get(scratch, 0, n);
-                zstd.write(scratch, 0, n);
+            final ByteBuffer table = ByteBuffer.allocate(TABLE_SIZE);
+            for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
+                table.putInt(snapSize[i]);
+                table.putInt(snapTime[i]);
+            }
+            zstd.write(table.array());
+            for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
+                if (snapSize[i] > 0) {
+                    // Heap scratch: collector-reclaimed, never counted
+                    // against the direct-memory cap.
+                    final byte[] plain = new byte[snapSize[i]];
+                    final ByteBuffer frameIn = snapPacked[i].duplicate();
+                    final int consumed = Lz4SlotCodec.unpack(
+                        frameIn, ByteBuffer.wrap(plain), 0, snapSize[i]);
+                    if (consumed != frameIn.remaining()) {
+                        throw new IOException("LZ4 frame mismatch in slot " + i);
+                    }
+                    zstd.write(plain);
+                }
             }
         } // close finalizes the frame (checksum + end mark) before the bytes are read
         frame = baos.toByteArray();

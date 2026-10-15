@@ -111,7 +111,9 @@ public final class V1Decoder {
                     if (payload.length != sizes[i]) {
                         throw new IOException("Truncated payload in slot " + i);
                     }
-                    out.lz4Payloads[i] = Lz4SlotCodec.pack(ByteBuffer.wrap(payload));
+                    final ByteBuffer root = Lz4SlotCodec.pack(ByteBuffer.wrap(payload));
+                    out.lz4Payloads[i] = root.asReadOnlyBuffer();
+                    out.lz4Roots[i] = root;
                     out.uncompressedSize[i] = sizes[i];
                 }
             }

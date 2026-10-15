@@ -21,18 +21,24 @@ public final class Lz4SlotCodec {
     }
 
     /**
-     * Compresses {@code plain} (remaining bytes) into a read-only direct
-     * slice. Positions of {@code plain} are left untouched (absolute
-     * compress).
+     * Compresses {@code plain} (remaining bytes) into a direct buffer holding
+     * exactly the used prefix (position 0, limit {@code packedSize}).
+     * Positions of {@code plain} are left untouched (absolute compress).
+     *
+     * <p>Returns the <em>root</em> allocation: it is the only handle
+     * {@code Unsafe.invokeCleaner} accepts (slices, duplicates and
+     * read-only views are rejected). Derive shared views with
+     * {@code asReadOnlyBuffer()} and free only the root.
      */
     public static ByteBuffer pack(ByteBuffer plain) {
         int size = plain.remaining();
         int maxCompressed = LZ4.fastCompressor().maxCompressedLength(size);
         ByteBuffer packed = ByteBuffer.allocateDirect(maxCompressed);
+        net.linear.io.LinearDirect.recordAlloc(maxCompressed);
         int packedSize = LZ4.fastCompressor().compress(plain, plain.position(), size, packed, 0, maxCompressed);
         packed.position(0);
         packed.limit(packedSize);
-        return packed.slice().asReadOnlyBuffer();
+        return packed;
     }
 
     /** Alias for {@link #pack(ByteBuffer)} (matches the historic helper name). */

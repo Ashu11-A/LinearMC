@@ -837,8 +837,10 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
             header.get();
             long bodySize = size - MASTER_HEADER_SIZE;
             ByteBuffer body = ByteBuffer.allocateDirect((int) bodySize);
+            net.linear.io.LinearDirect.recordAlloc(bodySize);
             readFully(channel, MASTER_HEADER_SIZE, body);
             body.flip();
+            try {
             final ZstdInputStream zstdIn;
             try {
                 zstdIn = new ZstdInputStream(LinearDirectStreams.wrap(body));
@@ -864,6 +866,11 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
                 if (in.read() != -1) {
                     throw new IOException("Trailing bytes in master of " + this.file);
                 }
+            }
+            } finally {
+                // Envelopes are heap copies; the compressed body is garbage
+                // past this point and is freed deterministically.
+                net.linear.io.LinearDirect.free(body);
             }
         }
         return envelopes;

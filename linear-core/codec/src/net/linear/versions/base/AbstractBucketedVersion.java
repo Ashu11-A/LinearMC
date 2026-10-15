@@ -281,7 +281,9 @@ public abstract class AbstractBucketedVersion extends AbstractLinearVersion {
                     } catch (java.io.EOFException e) {
                         throw new IOException("Truncated payload in bucket " + bucketIdx);
                     }
-                    out.lz4Payloads[chunkIndex] = Lz4SlotCodec.pack(ByteBuffer.wrap(payload));
+                    final ByteBuffer root = Lz4SlotCodec.pack(ByteBuffer.wrap(payload));
+                    out.lz4Payloads[chunkIndex] = root.asReadOnlyBuffer();
+                    out.lz4Roots[chunkIndex] = root;
                     out.uncompressedSize[chunkIndex] = chunkSize;
                 }
             }

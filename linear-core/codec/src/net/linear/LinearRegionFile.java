@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import net.linear.bucket.LinearBase;
 import net.linear.bucket.LinearBucketReader;
 import net.linear.bucket.LinearBucketWriter;
+import net.linear.io.LinearDirect;
 import net.linear.io.LinearDirectStreams;
 import net.linear.probe.LinearBucketGrid;
 
@@ -83,12 +84,15 @@ import net.linear.probe.LinearBucketGrid;
  * </ul>
  *
  * <h2>GC posture (Spottedleaf rule)</h2>
- * Hot paths use direct buffers end to end: per-chunk RAM staging is
- * direct-to-direct LZ4, the flush image is one direct buffer streamed through
- * {@code ZstdOutputStream}, and file IO uses {@link FileChannel} with direct
- * buffers. The only bounded heap scratch is a single 32 KiB pump array per
- * {@link #flush()} call (not per chunk). Region load is a cold path and may
- * allocate transient heap arrays.
+ * Hot paths keep only the working set off-heap: per-slot LZ4 payloads and
+ * file IO use {@link FileChannel} with direct buffers, while per-operation
+ * staging (write copy, V1 flush assembly) is heap garbage the collector
+ * reclaims without touching the direct-memory cap. Every transient direct
+ * buffer has a deterministic free point (stream close, end of load, region
+ * close via {@code net.linear.io.LinearDirect}) instead of relying on
+ * GC-triggered Cleaner runs, which cannot keep up with generation-speed
+ * chunk rates. Region load is a cold path and may allocate transient heap
+ * arrays.
  */
 public final class LinearRegionFile implements AbstractRegionFile {
 
@@ -163,6 +167,12 @@ public final class LinearRegionFile implements AbstractRegionFile {
 
     /** LZ4-compressed payloads, read-only direct slices; null slot == absent chunk. Guarded by slotLock. */
     private final ByteBuffer[] compressed = new ByteBuffer[SLOTS];
+    /**
+     * Root allocations behind {@link #compressed} (same slot index); the only
+     * handles deterministic release accepts (derived views are rejected by
+     * the Cleaner API). Guarded by slotLock.
+     */
+    private final ByteBuffer[] packedRoots = new ByteBuffer[SLOTS];
     /** Uncompressed payload lengths. Guarded by slotLock. */
     private final int[] uncompressedSize = new int[SLOTS];
     /** Per-chunk epoch seconds, preserved across load/flush (never zeroed). Guarded by slotLock. */
@@ -292,7 +302,9 @@ public final class LinearRegionFile implements AbstractRegionFile {
     /**
      * Returns a fresh {@link DataInputStream} over the chunk's payload, or null
      * if the chunk is absent. The stream reads from a direct buffer with no heap
-     * copy of the payload; the caller owns it and must close it.
+     * copy of the payload; the caller owns it and must close it. Close
+     * deterministically frees the direct buffer (no reliance on GC reclamation,
+     * which cannot keep up with generation-speed read rates).
      */
     @Override
     public DataInputStream getChunkDataInputStream(final long chunk) throws IOException {
@@ -316,6 +328,8 @@ public final class LinearRegionFile implements AbstractRegionFile {
         }
 
         final ByteBuffer out = ByteBuffer.allocateDirect(size);
+        LinearDirect.recordAlloc(size);
+        try {
         final ByteBuffer frame = src.duplicate();
         // NB: the fast decompressor returns the input frame length,
         // not dst bytes written; an over/under-run throws out of the call itself.
@@ -334,7 +348,13 @@ public final class LinearRegionFile implements AbstractRegionFile {
         // exactly the decompressed range instead of flip()ing (which would empty it).
         out.position(size);
         out.flip();
-            return new DataInputStream(LinearDirectStreams.wrap(out));
+        } catch (final IOException | RuntimeException failed) {
+            // Error paths never reach the owning stream: free here so a
+            // corrupt chunk cannot strand a direct buffer per failed read.
+            LinearDirect.free(out);
+            throw failed;
+        }
+            return new DataInputStream(LinearDirect.wrapOwned(out));
         } finally {
             final long micros = (System.nanoTime() - startNanos) / 1000L;
             this.readCount.increment();
@@ -372,6 +392,7 @@ public final class LinearRegionFile implements AbstractRegionFile {
             try {
                 ensureOpen();
                 this.compressed[index] = null;
+                this.packedRoots[index] = null;
                 this.uncompressedSize[index] = 0;
                 this.timestamps[index] = nowSeconds();
                 this.dirty = true;
@@ -394,23 +415,37 @@ public final class LinearRegionFile implements AbstractRegionFile {
         }
 
         // Copy + compress outside the lock so the critical section stays tiny.
-        final ByteBuffer plain = ByteBuffer.allocateDirect(size);
-        plain.put(buf.duplicate());
-        plain.flip();
+        // Heap staging: only the compressed image lives off-heap (retained per
+        // slot as the working set); the plain staging is heap garbage the
+        // collector reclaims without touching the direct-memory cap. LZ4
+        // accepts a heap source into a direct destination, so no direct
+        // staging buffer is needed here at all.
+        final byte[] staging = new byte[size];
+        buf.duplicate().get(staging);
+        final ByteBuffer plain = ByteBuffer.wrap(staging);
         final int maxCompressed = LZ4.fastCompressor().maxCompressedLength(size);
         final ByteBuffer packed = ByteBuffer.allocateDirect(maxCompressed);
+        LinearDirect.recordAlloc(maxCompressed);
         final int packedSize = LZ4.fastCompressor().compress(plain, 0, size, packed, 0, maxCompressed);
         packed.position(0);
         packed.limit(packedSize);
-        final ByteBuffer stored = packed.slice().asReadOnlyBuffer();
+        // View for shared readers; the root is retained alongside because
+        // only it can be deterministically freed (slices are rejected).
+        final ByteBuffer stored = packed.asReadOnlyBuffer();
 
         this.slotLock.lock();
         try {
             ensureOpen();
             this.compressed[index] = stored;
+            this.packedRoots[index] = packed;
             this.uncompressedSize[index] = size;
             this.timestamps[index] = nowSeconds();
             this.dirty = true;
+        } catch (final IOException | RuntimeException failed) {
+            // Slot never took ownership (e.g. write racing close): free the
+            // staging root here instead of stranding it.
+            LinearDirect.free(packed);
+            throw failed;
         } finally {
             this.slotLock.unlock();
         }
@@ -519,9 +554,9 @@ public final class LinearRegionFile implements AbstractRegionFile {
         // after the first snapshot; drain until clean so close never drops it.
         // A failed flush re-arms dirty (doFlush) and is retried once below;
         // a second failure propagates with dirty intact (caller inspects).
-        // doFlush only throws IOException/RuntimeException/Error; unchecked
-        // failures are retried the same way so a transient zstd/LZ4 fault
-        // does not strand acknowledged writes.
+        // doFlush only throws IOException/RuntimeException; an Error
+        // propagates immediately with dirty intact and buffers kept, so a
+        // later close can still retry the drain.
         IOException firstIoFailure = null;
         RuntimeException firstRuntimeFailure = null;
         for (int attempt = 0; attempt < 2; attempt++) {
@@ -544,6 +579,7 @@ public final class LinearRegionFile implements AbstractRegionFile {
                 this.slotLock.unlock();
             }
             if (!stillDirty) {
+                freeRetained();
                 return;
             }
         }
@@ -568,6 +604,35 @@ public final class LinearRegionFile implements AbstractRegionFile {
     }
 
     // internal
+
+    /**
+     * Deterministically frees the retained per-slot packed set. Only called
+     * after a successful drain with {@code closed} set (new ops are blocked
+     * by {@link #ensureOpen} and the drain held {@code flushGuard}, so no
+     * flush snapshot can reference these buffers afterwards). Failed closes
+     * keep the buffers so a retry still has the data.
+     *
+     * <p>Precondition: no concurrent reads. Reads copy slot views under
+     * {@code slotLock} but decompress outside it, so a read straddling this
+     * call would touch freed memory. Owners must close regions quiescently
+     * (unload excludes in-flight reads), the same lifecycle the storage
+     * layer already guarantees for file replacement.
+     */
+    private void freeRetained() {
+        this.slotLock.lock();
+        try {
+            for (int i = 0; i < SLOTS; i++) {
+                // Only the root is releasable; the view shares its memory and
+                // dies with it. Heap views (tests) and absent slots no-op.
+                LinearDirect.free(this.packedRoots[i]);
+                this.packedRoots[i] = null;
+                this.compressed[i] = null;
+                this.uncompressedSize[i] = 0;
+            }
+        } finally {
+            this.slotLock.unlock();
+        }
+    }
 
     private void doFlush() throws IOException {
         // Linear: flush timing, recorded AFTER guard unlock/exit.
@@ -739,8 +804,10 @@ public final class LinearRegionFile implements AbstractRegionFile {
                 throw new IOException("Region file truncated: " + this.file + " (" + fileLength + " bytes)");
             }
             final ByteBuffer raw = ByteBuffer.allocateDirect((int) fileLength);
+            LinearDirect.recordAlloc(fileLength);
             LinearDirectStreams.readFully(channel, raw);
             raw.flip();
+            try {
 
             if (raw.getLong(0) != SUPERBLOCK) {
                 throw new IOException("Invalid superblock in " + this.file);
@@ -795,11 +862,18 @@ public final class LinearRegionFile implements AbstractRegionFile {
                 LOGGER.info("Loaded {} as {} (wire {}); will rewrite as {} on next flush",
                     this.file, impl, wire & 0xFF, this.writeImplementation);
             }
+            } finally {
+                // Staged tables hold fresh per-chunk pack() buffers, never
+                // slices of raw: the whole-file image is garbage past parse
+                // and is freed deterministically (multi-MB per open).
+                LinearDirect.free(raw);
+            }
         }
 
         this.slotLock.lock();
         try {
             System.arraycopy(staged.lz4Payloads, 0, this.compressed, 0, SLOTS);
+            System.arraycopy(staged.lz4Roots, 0, this.packedRoots, 0, SLOTS);
             System.arraycopy(staged.uncompressedSize, 0, this.uncompressedSize, 0, SLOTS);
             System.arraycopy(staged.timestamps, 0, this.timestamps, 0, SLOTS);
             this.dirty = false;

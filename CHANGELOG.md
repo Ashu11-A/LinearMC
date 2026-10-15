@@ -7,6 +7,35 @@ for every supported MC line, `linearmc-horizon-<pluginver>-<project>.jar`
 (e.g. `linearmc-horizon-1.0.0-1.0.0.jar`), built against the oldest bundle
 with `api-version` set to its major.minor.
 
+## Unreleased (v1.1.3)
+
+### Direct-memory exhaustion fix (all legs, V1/V2/V3)
+
+Under sustained generation load (~500 chunk I/O/s) every chunk read and
+write allocated fresh direct buffers with no deterministic free point, so
+allocation outran GC-triggered Cleaner runs until the direct cap
+(`MaxDirectMemorySize`, default = Xmx) and all chunk I/O threw
+`OutOfMemoryError: Cannot reserve direct buffer memory` (TPS 9–17 at 28%
+CPU — an I/O-memory stall, not worldgen math). One core fix heals all legs
+(Canvas/Folia vendor core sources at stage time, Horizon embeds via JiJ).
+
+- **Read:** the returned stream now frees its direct buffer on `close()`
+  (`net.linear.io.LinearDirect`, `Unsafe.invokeCleaner`, best-effort with GC
+  fallback); reads after close fail instead of touching freed memory.
+- **Write:** the staging copy moved to the heap (LZ4 compresses heap source
+  into a direct destination); only the retained per-slot packed image stays
+  off-heap — one direct buffer per slot instead of two.
+- **V1 flush:** streams slots into the zstd frame through per-slot heap
+  scratch instead of assembling the whole region image in one multi-MB
+  direct buffer. V2/V3/Pumpkin flush was already heap-only; all versions
+  share the fixed read/write/load paths.
+- **Load/close:** the whole-file load buffer and the master body are freed
+  after parsing; region close frees the retained packed set (roots are kept
+  alongside shared views because the Cleaner API rejects slices).
+- **Proof:** new `DirectMemoryTest` (5 tests: close-frees, use-after-close
+  guard, single retained buffer, close-frees-retained, 1200-cycle soak for
+  V1/V2/V3) — all 5 fail pre-fix, all pass post-fix; suite 363 green.
+
 ## v1.1.2
 
 ### Horizon plugin parity, one jar for 26.1–26.3
