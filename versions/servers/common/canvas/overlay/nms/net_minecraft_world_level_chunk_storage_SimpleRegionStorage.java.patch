@@ -9,6 +9,7 @@ Rebased onto Canvas 26.3 build #1010 (a636063e): the 5-arg constructor no
 longer writes info.dfuType()[0]; the new overloads only add the format
 parameters and delegate to IOWorker.
 ---
+diff --git a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
 --- a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
 @@ -39,6 +39,26 @@

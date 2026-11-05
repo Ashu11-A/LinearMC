@@ -9,6 +9,7 @@ Rebased onto Canvas 26.3 build #1010 (a636063e): upstream made
 RegionFile.write protected (was public); the long-key bridge below is
 public and still satisfies AbstractRegionFile.
 ---
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFile.java b/net/minecraft/world/level/chunk/storage/RegionFile.java
 --- a/net/minecraft/world/level/chunk/storage/RegionFile.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFile.java
 @@ -22,7 +22,7 @@

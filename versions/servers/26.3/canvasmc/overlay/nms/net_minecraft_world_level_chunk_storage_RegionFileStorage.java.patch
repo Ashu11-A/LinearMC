@@ -10,6 +10,7 @@ Rebased onto Canvas 26.3 build #1010 (a636063e): upstream moved the chunk
 recovery helpers to RegionFileRecovery and removed the isChunkData field;
 the Linear dispatch follows the new cache/read/write/recovery shape.
 ---
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 --- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 @@ -1,9 +1,11 @@
