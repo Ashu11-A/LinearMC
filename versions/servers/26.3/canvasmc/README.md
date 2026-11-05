@@ -1,6 +1,6 @@
 # Canvas server leg, line 26.3
 
-Supported release leg (ships under v1.1.4 as
+Supported release leg (ships under v1.1.4-release.1 as
 `linearmc-canvas-26.3-1.1.4+build.1010.jar`).
 
 Upstream pin: Canvas `main` at `a636063e`, game version 26.3, build **#1010**.
@@ -17,7 +17,7 @@ this leg keeps only seam adapters (see OVERLAY.md for the 26.3 seam list).
 Paper-side new files beyond the hub: `LinearStartupConversion.java` only.
 Tests come from the hub (this leg carries no tests of its own).
 
-Canvas 26.1.2 and 26.2 are no longer supported as of v1.1.4; their legs are
+Canvas 26.1.2 and 26.2 are no longer supported as of v1.1.4-release.1; their legs are
 archived under versions/servers/removed/ and are not built or tested.
 
 For format, settings, and operation see docs/architecture.md, docs/configuration.md, release operator notes, and release notes.

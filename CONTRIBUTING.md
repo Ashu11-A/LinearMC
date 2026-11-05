@@ -147,18 +147,17 @@ workflow and `preflight.sh`:
 
 Tag scheme:
 
-- `vX.Y.Z` is the first release of a patch set and is equivalent to
-  `vX.Y.Z-release.1`.
-- `vX.Y.Z-release.N` (N >= 2) is a compatibility rebuild with unchanged
-  patches, e.g. a new upstream build.
-- Historical `v1.0.0`..`v1.1.3` tags stay untouched and are aliased as
-  `vX.Y.Z-release.1`; see `release/TAGS.md`.
+- New release tags use `vX.Y.Z-release.N`, starting at N = 1
+  (`v1.1.4-release.1` is the first).
+- Historical `v1.0.0`..`v1.1.3` tags stay exactly as they were. Do not
+  create aliases for them, move them or delete them.
+- There is no new plain `vX.Y.Z` tag; the release tag is always
+  `vX.Y.Z-release.N`.
 
 1. Preflight green, then push to `main`.
 2. Verify the pin files carry `<PREFIX>_BUILD` (Folia/Canvas) and
    `HORIZON_BUILD` (Horizon). The release body and asset suffix use them.
-3. Tag `vX.Y.Z` (patch change) or `vX.Y.Z-release.N` (rebuild), and publish
-   the GitHub release.
+3. Tag `vX.Y.Z-release.N`, and publish the GitHub release.
 4. `build.yml` attaches one jar per matrix leg:
    fork legs as
    `linearmc-<server>-<mcversion>-<project>+build.<N>.jar` (e.g.

@@ -1,17 +1,16 @@
 # Changelog
 
-Tags follow the patch-set rule: a canonical `vX.Y.Z` is the first release of
-a patch set (implicitly `vX.Y.Z-release.1`), and a compatibility rebuild with
-unchanged patches uses `vX.Y.Z-release.N` (N >= 2). Historical tags
-`v1.0.0` through `v1.1.3` are aliased as `vX.Y.Z-release.1`; the old tags
-stay in place. Each release attaches one jar per matrix leg, named
+Tags are release tags. Historical `v1.0.0` through `v1.1.3` remain exactly
+as they were (no aliases, no moves). Releases from v1.1.4 onward use the
+`vX.Y.Z-release.N` form; `v1.1.4-release.1` is the first. Each release
+attaches one jar per matrix leg, named
 `linearmc-<server>-<mcversion>-<project>+build.<N>.jar`
 (e.g. `linearmc-folia-26.1.2-1.1.4+build.8.jar`). The Horizon plugin ships
 one universal jar for Paper/Folia/CanvasMC 26.1-26.3 as
 `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar`, built against the
 oldest bundle with `api-version: 26.1`.
 
-## v1.1.4
+## v1.1.4-release.1
 
 ### Supported matrix narrowed, Canvas 26.3 moved to upstream build #1010
 

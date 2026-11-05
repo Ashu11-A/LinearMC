@@ -41,7 +41,7 @@ on large survival worlds. Players, plugins, and Bedrock players all see the same
 * **Folia 26.1.2** — supported.
 * **CanvasMC 26.3** — supported.
 * **Horizon plugin 1.0.0** — supported on Paper, Folia and CanvasMC 26.1 through 26.3, no server rebuild needed. One jar; the plugin adapts to the host. [What is Horizon?](https://github.com/CraftCanvasMC/Horizon).
-* **Removed as of v1.1.4:** CanvasMC 26.1.2 and 26.2. Their legs are archived under `versions/servers/removed/` and are no longer built or tested; the v1.1.3 jars remain available.
+* **Removed as of v1.1.4-release.1:** CanvasMC 26.1.2 and 26.2. Their legs are archived under `versions/servers/removed/` and are no longer built or tested; the v1.1.3 jars remain available.
 
 ## 🚀 Quick start
 

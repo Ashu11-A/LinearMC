@@ -613,14 +613,17 @@ jobs:
               ;;
             v*)
               PROJ="${TAG#v}"
+              # Asset names carry the base version; the release counter stays
+              # in the tag (v1.1.4-release.1 -> linearmc-...-1.1.4+...).
+              ASSET_PROJ="${PROJ%%-release.*}"
               UPSTREAM_BUILD="${{ matrix.build }}"
               test -n "$UPSTREAM_BUILD" || { echo "::error::matrix.build is empty; discover must read <PREFIX>_BUILD"; exit 1; }
               if [ "${{ matrix.server }}" = "horizon" ]; then
                 RANGE="${{ matrix.mc_range }}"
                 test -n "$RANGE" || { echo "::error::matrix.mc_range is empty; discover must read HORIZON_MC_RANGE"; exit 1; }
-                ASSET="linearmc-horizon-${RANGE}-${PROJ}+build.${UPSTREAM_BUILD}.jar"
+                ASSET="linearmc-horizon-${RANGE}-${ASSET_PROJ}+build.${UPSTREAM_BUILD}.jar"
               else
-                ASSET="linearmc-${{ matrix.server }}-${{ matrix.mc }}-${PROJ}+build.${UPSTREAM_BUILD}.jar"
+                ASSET="linearmc-${{ matrix.server }}-${{ matrix.mc }}-${ASSET_PROJ}+build.${UPSTREAM_BUILD}.jar"
               fi
               ;;
             *)

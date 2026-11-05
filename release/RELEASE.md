@@ -31,7 +31,7 @@ used by the release notes and asset suffix. The Horizon pin lives at
 `versions/plugins/horizon/upstream.horizon.properties` and carries
 `HORIZON_BUILD` plus `HORIZON_MC_RANGE`.
 
-Supported matrix (v1.1.4):
+Supported matrix (v1.1.4-release.1):
 
 | Leg | Pin | Build |
 | --- | --- | --- |
@@ -139,11 +139,11 @@ scripts/build.sh --mc 26.1.x   # Folia 26.1.2
 scripts/build.sh               # every Folia line (Canvas-only lines skip)
 ```
 
-Each supported leg produces its own jar. Release tags follow the patch-set
-rule (`vX.Y.Z` = first release, `vX.Y.Z-release.N` = rebuild with unchanged
-patches). One release attaches one jar per matrix leg: fork legs are named
-`linearmc-<server>-<mcversion>-<project>+build.<N>.jar` (so a `v1.1.4`
-release containing Folia 26.1.2 at build #8 ships
+Each supported leg produces its own jar. New release tags use
+`vX.Y.Z-release.N`; `v1.1.4-release.1` is the first. One release attaches one
+jar per matrix leg: fork legs are named
+`linearmc-<server>-<mcversion>-<project>+build.<N>.jar` (so a
+`v1.1.4-release.1` release containing Folia 26.1.2 at build #8 ships
 `linearmc-folia-26.1.2-1.1.4+build.8.jar`), the Horizon plugin is
 `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar` (one generic jar for
 Paper/Folia/CanvasMC 26.1-26.3). Deploy the jar matching your server line.
@@ -152,7 +152,7 @@ To release only some folders (a fix that applies to one line), dispatch the
 workflow manually on the tag with the `versions` input:
 
 ```bash
-gh workflow run build.yml --ref v1.1.4 -f versions=26.1.x
+gh workflow run build.yml --ref v1.1.4-release.1 -f versions=26.1.x
 ```
 
 Pushed tags always release every version.
