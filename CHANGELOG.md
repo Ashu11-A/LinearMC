@@ -24,9 +24,15 @@ lines remain downloadable.
 
 Canvas 26.3 moves from upstream build **#981** (`cc4e7611`) to **#1010**
 (`a636063e`, 2026-11-05). The #1010 tree keeps `mcVersion=26.3` and channel
-STABLE; the existing overlay hunks apply without content changes (the new
-upstream code lands below or beside our anchors). Release notes and asset
-names now carry the verified upstream build number.
+STABLE. Three overlay adapters needed a rebase: `RegionFile` now declares
+`write(ChunkPos, ByteBuffer)` as `protected` (the public long-key bridge
+remains the contract entry), `SimpleRegionStorage` no longer writes
+`info.dfuType()[0]` in its 5-arg constructor, and `RegionFileStorage` moved
+its chunk-recovery helpers to `RegionFileRecovery` and removed the
+`isChunkData` field. The Linear dispatch follows that shape. Two synthetic
+persistence tests now write modern chunk roots (`DataVersion`, `xPos`,
+`zPos`) so the recovery coordinate check is exercised as in production.
+Release notes and asset names now carry the verified upstream build number.
 
 ### XXH64 delegated to OpenHFT
 

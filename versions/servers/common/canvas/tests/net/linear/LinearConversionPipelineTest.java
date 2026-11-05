@@ -175,7 +175,7 @@ public class LinearConversionPipelineTest {
             framed.put((byte) 3);
             framed.put(payload);
             framed.flip();
-            rf.write(pos, framed);
+            rf.write(net.linear.ChunkKey.of(pos.x(), pos.z()), framed); // Linear - long-key bridge (RegionFile.write(ChunkPos,...) is protected on 26.3)
             rf.flush();
         }
     }
@@ -469,7 +469,7 @@ public class LinearConversionPipelineTest {
         writeAnvilChunk(src, 4, 4, 0, 0);
         try (RegionFile rf = new RegionFile(info, src, region, false)) {
             ChunkPos degPos = new ChunkPos(4 * 32 + 1, 4 * 32 + 1);
-            rf.write(degPos, ByteBuffer.wrap(new byte[0]));
+            rf.write(net.linear.ChunkKey.of(degPos.x(), degPos.z()), ByteBuffer.wrap(new byte[0])); // Linear - long-key bridge (RegionFile.write(ChunkPos,...) is protected on 26.3)
             rf.flush();
             // Loud precondition: if vanilla ever stops storing empty writes as
             // present-but-empty slots, fail here (not deep in pipeline asserts).

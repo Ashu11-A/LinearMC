@@ -58,6 +58,9 @@ public class LinearEvictionUnlockTest {
             for (int i = 0; i < regions; i++) {
                 ChunkPos pos = new ChunkPos(i * 32, 0); // region (i,0)
                 CompoundTag tag = new CompoundTag();
+                tag.putInt("DataVersion", 4000); // modern chunk root: getChunkRoot reads xPos/zPos here
+                tag.putInt("xPos", pos.x());
+                tag.putInt("zPos", pos.z());
                 tag.putInt("idx", i);
                 storage.write(pos, tag);
             }

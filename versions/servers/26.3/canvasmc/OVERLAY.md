@@ -4,11 +4,19 @@ Upstream pin: Canvas `main` at `a636063e`, build **#1010** (de-facto stable 26.3
 `channel=STABLE`, `mcVersion=26.3`; no `ver/26.3` branch exists upstream).
 Pin source is `upstream.canvas.properties` next to this file.
 
-Same model as the 26.1/26.2 Canvas legs: zero files in the upstream source
-patch directory, every Linear hunk applies after upstream apply with a check
-gate. The 18 shared patches, 9 paper-server files, and 20 tests come from
-`versions/servers/common/canvas/` (see the hub README); this leg keeps only
-seam adapters plus the three demoted shadows below.
+Same model as the former 26.1/26.2 Canvas legs: zero files in the upstream
+source patch directory, every Linear hunk applies after upstream apply with a
+check gate. The 18 shared patches, 9 paper-server files, and 20 tests come
+from `versions/servers/common/canvas/` (see the hub README); this leg keeps
+only seam adapters plus the three demoted shadows below.
+
+Build #1010 rebase (2026-11-05): `RegionFile.write(ChunkPos, ByteBuffer)`
+became `protected`, so the hub patch keeps the public long-key bridge as the
+contract entry; `SimpleRegionStorage` dropped the `info.dfuType()[0]`
+assignment from its 5-arg constructor; and `RegionFileStorage` moved chunk
+recovery to `RegionFileRecovery` and removed `isChunkData`. The 26.3 adapter
+now uses `RegionFileRecovery.isChunkStorage(info)` and the new recovery
+shape. The full `LinearNmsTestSuite` (140 tests) is green on the pinned tree.
 
 Seam changes vs 26.2 (all verified by `apply --check` + full compile +
 `LinearNmsTestSuite` 140/140 on the pinned tree):

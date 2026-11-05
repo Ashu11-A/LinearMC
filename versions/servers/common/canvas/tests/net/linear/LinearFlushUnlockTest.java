@@ -57,8 +57,11 @@ public class LinearFlushUnlockTest {
         return ctor.newInstance(info, dir, false, RegionFileFormat.LINEAR, compression, true);
     }
 
-    private static CompoundTag tagWith(String key, int value) {
+    private static CompoundTag tagWith(ChunkPos pos, String key, int value) {
         CompoundTag tag = new CompoundTag();
+        tag.putInt("DataVersion", 4000); // modern chunk root: getChunkRoot reads xPos/zPos here
+        tag.putInt("xPos", pos.x());
+        tag.putInt("zPos", pos.z());
         tag.putInt(key, value);
         return tag;
     }
@@ -72,7 +75,7 @@ public class LinearFlushUnlockTest {
         RegionFileStorage storage = newStorage(dir, 3);
         ChunkPos pos = new ChunkPos(0, 0);
         try {
-            storage.write(pos, tagWith("v", 42));
+            storage.write(pos, tagWith(pos, "v", 42));
             storage.flush();
             assertTrue(Files.exists(dir.resolve("r.0.0.linear")),
                 "flush() must materialise r.0.0.linear");
@@ -96,7 +99,7 @@ public class LinearFlushUnlockTest {
         Files.createDirectories(dir);
         ChunkPos pos = new ChunkPos(32, 0); // region (1,0)
         RegionFileStorage storage = newStorage(dir, 1);
-        storage.write(pos, tagWith("w", 7));
+        storage.write(pos, tagWith(pos, "w", 7));
         // No explicit flush(): close() must persist via file close + evict.
         storage.close();
         assertTrue(Files.exists(dir.resolve("r.1.0.linear")),
