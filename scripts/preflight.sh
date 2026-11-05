@@ -29,7 +29,7 @@ ok()   { echo "PASS: $1"; pass=$((pass+1)); }
 nope() { echo "FAIL: $1"; fail=$((fail+1)); }
 skip() { echo "SKIP: $1"; }
 
-VERSIONS=$(cd "$SUPPLEMENT_DIR/versions/servers" && ls -d */ 2>/dev/null | tr -d '/' | grep -v '^common$' | sort -V)
+VERSIONS=$(cd "$SUPPLEMENT_DIR/versions/servers" && ls -d */ 2>/dev/null | tr -d '/' | grep -v '^common$' | grep -v '^removed$' | sort -V)
 if [ -z "${VERSIONS:-}" ]; then
   nope "no version folders under versions/servers/"
   echo "---- preflight: $pass passed, $fail failed ----"
@@ -180,7 +180,7 @@ for v in $VERSIONS; do
   fi
   # 1b. upstream pin completeness: CI and build.sh read these keys.
   if [ -f "$VDIR/upstream.properties" ]; then
-  for key in FOLIA_REPO FOLIA_BRANCH FOLIA_REF MC_VERSION; do
+  for key in FOLIA_REPO FOLIA_BRANCH FOLIA_REF FOLIA_BUILD MC_VERSION; do
     if grep -qE "^${key}=.+" "$VDIR/upstream.properties" 2>/dev/null; then
       ok "props $v $key"
     else
@@ -191,7 +191,7 @@ for v in $VERSIONS; do
     skip "props $v (no folia pin in this line)"
   fi
   if [ -f "$VDIR/upstream.canvas.properties" ]; then
-  for key in CANVAS_REPO CANVAS_BRANCH CANVAS_REF MC_VERSION; do
+  for key in CANVAS_REPO CANVAS_BRANCH CANVAS_REF CANVAS_BUILD MC_VERSION; do
     if grep -qE "^${key}=.+" "$VDIR/upstream.canvas.properties" 2>/dev/null; then
       ok "props $v $key"
     else
@@ -202,6 +202,33 @@ for v in $VERSIONS; do
     skip "props $v canvas (no canvas pin in this line)"
   fi
 done
+# Build metadata is part of the release contract (asset suffix + release body).
+for f in "$SUPPLEMENT_DIR"/versions/servers/*/upstream.properties; do
+  [ -f "$f" ] || continue
+  if grep -qE '^FOLIA_BUILD=[0-9]+$' "$f"; then
+    ok "build number $(basename "$(dirname "$f")") folia"
+  else
+    nope "build number $(basename "$(dirname "$f")") FOLIA_BUILD must be digits"
+  fi
+done
+for f in "$SUPPLEMENT_DIR"/versions/servers/*/upstream.canvas.properties; do
+  [ -f "$f" ] || continue
+  if grep -qE '^CANVAS_BUILD=[0-9]+$' "$f"; then
+    ok "build number $(basename "$(dirname "$f")") canvas"
+  else
+    nope "build number $(basename "$(dirname "$f")") CANVAS_BUILD must be digits"
+  fi
+done
+HZ_PIN="$SUPPLEMENT_DIR/versions/plugins/horizon/upstream.horizon.properties"
+for key in HORIZON_BUILD HORIZON_MC_RANGE HORIZON_DEV_BUNDLE; do
+  if grep -qE "^${key}=.+$" "$HZ_PIN" 2>/dev/null; then
+    ok "props horizon $key"
+  else
+    nope "props horizon $key (missing or empty)"
+  fi
+done
+grep -qE '^HORIZON_BUILD=[0-9]+$' "$HZ_PIN" 2>/dev/null \
+  && ok "build number horizon" || nope "build number HORIZON_BUILD must be digits"
 [ -f "$FOLIA_DIR/folia-server/build.gradle.kts.patch" ] \
   && ok "fork base file present" || nope "fork base file missing ($FOLIA_DIR)"
 

@@ -72,6 +72,9 @@ jobs:
             for f in $FILES; do bash -n "$f" && echo "bash -n OK: $f"; done
           fi
 
+      - name: Python helper syntax
+        run: python3 -m py_compile scripts/release-notes.py
+
       - name: Provide Folia base for preflight file gates (shallow)
         # scripts/preflight.sh's default gates require $FOLIA_DIR to exist
         # (fork base file presence). A depth-1 single-branch clone satisfies

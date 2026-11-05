@@ -1,8 +1,14 @@
 # Horizon plugin
 
-Bytecode plugin alternative to rebuilding a fork. No fork rebuild needed. Portable across recent game versions.
+Bytecode plugin alternative to rebuilding a fork. No fork rebuild needed.
+One jar for Paper, Folia and CanvasMC 26.1-26.3; the plugin never links
+against Canvas- or Folia-only classes, so it stays portable across those
+hosts and across patch releases in the 26.x line.
 
-Targets region file and region storage behavior, plus the Moonrise region controller where present, and delegates to the shared core.
+Targets region file and region storage behavior, plus the Moonrise region
+controller where present, and delegates to the shared core. The optional
+Moonrise exists-path bridge is probed reflectively: absent is a valid host
+shape (create-path covers opens), not a boot failure.
 
 Install:
 
@@ -12,6 +18,16 @@ Install:
   published.
 - Put the format flag on the server startup command line.
 - Default format is Anvil when the flag is absent.
+
+Compatibility contract:
+
+- Build target: Paper dev bundle 26.1.2 (oldest supported line), `api-version: 26.1`.
+- Tested against 26.1.2, 26.2 and 26.3 on every push by `test.yml`.
+- Hosts: Paper, Folia, CanvasMC and compatible forks. The enable log names
+  the detected family (`host=CANVAS|FOLIA|PAPER|UNKNOWN`) and whether the
+  Moonrise exists bridge is armed.
+- No host-specific code path: the mixin uses vanilla NMS targets plus a
+  `require = 0` optional bridge.
 
 Verification rule: trust on-disk superblock bytes, never file names.
 Reason: the injector historically did not fail boot when a patch missed, so a wrongly named file can hide a miss.

@@ -38,7 +38,7 @@ if [ -n "$FOLIA_DIR" ] && [ "$MC" = all ]; then
 fi
 
 if [ "$MC" = all ]; then
-  VERSIONS=$(cd "$SUPPLEMENT_DIR/versions/servers" && ls -d */ | tr -d '/' | sort -V)
+  VERSIONS=$(cd "$SUPPLEMENT_DIR/versions/servers" && ls -d */ | tr -d '/' | grep -v '^removed$' | sort -V)
 else
   VERSIONS="$MC"
 fi
@@ -48,8 +48,11 @@ for v in $VERSIONS; do
   VDIR="$SUPPLEMENT_DIR/versions/servers/$v"
   PROPS="$VDIR/upstream.properties"
   if [ ! -f "$PROPS" ]; then
-    echo "FAIL: $v has no upstream.properties; run scripts/new-version.sh first"
-    fail=$((fail+1)); continue
+    # Canvas-only lines have upstream.canvas.properties instead; their
+    # paperclip build is owned by .github/workflows/build.yml (needs the
+    # post-apply overlay staging, which this Folia-oriented script lacks).
+    echo "SKIP: $v has no Folia pin (Canvas-only line)"
+    continue
   fi
   # shellcheck disable=SC1090
   FOLIA_REPO=$(grep '^FOLIA_REPO=' "$PROPS" | cut -d= -f2-)

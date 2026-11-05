@@ -18,9 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.Test;
 import net.linear.bucket.LinearBucketReader;
-import net.linear.compression.LinearXxHash64;
-import net.linear.versions.codecs.V2Linear;
-import net.linear.versions.codecs.V3Linear;
+import net.linear.compression.LinearHash;
 
 /**
  * V2/V3 bucketed read (DivineMC wire 3/4) into V1 slot tables.
@@ -32,7 +30,7 @@ public class LinearBucketReaderTest {
     @Test
     public void xxhashKnownVectors() {
         // Verified against OpenHFT LongHashFunction.xx() (seed 0), 7 vectors.
-        assertEquals(0xEF46DB3751D8E999L, LinearXxHash64.hashBytes(new byte[0], 0, 0));
+        assertEquals(0xEF46DB3751D8E999L, LinearHash.hashBytes(new byte[0], 0, 0));
         assertHash("a", 0xD24EC4F1A98C6E5BL);
         assertHash("abc", 0x44BC2CF5AD770999L);
         assertHash("linear-bucket-hash", 0xF51E566DB577EB51L);
@@ -41,13 +39,13 @@ public class LinearBucketReaderTest {
         for (int i = 0; i < big.length; i++) {
             big[i] = (byte) (i * 31 + 7);
         }
-        assertEquals(0x149AA44972CDAE00L, LinearXxHash64.hashBytes(big, 0, big.length));
+        assertEquals(0x149AA44972CDAE00L, LinearHash.hashBytes(big, 0, big.length));
     }
 
     private static void assertHash(String text, long expected) {
         byte[] data = text.getBytes(StandardCharsets.UTF_8);
-        assertEquals(expected, LinearXxHash64.hashBytes(data, 0, data.length));
-        assertEquals(expected, LinearXxHash64.hashBuffer(ByteBuffer.wrap(data)));
+        assertEquals(expected, LinearHash.hashBytes(data, 0, data.length));
+        assertEquals(expected, LinearHash.hashBuffer(ByteBuffer.wrap(data)));
     }
 
     @Test
@@ -331,7 +329,7 @@ public class LinearBucketReaderTest {
                 out.writeInt(buckets[b] != null ? buckets[b].length : 0);
                 out.writeByte(3);
                 out.writeLong(buckets[b] != null
-                    ? LinearXxHash64.hashBytes(buckets[b], 0, buckets[b].length) : 0L);
+                    ? LinearHash.hashBytes(buckets[b], 0, buckets[b].length) : 0L);
             }
             for (int b = 0; b < bucketCount; b++) {
                 if (buckets[b] != null) {
@@ -402,7 +400,7 @@ public class LinearBucketReaderTest {
                 out.writeInt(buckets[b] != null ? buckets[b].length : 0);
                 out.writeByte(3);
                 out.writeLong(buckets[b] != null
-                    ? LinearXxHash64.hashBytes(buckets[b], 0, buckets[b].length) : 0L);
+                    ? LinearHash.hashBytes(buckets[b], 0, buckets[b].length) : 0L);
             }
             for (int b = 0; b < bucketCount; b++) {
                 if (buckets[b] != null) {
@@ -453,7 +451,7 @@ public class LinearBucketReaderTest {
             for (int b = 0; b < bucketCount; b++) {
                 out.writeInt(buckets[b] != null ? buckets[b].length : 0);
                 out.writeLong(buckets[b] != null
-                    ? LinearXxHash64.hashBytes(buckets[b], 0, buckets[b].length) : 0L);
+                    ? LinearHash.hashBytes(buckets[b], 0, buckets[b].length) : 0L);
             }
             for (int b = 0; b < bucketCount; b++) {
                 if (buckets[b] != null) {

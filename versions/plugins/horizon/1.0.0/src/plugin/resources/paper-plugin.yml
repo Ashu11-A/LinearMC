@@ -2,7 +2,7 @@ name: "LinearMC"
 description: "Linear-format region compression via Horizon mixins"
 main: "io.linearmc.horizon.LinearPlugin"
 bootstrapper: "io.linearmc.horizon.LinearBootstrapper"
-api-version: "26.3"
+api-version: "26.1"
 version: "@PROJECT_VERSION@"
 # Required: the Paper half loads via --add-plugin on Folia runtimes, and
 # Folia refuses plugins without this flag (observed: "not marked as

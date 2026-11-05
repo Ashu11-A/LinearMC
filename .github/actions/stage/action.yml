@@ -10,7 +10,7 @@ description: >
 
 inputs:
   version:
-    description: Version folder under versions/ (e.g. '26.1.x'). Comes from the discover matrix (matrix.version). The special value 'all' stages the single versions/*/ entry when the repo holds exactly one (today); with several entries it fails fast so the caller fans out per version instead of silently mixing trees.
+    description: Version folder under versions/ (e.g. '26.1.x'). Comes from the discover matrix (matrix.version). The special value 'all' is only accepted when the repo holds exactly one versions/servers/*/ entry; with several entries it fails fast so the caller fans out per version instead of silently mixing trees.
     required: true
   server:
     description: "Stable server id from the discover matrix (matrix.server): 'folia', 'canvas' (leg dir versions/servers/<line>/canvasmc/), 'horizon'. Patch staging prefers versions/servers/<line>/<legdir>/patches/ and falls back to the legacy versions/<line>/patches/ while legs migrate."
@@ -115,15 +115,23 @@ runs:
         git clone --branch ${{ steps.props.outputs.branch }} --single-branch ${{ steps.props.outputs.repo }} "$FOLIA_DIR" \
           && git -C "$FOLIA_DIR" rev-parse HEAD
 
-    - name: Verify base pin
+    - name: Checkout pinned base ref
       shell: bash
       env:
         FOLIA_DIR: ${{ inputs.folia-dir }}
+        WANT_REF: ${{ steps.props.outputs.ref }}
       run: |
+        # Build the PIN, not whatever the branch head happens to be: the
+        # release notes and asset suffix publish this exact ref/build.
         HEAD=$(git -C "$FOLIA_DIR" rev-parse HEAD)
-        if [ "$HEAD" != "${{ steps.props.outputs.ref }}" ]; then
-          echo "::warning::Upstream ${{ steps.props.outputs.branch }} moved ($HEAD). Patches target ${{ steps.props.outputs.ref }}; continuing, apply step will prove compatibility."
+        if [ "$HEAD" != "$WANT_REF" ]; then
+          echo "stage: ${{ steps.props.outputs.branch }} head is $HEAD; checking out pin $WANT_REF"
+          git -C "$FOLIA_DIR" fetch origin "$WANT_REF" --depth 1 2>/dev/null || true
+          git -C "$FOLIA_DIR" checkout --detach "$WANT_REF" \
+            || { echo "::error::cannot checkout pinned ref $WANT_REF"; exit 1; }
         fi
+        test "$(git -C "$FOLIA_DIR" rev-parse HEAD)" = "$WANT_REF" \
+          || { echo "::error::fork HEAD is not the pinned ref"; exit 1; }
 
     - name: Stage Linear patches + tests
       shell: bash

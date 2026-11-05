@@ -25,11 +25,12 @@ repositories {
 }
 
 dependencies {
-    // Dev bundle pinned to the resolved build (Horizon HEAD catalog floats
-    // "26.3.build.+").
+    // One jar for every 26.x line: compile against the OLDEST supported bundle
+    // (26.1.2) and let api-version stay at 26.1. CI substitutes this pin from
+    // upstream.horizon.properties; per-bundle tests cover 26.2/26.3.
     // Our mixins target Mojang-mapped 26.x; defaultRequire:1 in
     // mixins.linearmc.json fails the boot loudly on selector drift.
-    paperweight.paperDevBundle("26.3.build.140-beta")
+    paperweight.paperDevBundle("26.1.2.build.74-stable")
     // Horizon's own mixin artifact (NOT org.spongepowered:mixin:0.8.5).
     implementation("net.fabricmc:sponge-mixin:0.17.3+mixin.0.8.7")
     // JiJ-embedded: the server runtime never sees our compile classpath
@@ -70,6 +71,7 @@ dependencies {
         exclude(group = "org.apache.logging.log4j")
     }
     includeLibrary("org.lz4:lz4-java:1.8.0")
+    includeLibrary("net.openhft:zero-allocation-hashing:2026.0")
     compileOnly("org.jspecify:jspecify:1.0.0")
     // Horizon runtime API: exactly one file required (runServer wiring).
     horizon.horizonApi("1.0.0+90")
@@ -134,6 +136,7 @@ tasks.named<ProcessResources>("processResources") {
 }
 
 tasks.named<xyz.jpenilla.runpaper.task.RunServer>("runServer") {
+    // Dev-only runner: newest supported line, while the shipped jar targets 26.1.
     minecraftVersion("26.3")
     // Boot-smoke property: LINEAR exercises the dispatch, absence proves
     // ANVIL opt-out. Passes to the SERVER JVM (gradle -D does not propagate).

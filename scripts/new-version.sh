@@ -2,8 +2,9 @@
 # Start a new MC server version line: copy the newest versions/servers/* folder,
 # re-pin it, and run applyAllPatches immediately so rebase conflicts surface
 # here in seconds instead of in a 10-minute CI round-trip.
-# Scaffolds server lines only (versions/servers/<line>/ with folia + canvasmc
-# legs); plugin versions under versions/plugins/ are NOT auto-created here.
+# Scaffolds Folia server lines only (versions/servers/<line>/folia).
+# Canvas legs and plugin versions under versions/plugins/ are NOT auto-created
+# here; add a canvasmc leg by hand when a Canvas pin is part of the plan.
 #
 # Usage: scripts/new-version.sh [--dry-run] [--folia-dir DIR] [--mc-version V] <new-dir> <new-branch> <new-ref>
 #   Example: scripts/new-version.sh 26.2.x ver/26.2.x a1b2c3d4
@@ -91,7 +92,7 @@ echo "      then stage + applyAllPatches so rebase conflicts surface now."
 if [ "$DRY_RUN" = 1 ]; then
   echo "DRY-RUN: cp -r $SRC $DST"
   echo "DRY-RUN: write $DST/upstream.properties (FOLIA_REPO=$FOLIA_REPO FOLIA_BRANCH=$NEW_BRANCH FOLIA_REF=$NEW_REF MC_VERSION=$MC_VERSION)"
-  echo "DRY-RUN: keep $DST/upstream.canvas.properties from $SRC_VER, then re-pin the Canvas leg by hand"
+  echo "DRY-RUN: Canvas leg is not scaffolded; add $DST/canvasmc + upstream.canvas.properties by hand"
   if [ -n "$FOLIA_DIR" ]; then
     echo "DRY-RUN: stage $DST into $FOLIA_DIR, checkout $NEW_REF, ./gradlew applyAllPatches"
   else
@@ -112,7 +113,7 @@ FOLIA_REF=$NEW_REF
 MC_VERSION=$MC_VERSION
 EOF
 echo "wrote $DST/upstream.properties"
-echo "NOTE: $DST/upstream.canvas.properties was copied from $SRC_VER; re-pin the Canvas leg by hand."
+echo "NOTE: Canvas leg is not scaffolded by this script; add versions/servers/$NEW_DIR/canvasmc + upstream.canvas.properties by hand."
 
 if [ -n "$FOLIA_DIR" ]; then
   WORK="$FOLIA_DIR"

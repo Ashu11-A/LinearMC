@@ -7,5 +7,6 @@ dependencies {
     testImplementation(project(":convert"))
     implementation("org.lz4:lz4-java:1.8.0")
     implementation("com.github.luben:zstd-jni:1.5.6-8")
+    implementation("net.openhft:zero-allocation-hashing:2026.0")
     implementation("org.slf4j:slf4j-api:2.0.17")
 }

@@ -5,7 +5,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import net.linear.probe.LinearBucketGrid;
-import net.linear.compression.LinearXxHash64;
+import net.linear.compression.LinearHash;
 import net.linear.versions.base.V2LinearBase;
 
 /**
@@ -335,7 +335,7 @@ public final class RegionFormatDetector {
                 int len = (int) sizes[i];
                 ByteBuffer slice = raw.duplicate();
                 slice.limit(slice.position() + len);
-                if (LinearXxHash64.hashBuffer(slice) != hashes[i]) {
+                if (LinearHash.hashBuffer(slice) != hashes[i]) {
                     return "hash incorrect in bucket " + i;
                 }
                 raw.position(raw.position() + len);

@@ -42,6 +42,8 @@ public class LinearPlugin extends JavaPlugin {
         // mixin targets on this enable thread, so steady-state region/tick
         // threads never pay class-load, nested-jar read, native-extract, or
         // Mixin/transform costs. Missing classes are skipped, never fatal.
+        getLogger().info("LinearMC: host=" + HostPlatform.detect()
+            + " (generic Paper/Folia/Canvas 26.1-26.3 adapter)");
         final net.linear.probe.LinearWarmup.Result warmed = net.linear.probe.LinearWarmup.touch(
             LinearPlugin.class,
             "net.linear.RegionFileFormat",
@@ -92,7 +94,7 @@ public class LinearPlugin extends JavaPlugin {
             "net.linear.bucket.LinearBucketWriter",
             "net.linear.probe.LinearBucketGrid",
             "net.linear.LinearImplementation",
-            "net.linear.compression.LinearXxHash64",
+            "net.linear.compression.LinearHash",
             "io.linearmc.horizon.AnvilChunkSink",
             "io.linearmc.horizon.LinearCommand",
             "io.linearmc.horizon.LinearStatsCommand",

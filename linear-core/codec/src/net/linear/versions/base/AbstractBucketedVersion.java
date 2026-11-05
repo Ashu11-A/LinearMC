@@ -11,7 +11,7 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.linear.probe.LinearBucketGrid;
 import net.linear.LinearRegionFile;
-import net.linear.compression.LinearXxHash64;
+import net.linear.compression.LinearHash;
 import net.linear.compression.Lz4SlotCodec;
 import net.linear.bucket.LinearBucketReader;
 import net.linear.versions.ChunkSlotTable;
@@ -138,7 +138,7 @@ public abstract class AbstractBucketedVersion extends AbstractLinearVersion {
         long[] hashes = new long[bucketCount];
         for (int i = 0; i < bucketCount; i++) {
             hashes[i] = buckets[i] != null
-                ? LinearXxHash64.hashBuffer(ByteBuffer.wrap(buckets[i])) : 0L;
+                ? LinearHash.hashBuffer(ByteBuffer.wrap(buckets[i])) : 0L;
         }
 
         ByteBuffer header = writeHeader(slots, params);
@@ -208,7 +208,7 @@ public abstract class AbstractBucketedVersion extends AbstractLinearVersion {
             if (sizes[i] > 0) {
                 ByteBuffer slice = raw.duplicate();
                 slice.limit(slice.position() + sizes[i]);
-                long actual = LinearXxHash64.hashBuffer(slice);
+                long actual = LinearHash.hashBuffer(slice);
                 if (actual != hashes[i]) {
                     throw new IOException("Region file hash incorrect in bucket " + i);
                 }

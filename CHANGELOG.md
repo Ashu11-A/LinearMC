@@ -1,11 +1,51 @@
 # Changelog
 
-Tags are project versions (`v1.0.0`, `v1.1.0`, `v1.1.1`, `v1.1.2`). Each release attaches one jar
-per matrix leg: fork legs are named `linearmc-<server>-<mcversion>-<project>.jar`
-(e.g. `linearmc-folia-26.1.2-1.0.0.jar`); the Horizon plugin ships one jar
-for every supported MC line, `linearmc-horizon-<pluginver>-<project>.jar`
-(e.g. `linearmc-horizon-1.0.0-1.0.0.jar`), built against the oldest bundle
-with `api-version` set to its major.minor.
+Tags follow the patch-set rule: a canonical `vX.Y.Z` is the first release of
+a patch set (implicitly `vX.Y.Z-release.1`), and a compatibility rebuild with
+unchanged patches uses `vX.Y.Z-release.N` (N >= 2). Historical tags
+`v1.0.0` through `v1.1.3` are aliased as `vX.Y.Z-release.1`; the old tags
+stay in place. Each release attaches one jar per matrix leg, named
+`linearmc-<server>-<mcversion>-<project>+build.<N>.jar`
+(e.g. `linearmc-folia-26.1.2-1.1.4+build.8.jar`). The Horizon plugin ships
+one universal jar for Paper/Folia/CanvasMC 26.1-26.3 as
+`linearmc-horizon-26.1-26.3-<project>+build.<N>.jar`, built against the
+oldest bundle with `api-version: 26.1`.
+
+## v1.1.4
+
+### Supported matrix narrowed, Canvas 26.3 moved to upstream build #1010
+
+The support matrix is now intentionally small: **Folia 26.1.2, CanvasMC 26.3,
+and the Horizon plugin for every 26.x line (26.1-26.3)**. CanvasMC 26.1.2 and
+26.2 are removed from the active build and test matrix. Their complete legs
+and pins are archived byte-for-byte under `versions/servers/removed/`, so the
+history remains available without implying support. The v1.1.3 jars for those
+lines remain downloadable.
+
+Canvas 26.3 moves from upstream build **#981** (`cc4e7611`) to **#1010**
+(`a636063e`, 2026-11-05). The #1010 tree keeps `mcVersion=26.3` and channel
+STABLE; the existing overlay hunks apply without content changes (the new
+upstream code lands below or beside our anchors). Release notes and asset
+names now carry the verified upstream build number.
+
+### XXH64 delegated to OpenHFT
+
+The in-tree `LinearXxHash64` is gone. `LinearHash` delegates to
+`net.openhft:zero-allocation-hashing:2026.0` (`LongHashFunction.xx()`, seed
+0), which is byte-compatible with the removed implementation: the known
+vectors and all bucketed wire-format tests are unchanged. The dependency is
+wired into all three staging paths: Folia (`build-hunk.py`), Canvas
+(`stage-overlay`), and the Horizon plugin (JiJ). The multi-MB buffers are
+hashed through `ByteBufferAccess`, avoiding direct-buffer access failures.
+
+### Horizon stays one generic jar
+
+The shipped plugin compiles against the oldest supported bundle
+(`26.1.2.build.74-stable`), declares `api-version: 26.1`, and is tested
+against 26.1.2, 26.2 and 26.3 on every push. `HostPlatform` probes the host
+family reflectively (Canvas/Folia/Paper) for the enable log; no optional
+host class is required for boot. Paper, Folia, CanvasMC and compatible forks
+use the same jar.
 
 ## v1.1.3
 

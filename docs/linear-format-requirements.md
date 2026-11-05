@@ -88,8 +88,8 @@ sector, torn slots fall back to the master). See
 
 ## 2. Functional requirements
 
-- FR1: read all five formats on every leg (Folia, Canvas 26.1.x/26.2,
-  Horizon).
+- FR1: read all five formats on every supported leg (Folia 26.1.2,
+  CanvasMC 26.3, Horizon 26.1-26.3).
 - FR2: write all five formats. Pumpkin writer defaults: grid 2,
   level-1-equivalent speed, `tmp + fsync + atomic move`.
 - FR3: migration any-to-any (V1<->V2<->V3<->B_LINEAR<->PUMPKIN,

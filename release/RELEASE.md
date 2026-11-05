@@ -20,21 +20,33 @@ Referenced but not included:
 
 | Artifact | Where |
 | --- | --- |
-| Paperclip jar | Built locally, or `linearmc-<server>-<mcversion>-<project>.jar` from the GitHub release for a project `v*` tag (the Horizon plugin is `linearmc-horizon-<pluginver>-<project>.jar`, one jar for every MC line) |
+| Paperclip jar | Built locally, or `linearmc-<server>-<mcversion>-<project>+build.<N>.jar` from the GitHub release for a project `v*` tag (the Horizon plugin is `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar`, one jar for Paper/Folia/CanvasMC 26.1-26.3) |
 | Tree converter | `convert.py`, modes `mca2linear`, `linear2mca`, `verify`. Not part of this repository |
 
 ## 2. Version pins
 
-Single source of truth: `versions/<line>/upstream.properties` (keys
-`FOLIA_REPO`, `FOLIA_BRANCH`, `FOLIA_REF`, `MC_VERSION`). The table below is
-the 26.1.x instantiation of that file; the workflow pins mirror it.
+Single source of truth: `versions/servers/<line>/upstream.properties` for
+Folia and `upstream.canvas.properties` for Canvas. Both carry a `<PREFIX>_BUILD`
+used by the release notes and asset suffix. The Horizon pin lives at
+`versions/plugins/horizon/upstream.horizon.properties` and carries
+`HORIZON_BUILD` plus `HORIZON_MC_RANGE`.
+
+Supported matrix (v1.1.4):
+
+| Leg | Pin | Build |
+| --- | --- | --- |
+| Folia 26.1.2 | `ver/26.1.x` at `62dc0f257a4f5de1ef2eae8cf1627156a769c67f` | #8 |
+| CanvasMC 26.3 | `main` at `a636063ed9dd82cc184ddef32acc8b6569d621a7` | #1010 |
+| Horizon 1.0.0 | `31d1a1b7`; Paper `26.1.2.build.74-stable` | #74 |
+
+CanvasMC 26.1.2 and 26.2 are archived under `versions/servers/removed/` and
+are not part of the active matrix.
 
 | Component | Pin |
 | --- | --- |
-| Folia base | `ver/26.1.x` at `62dc0f257a4f5de1ef2eae8cf1627156a769c67f` |
-| Minecraft | `26.1.2` |
 | Java, build and runtime | `25` (verified on Temurin 25+36 LTS) |
 | zstd-jni | `1.5.6-8` |
+| OpenHFT zero-allocation-hashing | `2026.0` (XXH64) |
 | Config defaults | `format: LINEAR`, `compression-level: 6`, `crash-on-broken-symlink: true`, `flush-frequency: 10`, `flush-max-threads: 1` |
 
 A local reference build produced a 60,509,601 B paperclip jar with
@@ -116,30 +128,31 @@ usage: convert.py [-h] [-t THREADS] [-c COMPRESSION_LEVEL]
 
 ## 6. Per-version builds
 
-The supplement is version-scoped: each supported line lives in
-`versions/<branch>/` with its own pin (`upstream.properties`), `patches/`,
-`tests/` and `build-hunk.py`.
+The supplement is version-scoped: each supported server line lives under
+`versions/servers/<line>/` with its own pin, patches and tests. Folia 26.1.2
+is built locally with `scripts/build.sh`; CanvasMC 26.3 and Horizon need the
+post-apply overlay / standalone Gradle staging, so their paperclip jars are
+owned by `.github/workflows/build.yml` (or a manual dispatch of it).
 
 ```bash
-scripts/build.sh --mc 26.1.x   # this release line
-scripts/build.sh               # every folder in versions/
+scripts/build.sh --mc 26.1.x   # Folia 26.1.2
+scripts/build.sh               # every Folia line (Canvas-only lines skip)
 ```
 
-Each line produces its own paperclip jar. Release tags carry the **project
-version only** (`v1.0.0`); one release attaches one jar per matrix leg: fork
-legs are named `linearmc-<server>-<mcversion>-<project>.jar` (so a
-`v1.0.0` release containing `26.1.x` at MC `26.1.2` ships
-`linearmc-folia-26.1.2-1.0.0.jar`; a future `26.2.x` line at MC
-`26.2.1` would add `linearmc-folia-26.2.1-1.0.0.jar` to the same
-release), the Horizon plugin is
-`linearmc-horizon-<pluginver>-<project>.jar` (loads on every supported MC
-line). Deploy the jar matching your server line.
+Each supported leg produces its own jar. Release tags follow the patch-set
+rule (`vX.Y.Z` = first release, `vX.Y.Z-release.N` = rebuild with unchanged
+patches). One release attaches one jar per matrix leg: fork legs are named
+`linearmc-<server>-<mcversion>-<project>+build.<N>.jar` (so a `v1.1.4`
+release containing Folia 26.1.2 at build #8 ships
+`linearmc-folia-26.1.2-1.1.4+build.8.jar`), the Horizon plugin is
+`linearmc-horizon-26.1-26.3-<project>+build.<N>.jar` (one generic jar for
+Paper/Folia/CanvasMC 26.1-26.3). Deploy the jar matching your server line.
 
 To release only some folders (a fix that applies to one line), dispatch the
 workflow manually on the tag with the `versions` input:
 
 ```bash
-gh workflow run build.yml --ref v1.0.0 -f versions=26.1.x
+gh workflow run build.yml --ref v1.1.4 -f versions=26.1.x
 ```
 
 Pushed tags always release every version.

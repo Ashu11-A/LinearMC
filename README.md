@@ -10,7 +10,7 @@
 ![Tests](https://img.shields.io/github/actions/workflow/status/Ashu11-A/LinearMC/test.yml?label=tests&style=for-the-badge&color=302D41&labelColor=a6e3a1&logoColor=302D41)
 ![Java 25](https://img.shields.io/badge/java-25-302D41?style=for-the-badge&color=302D41&labelColor=f9e2af&logoColor=302D41)
 ![Folia 26.1](https://img.shields.io/badge/folia-26.1-302D41?style=for-the-badge&color=302D41&labelColor=a6e3a1&logoColor=302D41)
-![Canvas 26.1-26.3](https://img.shields.io/badge/canvas-26.1--26.3-302D41?style=for-the-badge&color=302D41&labelColor=89b4fa&logoColor=302D41)
+![Canvas 26.3](https://img.shields.io/badge/canvas-26.3-302D41?style=for-the-badge&color=302D41&labelColor=89b4fa&logoColor=302D41)
 ![Horizon 1.0.0](https://img.shields.io/badge/horizon-1.0.0-302D41?style=for-the-badge&color=302D41&labelColor=cba6f7&logoColor=302D41)
 
 <br>
@@ -39,8 +39,9 @@ on large survival worlds. Players, plugins, and Bedrock players all see the same
 ## 🧩 Compatibility
 
 * **Folia 26.1.2** — supported.
-* **Canvas 26.1.2, 26.2, 26.3** — supported (26.3 under v1.1.0).
-* **Horizon plugin 1.0.0** — supported, no server rebuild needed. [What is Horizon?](https://github.com/CraftCanvasMC/Horizon).
+* **CanvasMC 26.3** — supported.
+* **Horizon plugin 1.0.0** — supported on Paper, Folia and CanvasMC 26.1 through 26.3, no server rebuild needed. One jar; the plugin adapts to the host. [What is Horizon?](https://github.com/CraftCanvasMC/Horizon).
+* **Removed as of v1.1.4:** CanvasMC 26.1.2 and 26.2. Their legs are archived under `versions/servers/removed/` and are no longer built or tested; the v1.1.3 jars remain available.
 
 ## 🚀 Quick start
 

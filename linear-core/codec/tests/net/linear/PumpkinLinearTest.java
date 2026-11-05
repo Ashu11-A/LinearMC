@@ -25,7 +25,7 @@ import net.linear.versions.RegionFormatDetector;
 import net.linear.versions.codecs.V2Linear;
 import net.linear.versions.VersionWriteParams;
 import org.junit.Test;
-import net.linear.compression.LinearXxHash64;
+import net.linear.compression.LinearHash;
 
 /**
  * Pumpkin (wire 2, bucketed) codec tests against hand-built fixtures following
@@ -493,7 +493,7 @@ public class PumpkinLinearTest {
             for (byte[] f : frames) {
                 out.writeInt(f.length);
                 out.writeByte(1);
-                out.writeLong(LinearXxHash64.hashBytes(f, 0, f.length));
+                out.writeLong(LinearHash.hashBytes(f, 0, f.length));
             }
             for (byte[] f : frames) {
                 out.write(f);
@@ -559,7 +559,7 @@ public class PumpkinLinearTest {
                 byte[] f = byBucket.get(b);
                 out.writeInt(f != null ? f.length : 0);
                 out.writeByte(3);
-                out.writeLong(f != null ? LinearXxHash64.hashBytes(f, 0, f.length) : 0L);
+                out.writeLong(f != null ? LinearHash.hashBytes(f, 0, f.length) : 0L);
             }
             for (int b = 0; b < buckets; b++) {
                 if (byBucket.get(b) != null) {

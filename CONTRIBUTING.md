@@ -30,7 +30,7 @@ scripts/preflight.sh --tests    # the above, plus the Linear suites
   the supplement's own sequence (`minecraft-0009`..`0017`, `paper-0008`..`0011`
   in v1.0.0), so a new NMS patch after `minecraft-0017` is `minecraft-0018`.
   The module map is `linear-core/README.md` (per-leg staging notes live next
-  to each leg, e.g. `versions/servers/26.1.x/canvasmc/OVERLAY.md`).
+  to each leg, e.g. `versions/servers/26.3/canvasmc/OVERLAY.md`).
 - Filenames are `<area>-<NNNN>-<Subject>.patch`, matching the patch's own
   `Subject:` line.
 - Patches apply through paperweight, which uses `git am`. `git am` rejects hunk
@@ -47,9 +47,12 @@ scripts/preflight.sh --tests    # the above, plus the Linear suites
 
 ## The build-file hunk
 
-`versions/<line>/folia/build-hunk.py` splices two things into Folia's own
-`folia-server/build.gradle.kts.patch`: the `net/linear` test source
-directory, and the zstd-jni dependency.
+`versions/servers/<line>/folia/build-hunk.py` splices three things into
+Folia's own `folia-server/build.gradle.kts.patch`: the `net/linear` test
+source directory, the zstd-jni dependency, and the OpenHFT XXH64 dependency.
+The Canvas stage-overlay action wires the same two dependencies into the
+post-apply `canvas-server/build.gradle.kts`; the Horizon plugin JiJ-embeds
+them from its own build file.
 
 - That file uses the paperweight hunk convention, which plain `git apply` cannot
   parse, so the wiring is done by script rather than by a patch.
@@ -59,37 +62,43 @@ directory, and the zstd-jni dependency.
 
 ## Porting to a new MC version
 
-Each supported version line lives in its own `versions/<branch>/` folder with
-its own upstream pins (`upstream.properties` for Folia, `upstream.<server>.properties`
-for other servers), per-server legs (`folia/`, `canvas/`, each with `patches/`,
-`tests/`, `build-hunk.py`), and shared byte-identical patches in `common/`.
+Each supported version line lives in its own `versions/servers/<line>/` folder
+with its own upstream pins (`upstream.properties` for Folia,
+`upstream.canvas.properties` for Canvas), per-server legs (`folia/`,
+`canvasmc/`, each with `patches/` or `overlay/`, `tests/`, `build-hunk.py`),
+and shared byte-identical patches in `common/`. The active matrix is Folia
+26.1.2 + CanvasMC 26.3 + Horizon 1.0.0 (26.1-26.3); removed legs are archived
+under `versions/servers/removed/` and must not be re-added without porting.
 Start a new line with the script, never by hand-copying:
 
 ```bash
-scripts/new-version.sh 26.2.x ver/26.2.x <ref>   # copies newest folder, re-pins, runs applyAllPatches
-scripts/new-version.sh --dry-run 26.2.x ver/26.2.x <ref>  # plan only, changes nothing
+scripts/new-version.sh 26.4.x ver/26.4.x <ref>   # copies newest Folia folder, re-pins, runs applyAllPatches
+scripts/new-version.sh --dry-run 26.4.x ver/26.4.x <ref>  # plan only, changes nothing
 scripts/new-version.sh --help
 ```
 
 Porting checklist:
 
 - Same patch name and number per feature across folders. If a fix lands as
-  `minecraft-0013` in `versions/26.1.x/folia/patches/`, the same feature is
-  `minecraft-0013` in every other `versions/*/folia/patches/` folder, so diffs
-  between lines stay reviewable. Renumbering one line orphans the mapping.
+  `minecraft-0013` in `versions/servers/26.1.x/folia/patches/`, the same
+  feature keeps that number in every other supported
+  `versions/servers/*/folia/patches/` folder, so diffs between lines stay
+  reviewable. Renumbering one line orphans the mapping.
 - `minecraft-*.patch` goes to `minecraft-patches/features/`, `paper-*.patch`
   to `paper-patches/features/`; the `<area>-<NNNN>-<Subject>.patch` naming and
   hunk-count rules from Patch conventions apply verbatim in every folder.
-- `upstream.properties` carries all four keys (`FOLIA_REPO`, `FOLIA_BRANCH`,
-  `FOLIA_REF`, `MC_VERSION`). It is the single source of truth; the workflow
-  pins and `release/RELEASE.md` section 2 mirror it, they do not replace it.
+- `upstream.properties` carries `FOLIA_REPO`, `FOLIA_BRANCH`, `FOLIA_REF`,
+  `FOLIA_BUILD`, `MC_VERSION`; `upstream.canvas.properties` carries the
+  `CANVAS_*` equivalents plus `CANVAS_BUILD`. They are the single source of
+  truth; the workflow pins and `release/RELEASE.md` section 2 mirror them.
 - `new-version.sh` already ran `applyAllPatches` against the new pin, so
   rebase conflicts surfaced at copy time. Port each rejected hunk to the new
   base, keeping behaviour identical unless the new base forces a change.
-- Run `scripts/preflight.sh` (it checks every `versions/*/` folder:
-  inventory, property completeness, hunk determinism, patch parsing, and the
-  three inherited-bug grep gates), then build the new line explicitly:
-  `scripts/build.sh --mc 26.2.x`. Plain `scripts/build.sh` builds all lines.
+- Run `scripts/preflight.sh` (it checks every `versions/servers/*/` line:
+  inventory, property/build-number completeness, hunk determinism, patch
+  parsing, and the three inherited-bug grep gates), then build the new Folia
+  line explicitly: `scripts/build.sh --mc 26.4.x`. Plain `scripts/build.sh`
+  builds all Folia lines and skips Canvas-only lines.
 
 ## Leg parity (move together)
 
@@ -136,14 +145,34 @@ workflow and `preflight.sh`:
 
 ## Cutting a release
 
+Tag scheme:
+
+- `vX.Y.Z` is the first release of a patch set and is equivalent to
+  `vX.Y.Z-release.1`.
+- `vX.Y.Z-release.N` (N >= 2) is a compatibility rebuild with unchanged
+  patches, e.g. a new upstream build.
+- Historical `v1.0.0`..`v1.1.3` tags stay untouched and are aliased as
+  `vX.Y.Z-release.1`; see `release/TAGS.md`.
+
 1. Preflight green, then push to `main`.
-2. Tag `v1.x.y` and push the tag.
-3. The tag push triggers `build.yml`, which attaches one jar per matrix leg
-   to the GitHub release: fork legs as
-   `linearmc-<server>-<mcversion>-<project>.jar` (so `v1.0.0` with `26.1.x`
-   at MC `26.1.2` ships `linearmc-folia-26.1.2-1.0.0.jar`), the Horizon
-   plugin as `linearmc-horizon-<pluginver>-<project>.jar`
-   (e.g. `linearmc-horizon-1.0.0-1.0.0.jar`, one jar for every MC line).
+2. Verify the pin files carry `<PREFIX>_BUILD` (Folia/Canvas) and
+   `HORIZON_BUILD` (Horizon). The release body and asset suffix use them.
+3. Tag `vX.Y.Z` (patch change) or `vX.Y.Z-release.N` (rebuild), and publish
+   the GitHub release.
+4. `build.yml` attaches one jar per matrix leg:
+   fork legs as
+   `linearmc-<server>-<mcversion>-<project>+build.<N>.jar` (e.g.
+   `linearmc-folia-26.1.2-1.1.4+build.8.jar`), the Horizon plugin as
+   `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar` (one generic jar
+   for Paper/Folia/CanvasMC 26.1-26.3). The `#N` form appears in the release
+   body, because GitHub rewrites `#` in asset filenames.
+5. The `release-notes` job injects/refreshes the upstream build table in the
+   release body, so every release names the exact server build it shipped.
+
+Supported matrix: Folia 26.1.2, CanvasMC 26.3, Horizon plugin for 26.1-26.3.
+Unsupported server legs are archived under `versions/servers/removed/`; do
+not add them back to the build matrix without re-validating their patches.
+
 Update `CHANGELOG.md` in the same change that introduces the behaviour, not
 at tag time.
 

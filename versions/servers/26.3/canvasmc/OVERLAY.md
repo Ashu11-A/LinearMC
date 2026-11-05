@@ -1,8 +1,8 @@
 # Canvas post-apply layer, line 26.3
 
-Upstream pin: Canvas `main` at `cc4e7611` (de-facto stable 26.3: `channel=STABLE`,
-`mcVersion=26.3`; no `ver/26.3` branch exists upstream). Pin source is
-`upstream.canvas.properties` next to this file.
+Upstream pin: Canvas `main` at `a636063e`, build **#1010** (de-facto stable 26.3:
+`channel=STABLE`, `mcVersion=26.3`; no `ver/26.3` branch exists upstream).
+Pin source is `upstream.canvas.properties` next to this file.
 
 Same model as the 26.1/26.2 Canvas legs: zero files in the upstream source
 patch directory, every Linear hunk applies after upstream apply with a check

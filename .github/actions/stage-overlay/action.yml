@@ -159,22 +159,31 @@ runs:
           git -C "$CANVAS_DIR" apply -p1 --whitespace=nowarn "$p" \
             || { echo "::error::config overlay apply failed: $p"; exit 1; }
         done
-        # 6. zstd dep (generated build file exists only post-apply).
+        # 6. Runtime deps (generated build file exists only post-apply):
+        #    zstd chunk codec + OpenHFT XXH64 (byte-compatible with the old
+        #    in-tree hash; the Horizon plugin JiJ-embeds the same coordinate).
         python3 - "$CANVAS_DIR/canvas-server/build.gradle.kts" <<'EOF'
         import re, sys
         p = sys.argv[1]
         s = open(p).read()
-        dep = '    implementation("com.github.luben:zstd-jni:1.5.6-8") // Linear - whole-region zstd (same coordinate as the Folia leg)\n'
+        zstd = '    implementation("com.github.luben:zstd-jni:1.5.6-8") // Linear - whole-region zstd (same coordinate as the Folia leg)\n'
+        openhft = '    implementation("net.openhft:zero-allocation-hashing:2026.0") // Linear - XXH64 (same coordinate as Folia/Horizon)\n'
         if 'zstd-jni' not in s:
             # Prefix anchor: the httpclient version floats across lines
             # (1.0.0 on 26.1, 1.0.1 on 26.2); match the coordinate, not the version.
             m = re.search(r'    implementation\("io\.canvasmc\.httpclient:httpclient:[^"]+"\)\n', s)
-            assert m, 'zstd anchor moved; update stage-overlay wiring'
+            assert m, 'dependency anchor moved; update stage-overlay wiring'
             anchor = m.group(0)
-            open(p, 'w').write(s.replace(anchor, anchor + dep))
-            print('stage-overlay: zstd dep added')
+            s = s.replace(anchor, anchor + zstd + openhft)
+            print('stage-overlay: zstd + openhft deps added')
+        elif 'zero-allocation-hashing' not in s:
+            m = re.search(r'    implementation\("com\.github\.luben:zstd-jni:[^"]+"\)[^\n]*\n', s)
+            assert m, 'zstd line moved; update stage-overlay wiring'
+            s = s[:m.end()] + openhft + s[m.end():]
+            print('stage-overlay: openhft dep added')
         else:
-            print('stage-overlay: zstd dep present')
+            print('stage-overlay: runtime deps present')
+        open(p, 'w').write(s)
         EOF
         # 7. Tests (package tree preserved; hub graduates first minus shadows,
         # then leg additions. Either tree may be absent: legs with no own tests

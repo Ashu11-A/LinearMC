@@ -2,8 +2,6 @@ package net.linear.compression;
 
 import java.nio.ByteBuffer;
 import net.jpountz.lz4.LZ4Factory;
-import net.linear.versions.base.V2LinearBase;
-import net.linear.versions.codecs.V1Linear;
 
 /**
  * Shared LZ4 slot payload codec (direct buffers, read-only slices).

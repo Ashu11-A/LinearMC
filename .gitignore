@@ -12,6 +12,7 @@ proof/pumpkin/
 .gradle/
 build/
 out/
+__pycache__/
 # Server runtime files (a booted server writes these into its cwd: never
 # track them; scratch servers belong under proof/ or /tmp, never repo root).
 /server.jar

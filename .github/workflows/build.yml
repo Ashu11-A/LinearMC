@@ -36,9 +36,9 @@ permissions:
   contents: read
 
 env:
-  # Upstream pins (repo/branch/ref/MC) are NOT duplicated here: the single
-  # source of truth is versions/*/upstream.properties, fanned out to every
-  # job by the discover matrix below.
+  # Upstream pins (repo/branch/ref/MC/build) are NOT duplicated here: the
+  # single source of truth is versions/servers/*/upstream*.properties plus
+  # the Horizon pin, fanned out to every job by the discover matrix below.
   JAVA_VERSION: 25
   # GB free required for a fork build. The disk-prune step skips its slow
   # `docker image prune` when the runner already has this much room.
@@ -101,10 +101,9 @@ jobs:
           # to the stable `horizon` id with HORIZON key lookup, so asset
           # names keep their shape. `version` is the grandparent line dir for servers
           # (26.1.x) and the plugin version dir (1.0.0) for horizon. A leg
-          # is emitted only when it actually has content (see below). Legs
-          # without content (pins but no patches, e.g. 26.2; status-only
-          # 26.3) are reported and skipped, never fail, so the matrix grows
-          # automatically as ports land — no workflow edit needed.
+          # is emitted only when it actually has content (see below): pins
+          # without patches, and archive-only folders such as
+          # versions/servers/removed/, are reported and skipped, never fail.
           SERVER_DIR_MAP = {'canvas': 'canvasmc'}
           for prop in sorted(glob.glob('versions/*/*/upstream*.properties')):
               if prop.endswith('.example'):
@@ -146,6 +145,14 @@ jobs:
                   raise SystemExit(
                       f"discover: {prop} {prefix}_REF must be a full 40-char sha "
                       f"(got {kv[f'{prefix}_REF']!r})")
+              # Every release leg must name the upstream build it came from.
+              # This is what the release body and the asset suffix publish.
+              build = kv.get(f'{prefix}_BUILD', '')
+              if not re.fullmatch(r'[0-9]+', build or ''):
+                  raise SystemExit(
+                      f"discover: {prop} must declare {prefix}_BUILD as digits "
+                      f"(got {build!r}); the release notes and asset names need it")
+              mc_range = kv.get(f'{prefix}_MC_RANGE', '')
               # Horizon is a standalone Gradle project, not a fork checkout:
               # its MC target is the paper dev bundle, pinned in the single
               # build pin (unsuffixed upstream.horizon.properties, oldest
@@ -188,6 +195,8 @@ jobs:
                           'branch': kv[f'{prefix}_BRANCH'],
                           'ref': kv[f'{prefix}_REF'],
                           'dev_bundle': dev_bundle,
+                          'build': build,
+                          'mc_range': mc_range,
                       })
                   print(f'discover: horizon pin {prop} -> mc {kv["MC_VERSION"]} bundle {dev_bundle} x plugin {", ".join(plugin_vers)}')
               else:
@@ -207,12 +216,16 @@ jobs:
                       'branch': kv[f'{prefix}_BRANCH'],
                       'ref': kv[f'{prefix}_REF'],
                       'dev_bundle': dev_bundle,
+                      'build': build,
+                      'mc_range': mc_range,
                   })
-          # Report scaffold-only lines (pins but no content, e.g. 26.2; or
-          # status.properties-only lines like 26.3 with no upstream pin at
-          # all): never fail, just report so the skip is visible.
+          # Report scaffold-only lines (pins but no content, or lines with no
+          # upstream pin at all): never fail, just report so the skip is visible.
           for linedir in sorted(glob.glob('versions/servers/*')):
               line = linedir.split('/')[-1]
+              if line in ('removed', 'common'):
+                  print(f'discover: versions/servers/{line} is not a build line; skipping')
+                  continue
               if not any(e['version'] == line for e in entries):
                   reason = 'no upstream pin' if not glob.glob(f'{linedir}/upstream*.properties') else 'pin but no leg content'
                   print(f'discover: {line} scaffold-only ({reason}); skipping line')
@@ -228,7 +241,7 @@ jobs:
           # that applies to one line, or a partial release re-run via
           # `gh workflow run build.yml --ref <tag> -f versions=<list>`).
           # Empty/'all' builds every version. Unknown names fail fast.
-          # Server legs filter on line names (26.1.x/26.2/26.3); the
+          # Server legs filter on line names (26.1.x/26.3); the
           # horizon leg filters on its plugin version dir (1.0.0) OR the
           # leg token 'horizon' (a line filter alone would silently drop the
           # plugin, whose version id never matches a server line).
@@ -563,15 +576,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Release asset name depends on the tag scheme:
-          #   project tags  v<project> (e.g. v1.0.0): every
-          #     matrix leg uploads its own per-version asset,
-          #     linearmc-<server>-<mcversion>-<project>.jar for fork legs
-          #     (e.g. linearmc-folia-26.1.2-1.0.0.jar) and
-          #     linearmc-horizon-<pluginver>-<project>.jar for horizon
-          #     (e.g. linearmc-horizon-1.0.0-1.0.0.jar), one jar for every
-          #     supported MC line (api-version targets the oldest bundle)
+          #   project tags  v<project> (e.g. v1.1.4): every matrix leg uploads
+          #     its own asset with the upstream build number:
+          #     linearmc-<server>-<mcversion>-<project>+build.<N>.jar
+          #     (e.g. linearmc-folia-26.1.2-1.1.4+build.8.jar).
+          #     Horizon ships ONE jar for every supported MC line:
+          #     linearmc-horizon-<mcrange>-<project>+build.<N>.jar
+          #     (e.g. linearmc-horizon-26.1-26.3-1.1.4+build.74.jar).
           #   legacy tags   v<mcversion>-linear.<build> (history only): the
-          #     matching MC leg uploads folia-<mcversion>-<build>.jar
+          #     matching MC leg uploads folia-<mcversion>-<build>.jar.
+          # The '+' is semver build metadata and is preserved by GitHub;
+          # literal '#' in asset names is rewritten by GitHub, so the '#'
+          # form lives in the release body instead.
           # A manual dispatch on a tag (`gh workflow run build.yml
           # --ref <tag> -f versions=<list>`) limits the release to some
           # folders; pushed tags always release every version.
@@ -590,7 +606,15 @@ jobs:
               ;;
             v*)
               PROJ="${TAG#v}"
-              ASSET="linearmc-${{ matrix.server }}-${{ matrix.mc }}-${PROJ}.jar"
+              UPSTREAM_BUILD="${{ matrix.build }}"
+              test -n "$UPSTREAM_BUILD" || { echo "::error::matrix.build is empty; discover must read <PREFIX>_BUILD"; exit 1; }
+              if [ "${{ matrix.server }}" = "horizon" ]; then
+                RANGE="${{ matrix.mc_range }}"
+                test -n "$RANGE" || { echo "::error::matrix.mc_range is empty; discover must read HORIZON_MC_RANGE"; exit 1; }
+                ASSET="linearmc-horizon-${RANGE}-${PROJ}+build.${UPSTREAM_BUILD}.jar"
+              else
+                ASSET="linearmc-${{ matrix.server }}-${{ matrix.mc }}-${PROJ}+build.${UPSTREAM_BUILD}.jar"
+              fi
               ;;
             *)
               echo "::error::Tag '$TAG' is not a project tag (v<project>) or a legacy tag (v<mc>-linear.<build>)"
@@ -607,16 +631,38 @@ jobs:
             # mixin jar (plugins/), built against the oldest bundle with
             # api-version set to its major.minor. The splitPluginSourceSets
             # side-product (-plugin jar, ~25 KB without dependencies) never
-            # worked standalone and is not published. Asset:
-            # linearmc-horizon-<pluginver>-<project>.jar
-            # (e.g. linearmc-horizon-1.0.0-1.0.0.jar).
+            # worked standalone and is not published.
             MAIN=$(ls dist/horizon-plugin-*.jar | grep -v -- '-plugin\.jar$' | head -1)
             test -f "$MAIN" || { echo "::error::horizon mixin jar missing:"; ls -la dist/ || true; exit 1; }
-            cp "$MAIN" "linearmc-horizon-${{ matrix.version }}-${PROJ}.jar"
-            gh release upload "$TAG" linearmc-horizon-${{ matrix.version }}-${PROJ}.jar --repo Ashu11-A/LinearMC --clobber
+            cp "$MAIN" "$ASSET"
+            gh release upload "$TAG" "$ASSET" --repo Ashu11-A/LinearMC --clobber
             exit 0
           fi
           JAR=$(ls dist/*-paperclip-*.jar | head -1)
           test -f "$JAR" || { echo "::error::paperclip jar missing in artifact:"; ls -la dist/ || true; exit 1; }
           cp "$JAR" "$ASSET"
           gh release upload "$TAG" "$ASSET" --repo Ashu11-A/LinearMC --clobber
+
+  release-notes:
+    # Runs once after every leg has attached its jar: injects the upstream
+    # build numbers into the release body. Idempotent via HTML markers, so a
+    # re-run replaces the table instead of duplicating it.
+    needs: [discover, release]
+    if: needs.discover.outputs.count != '0' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (release notes script)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Inject upstream build table
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          RELEASE_MATRIX: ${{ needs.discover.outputs.matrix }}
+          RELEASE_REPO: Ashu11-A/LinearMC
+        run: python3 scripts/release-notes.py

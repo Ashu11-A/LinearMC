@@ -4,6 +4,8 @@ Every plugin patch selector is traced to a verified server method.
 Verify mechanically before release. Any drift fails the gate.
 
 Current proven trace, bytecode verified on the dev bundle:
+(the shipped jar builds against 26.1.2 and declares `api-version: "26.1"`;
+the same jar is tested on 26.2 and 26.3)
 
 | Plugin patch purpose | Server method it targets | Notes |
 | --- | --- | --- |
@@ -33,9 +35,11 @@ in `upstream.horizon-<mc>.properties`):
 
 26.1.2 and 26.3 verified by `javap` against the dev bundles plus the
 reflection patcher check (`MixinDescriptorsTest#mixinTargetsExistInThisBundle`,
-run per bundle in the `test.yml` matrix); 26.2 verified by that same matrix
-run. Selectors are `defaultRequire`, so any future miss fails the boot
-loudly instead of silently.
+run per bundle in the `test.yml` matrix); 26.2 verified by that same matrix.
+`upstream.horizon-26.1.2.properties` is present so every push covers the
+oldest bundle too, not only the release build. Selectors are
+`defaultRequire`, so any future miss fails the boot loudly instead of
+silently.
 
 Retired selectors, kept for provenance only:
 
