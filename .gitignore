@@ -27,3 +27,6 @@ __pycache__/
 /whitelist.json
 /banned-players.json
 /banned-ips.json
+
+# Local server test workspaces (jars, worlds, logs).
+/tests/
