@@ -466,8 +466,15 @@ jobs:
           # reads LINEARMC_PROJECT_VERSION with a 1.0.0-SNAPSHOT fallback for
           # local builds). Tag builds stamp the release version into
           # paper-plugin.yml + horizon.plugin.json via processResources.
-          TAG="${{ github.event.release.tag_name || github.ref_name }}"
-          case "$TAG" in v*) PROJ="${TAG#v}";; *) PROJ="$TAG";; esac
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.event.release.tag_name || github.ref_name }}"
+            case "$TAG" in v*) PROJ="${TAG#v}";; *) PROJ="$TAG";; esac
+          else
+            # Branch validation (workflow_dispatch): no release identity, and a
+            # branch name contains '/', which would create a version subdir
+            # under build/libs and break the jar lookup below.
+            PROJ="0.0.0-dev"
+          fi
           export LINEARMC_PROJECT_VERSION="$PROJ"
           echo "project-version=$LINEARMC_PROJECT_VERSION"
           ./gradlew build --stacktrace
