@@ -6,7 +6,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.linear.versions.base.AbstractLinearVersion;
-import net.linear.versions.codecs.PumpkinLinear;
 import net.linear.versions.encoders.PumpkinEncoder;
 import net.linear.versions.ChunkSlotTable;
 

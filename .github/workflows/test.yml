@@ -60,7 +60,7 @@ jobs:
 
       - name: Shell syntax (shellcheck, else bash -n fallback)
         run: |
-          FILES="scripts/build.sh scripts/new-version.sh scripts/preflight.sh"
+          FILES="scripts/*.sh scripts/lib/server.sh"
           for f in $FILES; do
             test -f "$f" || { echo "::error::expected shell file missing: $f"; exit 1; }
           done
@@ -73,7 +73,7 @@ jobs:
           fi
 
       - name: Python helper syntax
-        run: python3 -m py_compile scripts/release-notes.py
+        run: python3 -m py_compile scripts/release-notes.py scripts/patch-recount.py
 
       - name: Provide Folia base for preflight file gates (shallow)
         # scripts/preflight.sh's default gates require $FOLIA_DIR to exist
@@ -92,6 +92,28 @@ jobs:
       - name: Preflight default (no-compile) gates
         run: bash scripts/preflight.sh
 
+
+  core:
+    # linear-core: NMS-free source gate + every JUnit suite (format, codec,
+    # config, flush, convert, command). Fast (about a minute) and fork-free.
+    needs: [static]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Core build + unit tests
+        env:
+          CORE_LIBS: ${{ runner.temp }}/corelibs
+        run: bash linear-core/build.sh
+
   unit:
     # Slower gate (minutes): compile the fork, then run the Linear suites.
     # Staging (checkout + Folia clone + patch/test staging) goes through G2's
@@ -106,14 +128,9 @@ jobs:
       matrix:
         version: ["26.1.x"]
     steps:
-      # Assumed G2 contract (see staging/wf-test/DEVIATIONS.md; G2's
-      # ACTIONS-CONTRACT.md was absent when this was written):
-      #   setup: checkout supplement to ./supplement + Temurin Java +
-      #          gradle cache. Input: java-version (default '25').
-      #   stage: clone pinned Folia base per versions/servers/<v>/upstream.properties
-      #          at the exact FOLIA_REF into ./folia, copy minecraft/paper
-      #          patches, run build-hunk.py, copy tests. Input: version.
-      #          Loops internally over every versions/servers/* folder.
+      # setup: checkout supplement to ./supplement + Java + gradle cache.
+      # stage: clone the pinned Folia base into ./fork, then scripts/stage.sh
+      #        (patches, build hunk, core, tests) for one version line.
       - name: Checkout (bootstrap for local composite actions below)
         uses: actions/checkout@v5
 
@@ -201,11 +218,15 @@ jobs:
         run: |
           PIN="${{ matrix.bundle }}"
           test -n "$PIN" || { echo "::error::matrix.bundle is empty (horizon-pins must read HORIZON_DEV_BUNDLE)"; exit 1; }
-          sed -i -E "s|paperweight\.paperDevBundle\(\"[^\"]+\"\)|paperweight.paperDevBundle(\"$PIN\")|" build.gradle.kts
-          grep -F "paperDevBundle(\"$PIN\")" build.gradle.kts
+          # build.gradle.kts reads the pin as a Gradle property (no sed).
+          echo "ORG_GRADLE_PROJECT_devBundle=$PIN" >> "$GITHUB_ENV"
 
       - name: Plugin build + tests (MC ${{ matrix.mc }})
-        run: ./gradlew build test --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew build test --stacktrace | tee gradle.log
+          # The build must have resolved exactly the pinned bundle.
+          grep -F "paperDevBundle=$ORG_GRADLE_PROJECT_devBundle" gradle.log
 
   config-check:
     # Config inventory gate (seconds): proves the release/*.yml set is

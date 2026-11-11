@@ -10,6 +10,73 @@ one universal jar for Paper/Folia/CanvasMC 26.1-26.3 as
 `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar`, built against the
 oldest bundle with `api-version: 26.1`.
 
+## Unreleased
+
+Releases are refused until every leg ships every capability: one open item,
+`force-upgrade` on Horizon (see `parity/capabilities.yml`).
+
+### Fixed: data loss on the Horizon plugin
+
+A world with existing `.mca` regions switched to LINEAR (or `.linear` regions
+after a revert to ANVIL) read those regions as absent and regenerated them:
+the host checks `Files.exists` on the region name before any open hook. Names
+now resolve existing-first in the core (`LinearStorageProbe.resolveFileName`)
+on every leg, and a region being converted keeps serving its source file.
+Reproduced with the `v1.1.4-release.1` jar; `scripts/migration-smoke.sh` now
+passes on Paper, Folia and Canvas hosts and on both fork jars.
+
+### Fixed: live convert could delete an `.mca` the server held open
+
+A live `/linear convert --execute` away from `.mca` deleted a source the
+server's region cache still held open, so later writes to that region were
+lost. Every leg now records each `.mca` a region storage opens
+(`LinearStorageProbe.hostOpening`); the converter never deletes one and reports
+it SKIPPED, and a region converted away between the host's probe and its open
+opens the new file.
+
+### Fixed: live `/linear convert` did nothing on the Folia fork
+
+The Folia fork started each job before its quiesce gate, and the core runner
+skipped any job that was not still queued, so `--execute` left the job at
+`Working 0/0` and converted nothing. The runner now accepts a job its leg
+already started. Found by the new live-convert phases of
+`scripts/migration-smoke.sh`, which prove the job ran with a control region.
+
+### Fixed: Canvas fork `/linear convert --to-blinear` wrote `.linear`
+
+The Canvas fork ran its own copy of the convert loop, which sent every
+forward job to `.linear`. It now runs the core `JobRunner` like Folia and
+Horizon, so `--to-blinear` writes `.b_linear` on every leg.
+
+### Leg parity: the Horizon plugin ships every fork feature
+
+Startup auto-conversion before plugins load, LINEAR default, per-world format
+and level (`worlds:` in `config.yml`), `/save-all` drain, final stop drain
+after the last world save, flush-unlock, flush event
+(`io.linearmc.horizon.event.LinearRegionFlushCompletedEvent`), cache/oversize
+counters with the oversize gate, broken-symlink halt, and `/linear convert`
+over `region/`, `entities/` and `poi/` honouring `-Dlinearmc.compression-level`.
+A drop-in install now converts existing worlds on first boot; the boot log says
+how to convert back before removing the plugin.
+
+### All legs
+
+- One permission rule (`LinearPermissions.allows`): `/linear` needs any Linear
+  node; `/linear stats` accepts `linearstats` or `linear`.
+- `implementation` / `grid-size` config keys take effect on the forks; bad
+  values warn once and `-Dlinearmc.*` writer overrides are logged.
+- A busy storage folder rejects a second `convert --execute` before any job is
+  queued (core `FolderClaims`), Folia included.
+
+### Maintenance
+
+`linear-core` suites run in CI; `scripts/parity-check.sh` gates pushes and
+tags; CI staging calls `scripts/stage.sh`; `scripts/validate-all.sh` reproduces
+CI locally; `AGENTS.md` and `.claude/skills/linearmc-*` guide LLM agents.
+`scripts/lint-java.py` (a preflight gate) keeps imports clean on every leg,
+including Java files the Folia patches create; this release drops 99 unused
+imports and 202 redundant qualified names.
+
 ## v1.1.4-release.1
 
 ### Supported matrix narrowed, Canvas 26.3 moved to upstream build #1010

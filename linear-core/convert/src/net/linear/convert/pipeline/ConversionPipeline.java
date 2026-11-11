@@ -20,7 +20,6 @@ import net.linear.convert.copy.ChunkCopier;
 import net.linear.convert.routing.ExplicitConvertRouter;
 import net.linear.convert.scan.CandidateScanner;
 import net.linear.convert.validate.ConversionValidator;
-import net.linear.AbstractRegionFile;
 import net.linear.LinearFlushCoordinator;
 import net.linear.LinearRegionConverter;
 import net.linear.RegionFileFormat;
@@ -190,6 +189,21 @@ public final class ConversionPipeline {
     }
 
     /**
+     * Forward/explicit source delete: the {@link #preDeleteSkip} recheck, then
+     * a delete that keeps an Anvil source a host storage opened since startup
+     * (a live handle to a deleted {@code .mca} loses every later write).
+     *
+     * @return {@code null} once the source is deleted, otherwise the SKIPPED detail
+     */
+    static String deleteSourceOrDefer(Path source) throws IOException {
+        String deferred = preDeleteSkip(source, LinearRegionConverter.FORWARD_SKIP);
+        if (deferred == null && !net.linear.probe.LinearStorageProbe.deleteUnlessHostOpened(source)) {
+            deferred = "kept: opened by the server since startup; restart and re-run the convert before the region loads";
+        }
+        return deferred;
+    }
+
+    /**
      * Thrown when a pre-swap folder-dirty recheck aborts a same-path swap.
      * Carries the SKIPPED detail so the caller reports DEFERRED (source
      * untouched, staging cleaned) instead of FAILED/retry.
@@ -269,7 +283,7 @@ public final class ConversionPipeline {
         List<Future<TaskOutcome>> futures = new ArrayList<>(candidates.size());
         for (Path source : candidates) {
             Path target = CandidateScanner.targetForSource(source, targetFormat);
-            futures.add(pool.submit(new FileTask(source, target, level, events, targetFormat)));
+            futures.add(pool.submit(converting(source, new FileTask(source, target, level, events, targetFormat))));
         }
         pool.shutdown();
 
@@ -391,7 +405,7 @@ public final class ConversionPipeline {
         List<Future<TaskOutcome>> futures = new ArrayList<>(candidates.size());
         for (Path source : candidates) {
             Path target = CandidateScanner.targetForSourceReverse(source);
-            futures.add(pool.submit(new ReverseFileTask(source, target, level, events)));
+            futures.add(pool.submit(converting(source, new ReverseFileTask(source, target, level, events))));
         }
         pool.shutdown();
 
@@ -521,8 +535,8 @@ public final class ConversionPipeline {
 
         List<Future<TaskOutcome>> futures = new ArrayList<>(candidates.size());
         for (CandidateScanner.ExplicitCandidate c : candidates) {
-            futures.add(pool.submit(new ExplicitFileTask(c.source(), c.target(), level, requestedGrid,
-                events, effectiveFrom, to, c.samePath())));
+            futures.add(pool.submit(converting(c.source(), new ExplicitFileTask(c.source(), c.target(), level, requestedGrid,
+                events, effectiveFrom, to, c.samePath()))));
         }
         pool.shutdown();
 
@@ -588,6 +602,21 @@ public final class ConversionPipeline {
         return new LinearRegionConverter.ConversionSummary(converted, validated, deleted, 0, List.of());
     }
 
+    /**
+     * Live storages resolve a region to its SOURCE while it converts
+     * ({@code LinearStorageProbe.probeExisting}), never to the target in flight.
+     */
+    private static Callable<TaskOutcome> converting(Path source, Callable<TaskOutcome> task) {
+        return () -> {
+            net.linear.probe.LinearStorageProbe.markConverting(source);
+            try {
+                return task.call();
+            } finally {
+                net.linear.probe.LinearStorageProbe.unmarkConverting(source);
+            }
+        };
+    }
+
     private static final class FileTask implements Callable<TaskOutcome> {
         private final Path source;
         private final Path target;
@@ -630,7 +659,7 @@ public final class ConversionPipeline {
                     // source delete below with no intervening IO on the
                     // proceed path (see preDeleteSkip for the residual window
                     // and the shadow-pair backstop).
-                    String deferred = preDeleteSkip(this.source, LinearRegionConverter.FORWARD_SKIP);
+                    String deferred = deleteSourceOrDefer(this.source);
                     if (deferred != null) {
                         // Defer, do not delete: drop this attempt's uncommitted
                         // target so the source stands alone again. Leaving a
@@ -645,7 +674,6 @@ public final class ConversionPipeline {
                         safeOnFile(this.events, skipped);
                         return new TaskOutcome(skipped);
                     }
-                    Files.deleteIfExists(this.source);
                     if (this.source.getFileName().toString().endsWith(RegionFileFormat.B_LINEAR_EXTENSION)) {
                         // Buffered sources carry scratch siblings that must not
                         // linger: nothing will ever open them again and the next
@@ -874,7 +902,7 @@ public final class ConversionPipeline {
                         safeOnFile(this.events, done);
                         return new TaskOutcome(done);
                     }
-                    String deferred = preDeleteSkip(this.source, LinearRegionConverter.FORWARD_SKIP);
+                    String deferred = deleteSourceOrDefer(this.source);
                     if (deferred != null) {
                         ConversionCleanup.cleanAttemptArtifacts(this.source, this.target);
                         // Pumpkin different-path targets also travel with a .tmp sibling
@@ -893,7 +921,6 @@ public final class ConversionPipeline {
                         safeOnFile(this.events, skipped);
                         return new TaskOutcome(skipped);
                     }
-                    Files.deleteIfExists(this.source);
                     if (this.source.getFileName().toString().endsWith(RegionFileFormat.B_LINEAR_EXTENSION)) {
                         ConversionCleanup.deleteBufferedSidecars(this.source);
                     }

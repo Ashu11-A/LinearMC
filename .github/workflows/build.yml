@@ -77,6 +77,12 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Release gate, before any build minute is spent: every leg ships the
+      # same capabilities; any `gap` in parity/capabilities.yml refuses a tag.
+      - name: Leg parity gate (zero gaps on releases)
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
+        run: bash scripts/parity-check.sh --release
+
       - name: Discover versions
         id: set-matrix
         env:
@@ -370,7 +376,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: fork
-          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**', '.github/actions/**') }}
+          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**', '.github/actions/**', 'scripts/stage.sh') }}
 
       - name: Validate fork cache hit
         if: matrix.server != 'horizon' && steps.fork-cache.outputs.cache-hit == 'true'
@@ -420,7 +426,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: fork
-          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**', '.github/actions/**') }}
+          key: fork-${{ matrix.server }}-${{ matrix.ref }}-${{ hashFiles('versions/servers/**', 'versions/plugins/**', 'linear-core/**', '.github/actions/**', 'scripts/stage.sh') }}
 
       - name: Build paperclip jar (proven set)
         if: matrix.server != 'horizon'
@@ -453,8 +459,9 @@ jobs:
           # (matrix.version is the plugin version dir, e.g. 1.0.0).
           PIN="${{ matrix.dev_bundle }}"
           test -n "$PIN" || { echo "::error::matrix.dev_bundle is empty (discover must pin HORIZON_DEV_BUNDLE)"; exit 1; }
-          sed -i -E "s|paperweight\.paperDevBundle\(\"[^\"]+\"\)|paperweight.paperDevBundle(\"$PIN\")|" build.gradle.kts
-          grep -F "paperDevBundle(\"$PIN\")" build.gradle.kts
+          # build.gradle.kts reads the pin as a Gradle property (no sed);
+          # exported here because the build runs later in this same step.
+          export ORG_GRADLE_PROJECT_devBundle="$PIN"
           # api-version is the major.minor of the build pin's MC (oldest
           # bundle, so one jar loads everywhere). runServer minecraftVersion
           # stays local-only (never substituted).
@@ -477,7 +484,9 @@ jobs:
           fi
           export LINEARMC_PROJECT_VERSION="$PROJ"
           echo "project-version=$LINEARMC_PROJECT_VERSION"
-          ./gradlew build --stacktrace
+          set -o pipefail
+          ./gradlew build --stacktrace | tee gradle.log
+          grep -F "paperDevBundle=$PIN" gradle.log
           ls -la build/libs/ | grep -iE 'horizon-plugin-.*\.jar'
 
       - name: Boot smoke (ANVIL fresh world)

@@ -18,7 +18,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import net.linear.command.CommandSender;
 
 /**
  * Standalone {@code /linearstats} command (Horizon parity with Folia/Canvas).
@@ -44,7 +43,7 @@ public class LinearStatsCommand implements TabExecutor, BasicCommand {
     @Override
     public boolean onCommand(
         org.bukkit.command.CommandSender sender, Command command, String label, String[] args) {
-        if (!sender.hasPermission(LinearPermissions.STATS)) {
+        if (!LinearPermissions.allows(sender::hasPermission, LinearPermissions.Action.LINEARSTATS)) {
             sender.sendMessage(LinearPermissions.denied("linearstats"));
             return true;
         }

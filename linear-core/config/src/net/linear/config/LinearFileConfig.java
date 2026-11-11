@@ -1,9 +1,14 @@
 package net.linear.config;
 
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import net.linear.LinearImplementation;
 import net.linear.RegionFileFormat;
+import net.linear.probe.LinearBucketGrid;
+import net.linear.probe.LinearFolderNames;
 
 /**
  * Core-owned file-layer cache: raw {@code region-format} file values pushed
@@ -22,6 +27,16 @@ public final class LinearFileConfig {
     private static volatile String fileImplementationRaw;
     private static volatile Integer fileGridSizeRaw;
     private static volatile Boolean fileSymlinkGuardRaw;
+    private static volatile Map<String, WorldValues> worldValues = Map.of();
+
+    /**
+     * Per-world file overrides ({@code null} field = inherit the global file
+     * value). Keyed by {@link LinearFolderNames#worldKey}
+     * (dimension id such as {@code minecraft:the_nether}, or the dimension
+     * directory name).
+     */
+    public record WorldValues(String format, Integer level) {
+    }
 
     private LinearFileConfig() {
     }
@@ -45,6 +60,89 @@ public final class LinearFileConfig {
         fileGridSizeRaw = gridSize;
     }
 
+    /** Pushes the per-world overrides (replaces the previous map; {@code null} clears). */
+    public static void setWorldValues(Map<String, WorldValues> values) {
+        worldValues = values == null ? Map.of() : Map.copyOf(values);
+    }
+
+    /** Per-world override for a storage folder, or {@code null}. */
+    private static WorldValues worldValuesFor(String folder) {
+        final Map<String, WorldValues> map = worldValues;
+        if (map.isEmpty() || folder == null) {
+            return null;
+        }
+        return map.get(LinearFolderNames.worldKey(folder));
+    }
+
+    /** Raw format for a storage folder: per-world override, else the global file value. */
+    public static String fileFormatFor(String folder) {
+        final WorldValues w = worldValuesFor(folder);
+        return w != null && w.format() != null ? w.format() : fileFormatRaw;
+    }
+
+    /** Raw level for a storage folder: per-world override, else the global file value. */
+    private static Integer fileLevelFor(String folder) {
+        final WorldValues w = worldValuesFor(folder);
+        return w != null && w.level() != null ? w.level() : fileLevelRaw;
+    }
+
+    /** Sysprop wins over the folder's (per-world, else global) file value, then the default. */
+    public static RegionFileFormat resolveFormatFor(String folder) {
+        return LinearPolicy.resolveFormat(
+            System.getProperty(LinearPolicy.SYSPROP_FORMAT),
+            fileFormatFor(folder),
+            LinearPolicy.FALLBACK_FORMAT);
+    }
+
+    /** Sysprop wins over the folder's (per-world, else global) file level, then {@code 6}. */
+    public static int resolveLevelFor(String folder) {
+        return LinearPolicy.resolveLevel(
+            System.getProperty(LinearPolicy.SYSPROP_LEVEL),
+            fileLevelFor(folder),
+            LinearPolicy.DEFAULT_LEVEL);
+    }
+
+    private static final AtomicBoolean WRITER_LOGGED =
+        new AtomicBoolean();
+
+    /**
+     * Leg entry point for the writer keys ({@code region-format.linear.implementation}
+     * and {@code .grid-size}): validates them (bad values warn once and fall
+     * back to {@code V1} / {@code 8}, the documented messages), publishes them
+     * to the core writer, and names every effective
+     * {@code -Dlinearmc.implementation} / {@code -Dlinearmc.grid-size}
+     * override once per process. Every leg calls this, so the keys behave the
+     * same on the forks and on Horizon.
+     */
+    public static void pushWriterValues(String implementation, Integer gridSize,
+        Consumer<String> warn, Consumer<String> info) {
+        String impl = implementation;
+        Integer grid = gridSize;
+        final boolean first = WRITER_LOGGED.compareAndSet(false, true);
+        if (impl != null && LinearImplementation.fromString(impl) == null) {
+            if (first && warn != null) {
+                warn.accept(LinearPolicy.badImplementationMessage(impl));
+            }
+            impl = null;
+        }
+        if (grid != null && !LinearBucketGrid.isValid(grid)) {
+            if (first && warn != null) {
+                warn.accept(LinearPolicy.badGridSizeMessage(grid));
+            }
+            grid = null;
+        }
+        setFileWriterValues(impl, grid);
+        if (first && info != null) {
+            overrideLineIfNeeded(LinearPolicy.SYSPROP_IMPLEMENTATION).ifPresent(info);
+            overrideLineIfNeeded(LinearPolicy.SYSPROP_GRID_SIZE).ifPresent(info);
+        }
+    }
+
+    /** Test hook: re-arm the once-per-process writer log. */
+    static void resetWriterLogForTests() {
+        WRITER_LOGGED.set(false);
+    }
+
     /** Raw {@code region-format.format} from the file, or {@code null}. */
     public static String fileFormat() {
         return fileFormatRaw;
@@ -60,10 +158,7 @@ public final class LinearFileConfig {
      * wins over the shipped fail-open {@code ANVIL} default.
      */
     public static RegionFileFormat resolveFormat() {
-        return LinearPolicy.resolveFormat(
-            System.getProperty(LinearPolicy.SYSPROP_FORMAT),
-            fileFormatRaw,
-            LinearPolicy.FALLBACK_FORMAT);
+        return resolveFormatFor(null);
     }
 
     /**
@@ -71,10 +166,7 @@ public final class LinearFileConfig {
      * wins over the shipped {@code 6} default.
      */
     public static int resolveLevel() {
-        return LinearPolicy.resolveLevel(
-            System.getProperty(LinearPolicy.SYSPROP_LEVEL),
-            fileLevelRaw,
-            LinearPolicy.DEFAULT_LEVEL);
+        return resolveLevelFor(null);
     }
 
     /** Raw {@code region-format.linear.implementation} from the file, or {@code null}. */

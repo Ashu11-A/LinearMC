@@ -112,6 +112,28 @@ public class CoreFactoryTest {
     }
 
     @Test
+    public void storageOpenRecordsAnvilAndFollowsAConvertedRegion() throws Exception {
+        AbstractRegionFile stub = stub();
+        AtomicReference<Path> linearSeen = new AtomicReference<>();
+        AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) -> stub);
+        AbstractRegionFileFactory.linear$setLinearOpener((file, level) -> {
+            linearSeen.set(file);
+            return stub;
+        });
+        Path folder = tmp.getRoot().toPath();
+        Path mca = folder.resolve("r.1.2.mca");
+        java.nio.file.Files.write(mca, new byte[] {1});
+        AbstractRegionFileFactory.get(mca, new Object(), folder, false, 6);
+        org.junit.Assert.assertFalse("a storage-opened .mca is never deleted",
+            net.linear.probe.LinearStorageProbe.deleteUnlessHostOpened(mca));
+
+        Path linear = folder.resolve("r.3.4.linear");
+        java.nio.file.Files.write(linear, new byte[] {1});
+        AbstractRegionFileFactory.get(folder.resolve("r.3.4.mca"), new Object(), folder, false, 6);
+        assertEquals("a region converted away opens its new file", linear, linearSeen.get());
+    }
+
+    @Test
     public void anvilRoutesWithFolderSyncPassthrough() throws Exception {
         AbstractRegionFile stub = stub();
         AtomicReference<Object> seenInfo = new AtomicReference<>();

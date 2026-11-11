@@ -22,3 +22,11 @@ What the measurements showed, without the raw tables. Only conclusions that stil
 - No shared disk, network filesystem, or multi-server storage.
 
 Judge a rollout on normal play after warm-up, not on one-time conversion or first-minute numbers.
+
+## Open work
+
+Measured or reviewed on 2026-11-10, not implemented yet (measure before and after, see the `linearmc-perf` skill):
+
+- Pool `ZstdCompressCtx`/`ZstdDecompressCtx` and size-classed buffers; a `ZstdOutputStream` is created per bucket today (`linear-core/codec/.../versions/base/AbstractBucketedVersion.java`). Model: SectorTool `ZstdCtxManager`/`BufferChoices`.
+- V2/V3: recompress only dirty buckets (DivineMC `V2LinearBase.buildBuckets`, Pumpkin `linear.rs`); every bucket is recompressed on each flush today.
+- Horizon: the payload arrives already compressed by `RegionFileVersion` and is decompressed again in `LinearWritePath.normalizeWritePayload`; intercept before `RegionFileVersion.wrap`.

@@ -68,9 +68,9 @@ public class LinearCommandTest {
         assertEquals(Optional.of("world"), filtered.worldFilter());
         assertTrue(parser.parse(new String[]{}) instanceof LinearAction.HelpAction);
         assertTrue(parser.parse(new String[]{"help"}) instanceof LinearAction.HelpAction);
-        assertThrows(net.linear.command.parse.InvalidUsageException.class,
+        assertThrows(InvalidUsageException.class,
             () -> parser.parse(new String[]{"bogus"}));
-        assertThrows(net.linear.command.parse.InvalidUsageException.class,
+        assertThrows(InvalidUsageException.class,
             () -> parser.parse(new String[]{"stats", "a", "b"}));
     }
 
@@ -92,9 +92,9 @@ public class LinearCommandTest {
         assertEquals(4, full.threads());
         assertFalse(full.dryRun());
 
-        assertThrows(net.linear.command.parse.InvalidUsageException.class,
+        assertThrows(InvalidUsageException.class,
             () -> parser.parse(new String[]{"convert"}));
-        assertThrows(net.linear.command.parse.InvalidUsageException.class,
+        assertThrows(InvalidUsageException.class,
             () -> parser.parse(new String[]{"convert", "world", "--level", "99"}));
     }
 
@@ -115,9 +115,9 @@ public class LinearCommandTest {
                 new String[]{"queue", "pause", id.toString().substring(0, 8)});
         assertEquals(QueueOp.PAUSE, prefixPause.op());
         assertEquals(Optional.of(id.toString().substring(0, 8)), prefixPause.jobRef());
-        assertThrows(net.linear.command.parse.InvalidUsageException.class,
+        assertThrows(InvalidUsageException.class,
             () -> parser.parse(new String[]{"queue", "pause", "  "}));
-        assertThrows(net.linear.command.parse.InvalidUsageException.class,
+        assertThrows(InvalidUsageException.class,
             () -> parser.parse(new String[]{"queue", "bogus"}));
     }
 

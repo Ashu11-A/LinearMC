@@ -10,8 +10,6 @@ import net.linear.LinearRegionFile;
 import net.linear.compression.Lz4SlotCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import net.linear.io.LinearDirectStreams;
-import net.linear.versions.codecs.V1Linear;
 import net.linear.versions.ChunkSlotTable;
 
 /**

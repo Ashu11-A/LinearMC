@@ -2,7 +2,6 @@ package net.linear.versions.encoders;
 
 import java.nio.ByteBuffer;
 import net.linear.probe.LinearBucketGrid;
-import net.linear.versions.codecs.PumpkinLinear;
 import net.linear.versions.decoders.PumpkinDecoder;
 import net.linear.versions.ChunkSlotTable;
 import net.linear.versions.ChunkSlotView;

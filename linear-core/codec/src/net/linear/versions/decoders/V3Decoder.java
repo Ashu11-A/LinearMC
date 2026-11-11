@@ -3,7 +3,6 @@ package net.linear.versions.decoders;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import net.linear.versions.base.AbstractLinearVersion;
-import net.linear.versions.codecs.V3Linear;
 
 /**
  * Read side of the V3 codec (wire 4: 10 B header + 12 B entries).

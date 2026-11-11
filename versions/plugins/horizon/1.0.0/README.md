@@ -24,10 +24,10 @@ Compatibility contract:
 - Build target: Paper dev bundle 26.1.2 (oldest supported line), `api-version: 26.1`.
 - Tested against 26.1.2, 26.2 and 26.3 on every push by `test.yml`.
 - Hosts: Paper, Folia, CanvasMC and compatible forks. The enable log names
-  the detected family (`host=CANVAS|FOLIA|PAPER|UNKNOWN`) and whether the
-  Moonrise exists bridge is armed.
-- No host-specific code path: the mixin uses vanilla NMS targets plus a
-  `require = 0` optional bridge.
+  the detected family (`host=CANVAS|FOLIA|PAPER|UNKNOWN`).
+- No host-specific code path: every storage injector is required, and
+  `MixinDescriptorsTest` checks each host method per dev bundle (the Folia-only
+  `stopPart2` is the one target allowed to be absent).
 
 Verification rule: trust on-disk superblock bytes, never file names.
 Reason: the injector historically did not fail boot when a patch missed, so a wrongly named file can hide a miss.

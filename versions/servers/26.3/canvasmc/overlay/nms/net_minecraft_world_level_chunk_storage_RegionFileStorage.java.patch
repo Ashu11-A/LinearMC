@@ -234,7 +234,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
              return null;
          }
  
-@@ -208,88 +299,245 @@
+@@ -208,88 +299,246 @@
              return ret;
          }
  
@@ -356,7 +356,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +        // reverse beside it, so live converts defer loaded regions instead of
 +        // copying files under live writes.
 +        // Open-but-clean handles stay undetected; shadow protection is the backstop.
-+        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked.
++        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked proceeds).
 +        net.linear.LinearRegionConverter.linear$setForwardSkipPredicate(path -> {
 +            try {
 +                final Path parent = path.toAbsolutePath().getParent();
@@ -433,8 +433,9 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
  
 +            final Path regionPath;
 +            if (create) {
-+                // Linear - create in the storage's configured format (default LINEAR).
-+                regionPath = this.folder.resolve(getRegionFileName(pos.x(), pos.z(), this.format));
++                // Linear - an existing region keeps its file; else the configured format (core-owned).
++                regionPath = this.folder.resolve(net.linear.probe.LinearStorageProbe.resolveFileName(
++                    this.folder, pos.x() >> REGION_SHIFT, pos.z() >> REGION_SHIFT, this.format));
 +            } else {
 +                // Linear - triple-read probe owned by core (LinearStorageProbe.probeExisting:
 +                // .mca preferred, else .linear, else .b_linear; null means "no extension exists").

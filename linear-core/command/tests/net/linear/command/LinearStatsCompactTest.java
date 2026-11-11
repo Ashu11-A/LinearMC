@@ -187,7 +187,7 @@ public class LinearStatsCompactTest {
         LinearStatsCompact.CompactRow totals = rows.get(rows.size() - 1);
         assertEquals(LinearStatsCompact.RowKind.TOTALS, totals.kind());
         assertEquals(java.util.Set.of("files", "fail", "saved"), totals.parts().keySet());
-        assertEquals(net.linear.command.stats.health.LinearStatsHealth.WARN, totals.health().get("fail"));
+        assertEquals(LinearStatsHealth.WARN, totals.health().get("fail"));
         assertTrue(totals.health().containsKey("saved"));
         assertTrue(totals.text().contains("files=3"));
         assertTrue(totals.text().contains("fail=1"));

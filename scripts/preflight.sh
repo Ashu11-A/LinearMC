@@ -4,12 +4,16 @@
 # round-trip (the last two CI failures were both in this class).
 #
 # Usage: scripts/preflight.sh [--folia-dir DIR] [--compile] [--tests]
-#   default FOLIA_DIR=/tmp/folia-linear/folia (never modified, except --compile/--tests run gradle there)
+#   default FOLIA_DIR=proof/fork-folia (scripts/stage.sh folia), else /tmp/folia-linear/folia
+#   (never modified, except --compile/--tests run gradle there)
 # Exit 0 = push-ready. Anything else = fix locally, do NOT push.
 set -u
 
 SUPPLEMENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-FOLIA_DIR=/tmp/folia-linear/folia
+# Default fork workspace: the one scripts/stage.sh folia creates (git-ignored
+# proof/), falling back to the legacy /tmp path CI still clones into.
+FOLIA_DIR="$SUPPLEMENT_DIR/proof/fork-folia"
+[ -d "$FOLIA_DIR/.git" ] || FOLIA_DIR=/tmp/folia-linear/folia
 DO_COMPILE=0
 DO_TESTS=0
 for arg in "$@"; do
@@ -375,10 +379,8 @@ fi
 # reasons (add a case arm, never delete the reason): none today.
 is_parity_exempt() { # $1 = seam -> return 0 if exempt
   case "$1" in
-    # linear$setFlushListener wires the Paper flush-completion event bridge
-    # (LinearFlushBridge) on fork legs; the Horizon leg has no equivalent
-    # event to deliver to, so the core default no-op listener stands.
-    linear\$setFlushListener) return 0 ;;
+    # (none: the Horizon leg wires linear$setFlushListener to its own
+    # LinearRegionFlushCompletedEvent since the leg-parity pass)
     *) return 1 ;;
   esac
 }
@@ -410,6 +412,26 @@ if grep -rnE 'gh release (upload|create|edit|delete)' "$SUPPLEMENT_DIR/.github/w
 else
   ok "gh invocations carry --repo"
 fi
+
+# 5b. Leg parity contract (parity/capabilities.yml): schema, every evidence
+# symbol resolves, named tests exist. Gaps are listed, not fatal here;
+# releases run --release (build.yml discover job, before any build).
+if python3 -c "import yaml" 2>/dev/null; then
+  PARITY_OUT="$(bash "$SUPPLEMENT_DIR/scripts/parity-check.sh" 2>&1)" && PARITY_RC=0 || PARITY_RC=$?
+  if [ "$PARITY_RC" -eq 0 ]; then
+    ok "parity contract resolves ($(printf '%s\n' "$PARITY_OUT" | tail -1))"
+  else
+    printf '%s\n' "$PARITY_OUT" | grep '^FAIL' >&2 || true
+    nope "parity contract (scripts/parity-check.sh)"
+  fi
+else
+  echo "SKIP: parity contract (no pyyaml)"
+fi
+
+# 5c. Java import lint (unused, duplicate, redundant imports; qualified names
+# of imported types) over every leg, including Java files patches create.
+LINT_OUT="$(python3 "$SUPPLEMENT_DIR/scripts/lint-java.py" 2>&1)" && ok "$LINT_OUT" || {
+  printf '%s\n' "$LINT_OUT" >&2; nope "java import lint (scripts/lint-java.py --fix)"; }
 
 # 6. Opt-in slow gates (need fork gradle env + network).
 if [ "$DO_COMPILE" = 1 ]; then

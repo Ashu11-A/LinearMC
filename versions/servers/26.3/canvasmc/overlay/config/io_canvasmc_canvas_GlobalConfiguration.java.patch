@@ -1,8 +1,18 @@
 diff --git a/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java b/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java
-index 516415d6..2f434549 100644
+index e361b920..6ed86cff 100644
 --- a/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java
 +++ b/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java
-@@ -405,5 +405,48 @@ public class GlobalConfiguration extends Part {
+@@ -161,6 +161,9 @@ public class GlobalConfiguration extends Part {
+ 
+         // validate the configuration so users don't end up doing a stupid
+         Validator.validateObject(configuration);
++        // Linear - writer keys: validated and published to the core once per config load.
++        net.linear.config.LinearFileConfig.pushWriterValues(
++            configuration.linear.implementation, configuration.linear.gridSize, LOGGER::warn, LOGGER::info);
+ 
+         if (TickRegions.hasStarted()) {
+ 
+@@ -401,6 +404,65 @@ public class GlobalConfiguration extends Part {
          public boolean preventExcessiveVelocityMoveOutOfRegion = false;
      }
  
@@ -40,6 +50,20 @@ index 516415d6..2f434549 100644
 +                        "Log Linear flush batches. Currently informational only."
 +                    )
 +                );
++            option("implementation")
++                .docs(
++                    Style.wrap(
++                        "Writer inside new .linear files: V1 (default), V2 or V3 (bucketed).",
++                        "Unknown values log a warning and write V1. -Dlinearmc.implementation wins."
++                    )
++                );
++            option("gridSize")
++                .docs(
++                    Style.wrap(
++                        "Bucket grid for V2/V3 writes: 1, 2, 4, 8 (default), 16 or 32.",
++                        "Off-list values log a warning and use 8. -Dlinearmc.grid-size wins."
++                    )
++                );
 +        }
 +
 +        public long flushFrequency = 10L;
@@ -47,6 +71,8 @@ index 516415d6..2f434549 100644
 +        public int compressionWorkers = 0;
 +        public int longDistanceMatching = 0;
 +        public boolean logFlushBatches = false;
++        public String implementation = "V1";
++        public int gridSize = 8;
 +    }
 +
      public ChunkSystem chunkSystem = new ChunkSystem();

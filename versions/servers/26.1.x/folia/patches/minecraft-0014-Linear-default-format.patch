@@ -3,17 +3,9 @@ From: folia-linear-build <folia-linear-build@users.noreply.github.com>
 Date: Fri, 25 Sep 2026 15:56:16 -0300
 Subject: [PATCH] Linear default format 6
 
----
- ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java |    2 +-
- net/minecraft/util/worldupdate/RegionStorageUpgrader.java    |    2 +-
- net/minecraft/world/level/chunk/storage/IOWorker.java        |    2 +-
- net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java |    4 ++--
- net/minecraft/world/level/chunk/storage/RegionFileStorage.java |    8 ++++----
- net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java |    2 +-
- 6 files changed, 10 insertions(+), 10 deletions(-)
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
-index e018040..798f3e6 100644
+index e018040e1a8ed7de5d8a7f87814cbe0720f7cda8..079a32be319d154070e8dabdd34ae58788bd5513 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
 @@ -61,7 +61,7 @@ public final class EntityDataController extends MoonriseRegionFileIO.RegionDataC
@@ -26,10 +18,10 @@ index e018040..798f3e6 100644
  
          // Linear - format-aware entry point. The outer EntityDataController
 diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
-index 9732cca..20dafdc 100644
+index 9852d8ea980547712fd683097ed9b71998268a74..eb452f4833ba9344b98a9e08c5337a58e0b5509b 100644
 --- a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
 +++ b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
-@@ -204,7 +204,7 @@ public class RegionStorageUpgrader {
+@@ -216,7 +216,7 @@ public class RegionStorageUpgrader {
  
                      // Linear - open in probed format via the factory; enumerate with
                      // hasChunk (doesChunkExist is anvil-only and not in the shared contract).
@@ -39,7 +31,7 @@ index 9732cca..20dafdc 100644
                              for (int z = 0; z < 32; z++) {
                                  ChunkPos pos = new ChunkPos(x + xOffset, z + zOffset);
 diff --git a/net/minecraft/world/level/chunk/storage/IOWorker.java b/net/minecraft/world/level/chunk/storage/IOWorker.java
-index 4d1eb7f..fab9427 100644
+index 4d1eb7f22dbd4b083e64f65f4ca67b858e10d705..1db30c61a1bd49744f577a5d8e80b2f59b25cc81 100644
 --- a/net/minecraft/world/level/chunk/storage/IOWorker.java
 +++ b/net/minecraft/world/level/chunk/storage/IOWorker.java
 @@ -37,7 +37,7 @@ public class IOWorker implements AutoCloseable, ChunkScanAccess {
@@ -52,7 +44,7 @@ index 4d1eb7f..fab9427 100644
  
      // Linear - format-aware entry point (called by the SimpleRegionStorage overload).
 diff --git a/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
-index f84175c..dfb7f6f 100644
+index f84175c2526d998c6fff2d94a6bd5fbf87f85ba6..2d2e54e91edb7347a137ef7bd2d1994e1aa90f9d 100644
 --- a/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
 @@ -23,13 +23,13 @@ public class RecreatingSimpleRegionStorage extends SimpleRegionStorage {
@@ -72,7 +64,7 @@ index f84175c..dfb7f6f 100644
          final RegionStorageInfo readInfo,
          final Path readFolder,
 diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
-index 797b594..66eddc0 100644
+index 88ab8c0729ac34de49857399cb8a6162e1004783..2f99430f693e4339a4cf9d0f51796b7d8f1b0f61 100644
 --- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 @@ -34,8 +34,8 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
@@ -86,7 +78,7 @@ index 797b594..66eddc0 100644
      // Linear - added linearCrashOnBrokenSymlink (world key
      // region-format.linear.crash-on-broken-symlink, default true) for the guard.
      public final RegionFileFormat format;
-@@ -387,7 +387,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -390,7 +390,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      // Paper end - rewrite chunk system
  
      protected RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync) { // Paper - protected
@@ -95,17 +87,20 @@ index 797b594..66eddc0 100644
      }
  
      // Linear - format-aware entry point. RegionStorageInfo is deliberately
-@@ -441,7 +441,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -444,8 +444,9 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
                  evicted = this.regionCache.removeLast(); // close outside (see below)
              }
  
 -            // Linear - create in the storage's configured format (default ANVIL).
-+            // Linear - create in the storage's configured format (default LINEAR).
-             final Path regionPath = this.folder.resolve(getRegionFileName(pos.x(), pos.z(), this.format));
+-            final Path regionPath = this.folder.resolve(getRegionFileName(pos.x(), pos.z(), this.format));
++            // Linear - an existing region keeps its file; else the configured format (core-owned).
++            final Path regionPath = this.folder.resolve(net.linear.probe.LinearStorageProbe.resolveFileName(
++                this.folder, pos.x() >> REGION_SHIFT, pos.z() >> REGION_SHIFT, this.format));
  
              this.createRegionFile(key);
+ 
 diff --git a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
-index 13e9c03..ad67755 100644
+index 13e9c031efcd87728a76d4f47f15890c3b58e5dd..1b029b06bece2fa970b4cb2aaea869f9da48d364 100644
 --- a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
 @@ -34,7 +34,7 @@ public class SimpleRegionStorage implements ca.spottedleaf.moonrise.patches.chun
@@ -117,6 +112,3 @@ index 13e9c03..ad67755 100644
      }
  
      // Linear - format-aware entry point. ChunkMap/PoiManager thread the world
--- 
-2.43.0
-

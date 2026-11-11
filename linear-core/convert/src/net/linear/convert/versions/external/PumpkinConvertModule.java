@@ -12,7 +12,6 @@ import net.linear.LinearImplementation;
 import net.linear.RegionFileFormat;
 import net.linear.convert.versions.AbstractVersionConvertModule;
 import net.linear.versions.codecs.PumpkinLinear;
-import net.linear.LinearRegionConverter;
 import net.linear.versions.ChunkSlotTable;
 import net.linear.versions.RegionFormatDetector;
 import net.linear.versions.VersionWriteParams;

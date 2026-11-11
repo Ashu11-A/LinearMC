@@ -79,8 +79,8 @@ public sealed interface LinearAction
      * pairs ({@code .linear} vs {@code .linear}) are only expressible here.
      */
     record ExplicitConvertAction(String world, int level, int threads, boolean dryRun,
-        net.linear.LinearRegionConverter.ConvertFormat from,
-        net.linear.LinearRegionConverter.ConvertFormat to, int grid) implements LinearAction {
+        LinearRegionConverter.ConvertFormat from,
+        LinearRegionConverter.ConvertFormat to, int grid) implements LinearAction {
         public ExplicitConvertAction {
             if (world == null) {
                 throw new IllegalArgumentException("world must not be null");
@@ -94,7 +94,7 @@ public sealed interface LinearAction
             if (from == null) {
                 throw new IllegalArgumentException("from must not be null");
             }
-            if (to == null || to == net.linear.LinearRegionConverter.ConvertFormat.AUTO) {
+            if (to == null || to == LinearRegionConverter.ConvertFormat.AUTO) {
                 throw new IllegalArgumentException("to must be concrete, got " + to);
             }
         }

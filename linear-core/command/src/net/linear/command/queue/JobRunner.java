@@ -61,25 +61,21 @@ public final class JobRunner {
         if (threads < 1) {
             throw new IllegalArgumentException("threads must be >= 1, got " + threads);
         }
-        try {
-            job.start();
-        } catch (IllegalStateException cancelledBeforeStart) {
+        // A leg may start the job before its quiesce gate (so the gate can fail
+        // it), and it may be paused there; a pause is honoured below.
+        if (job.state() == JobState.QUEUED) {
+            try {
+                job.start();
+            } catch (IllegalStateException cancelledBeforeStart) {
+                return;
+            }
+        } else if (job.state() != JobState.RUNNING && job.state() != JobState.PAUSED) {
             return;
         }
         final LinearRegionConverter.Listener listener = new LinearRegionConverter.Listener() {
             @Override
             public void onFile(LinearRegionConverter.FileResult r) {
-                // Pause takes effect between files: sleep-poll (bounded, no
-                // hot spin) so no progress is recorded while paused.
-                while (job.state() == JobState.PAUSED) {
-                    try {
-                        Thread.sleep(100L);
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        throw new RuntimeException("interrupted while paused", interrupted);
-                    }
-                }
-                if (job.state() == JobState.CANCELLED) {
+                if (awaitUnpaused(job) == JobState.CANCELLED) {
                     throw new RuntimeException("job " + job.id() + " cancelled");
                 }
                 job.recordFile(r);
@@ -91,29 +87,29 @@ public final class JobRunner {
             }
         };
         for (Path folder : folders) {
-            if (job.state() == JobState.CANCELLED) {
+            if (awaitUnpaused(job) == JobState.CANCELLED) {
                 return;
             }
             try {
                 if (job.isExplicit()) {
                     // Explicit-only (FR3): no silent cross-format rewrite; same-extension
                     // converts swap atomically after pre-swap validation (never in-place).
-                    net.linear.LinearRegionConverter.ConvertFormat from = job.fromFormat();
-                    net.linear.LinearRegionConverter.ConvertFormat to = job.toFormat();
+                    LinearRegionConverter.ConvertFormat from = job.fromFormat();
+                    LinearRegionConverter.ConvertFormat to = job.toFormat();
                     LinearRegionConverter.convertRegionFolderExplicit(folder, level, job.gridSize(),
                         listener, false, from, to);
                 } else {
-                // Union-per-target: every convertible non-target file converts
-                // (e.g. toward LINEAR, both .mca and .b_linear sources queue).
-                net.linear.RegionFileFormat target = job.direction().targetFormat();
-                if (target == net.linear.RegionFileFormat.ANVIL) {
-                    LinearRegionConverter.convertRegionFolderReverse(folder, level, listener, false);
-                } else if (target == net.linear.RegionFileFormat.B_LINEAR) {
-                    LinearRegionConverter.convertRegionFolderToFormat(folder, level, listener, false,
-                        net.linear.RegionFileFormat.B_LINEAR);
-                } else {
-                    LinearRegionConverter.convertRegionFolder(folder, level, listener, false);
-                }
+                    // Union-per-target: every convertible non-target file converts
+                    // (e.g. toward LINEAR, both .mca and .b_linear sources queue).
+                    RegionFileFormat target = job.direction().targetFormat();
+                    if (target == RegionFileFormat.ANVIL) {
+                        LinearRegionConverter.convertRegionFolderReverse(folder, level, listener, false);
+                    } else if (target == RegionFileFormat.B_LINEAR) {
+                        LinearRegionConverter.convertRegionFolderToFormat(folder, level, listener, false,
+                            RegionFileFormat.B_LINEAR);
+                    } else {
+                        LinearRegionConverter.convertRegionFolder(folder, level, listener, false);
+                    }
                 }
             } catch (LinearRegionConverter.ConversionProtectionException failed) {
                 if (job.state() == JobState.CANCELLED) {
@@ -152,5 +148,23 @@ public final class JobRunner {
             job.complete();
         }
         // CANCELLED stays CANCELLED (complete() would lie about it).
+    }
+
+    /**
+     * Pause takes effect between files and folders: sleep-poll (bounded, no
+     * hot spin) so no progress is recorded while paused.
+     *
+     * @return the job state once it is no longer PAUSED
+     */
+    private static JobState awaitUnpaused(ConvertJob job) {
+        while (job.state() == JobState.PAUSED) {
+            try {
+                Thread.sleep(100L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("interrupted while paused", interrupted);
+            }
+        }
+        return job.state();
     }
 }

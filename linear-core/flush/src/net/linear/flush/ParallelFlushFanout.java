@@ -206,8 +206,8 @@ public final class ParallelFlushFanout {
     public static void joinInFlightAsync() {
         boolean interrupted = false;
         while (true) {
-            java.util.List<java.util.concurrent.Future<?>> batch =
-                new java.util.ArrayList<>(IN_FLIGHT_ASYNC);
+            List<java.util.concurrent.Future<?>> batch =
+                new ArrayList<>(IN_FLIGHT_ASYNC);
             if (batch.isEmpty()) {
                 break;
             }
@@ -272,8 +272,8 @@ public final class ParallelFlushFanout {
             }
             return;
         }
-        final java.util.List<java.util.concurrent.Future<?>> futures =
-            new java.util.ArrayList<>(snapshot.size() - 1);
+        final List<java.util.concurrent.Future<?>> futures =
+            new ArrayList<>(snapshot.size() - 1);
         for (int i = 1; i < snapshot.size(); i++) {
             final AbstractRegionFile f = snapshot.get(i);
             try {

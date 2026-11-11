@@ -102,8 +102,8 @@ public final class LinearCommandParser {
         int level = 6;
         int threads = 1;
         boolean dryRun = true;
-        net.linear.LinearRegionConverter.ConvertFormat from = null;
-        net.linear.LinearRegionConverter.ConvertFormat to = null;
+        LinearRegionConverter.ConvertFormat from = null;
+        LinearRegionConverter.ConvertFormat to = null;
         int grid = 0;
         boolean sawExplicit = false;
         for (int i = 2; i < args.length; i++) {
@@ -136,8 +136,8 @@ public final class LinearCommandParser {
                 }
                 case "--from": {
                     String raw = nextValue(args, ++i, "--from");
-                    net.linear.LinearRegionConverter.ConvertFormat f =
-                        net.linear.LinearRegionConverter.ConvertFormat.fromCli(raw);
+                    LinearRegionConverter.ConvertFormat f =
+                        LinearRegionConverter.ConvertFormat.fromCli(raw);
                     if (f == null) {
                         throw usage("--from must be mca|v1|v2|v3|blinear|pumpkin|linear|auto, got '" + raw + "'");
                     }
@@ -147,15 +147,15 @@ public final class LinearCommandParser {
                 }
                 case "--to": {
                     String raw = nextValue(args, ++i, "--to");
-                    net.linear.LinearRegionConverter.ConvertFormat t =
-                        net.linear.LinearRegionConverter.ConvertFormat.fromCli(raw);
-                    if (t == null || t == net.linear.LinearRegionConverter.ConvertFormat.AUTO) {
+                    LinearRegionConverter.ConvertFormat t =
+                        LinearRegionConverter.ConvertFormat.fromCli(raw);
+                    if (t == null || t == LinearRegionConverter.ConvertFormat.AUTO) {
                         throw usage("--to must be mca|v1|v2|v3|blinear|pumpkin|linear, got '" + raw + "'");
                     }
                     // --to linear is the shipped V1 default (not a family wildcard):
                     // normalize here so the converter only sees concrete targets.
-                    if (t == net.linear.LinearRegionConverter.ConvertFormat.LINEAR) {
-                        t = net.linear.LinearRegionConverter.ConvertFormat.V1;
+                    if (t == LinearRegionConverter.ConvertFormat.LINEAR) {
+                        t = LinearRegionConverter.ConvertFormat.V1;
                     }
                     to = t;
                     sawExplicit = true;
@@ -187,8 +187,8 @@ public final class LinearCommandParser {
             if (to == null) {
                 throw usage("explicit convert needs --to <format>");
             }
-            net.linear.LinearRegionConverter.ConvertFormat effectiveFrom =
-                from != null ? from : net.linear.LinearRegionConverter.ConvertFormat.AUTO;
+            LinearRegionConverter.ConvertFormat effectiveFrom =
+                from != null ? from : LinearRegionConverter.ConvertFormat.AUTO;
             return new LinearAction.ExplicitConvertAction(world, level, threads, dryRun,
                 effectiveFrom, to, grid);
         }

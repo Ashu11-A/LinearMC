@@ -69,8 +69,7 @@ public final class LinearCommandExecutor {
     }
 
     private void runStats(CommandSender sender, LinearAction.StatsAction action) {
-        if (!sender.hasPermission(LinearPermissions.STATS)
-                && !sender.hasPermission(LinearPermissions.BASE)) {
+        if (!LinearPermissions.allows(sender::hasPermission, LinearPermissions.Action.LINEAR_STATS)) {
             sender.sendMessage(LinearPermissions.denied("linearstats"));
             return;
         }
@@ -102,8 +101,7 @@ public final class LinearCommandExecutor {
     }
 
     private void runConvert(CommandSender sender, LinearAction.ConvertAction action) {
-        if (!sender.hasPermission(LinearPermissions.CONVERT)
-                && !sender.hasPermission(LinearPermissions.BASE)) {
+        if (!LinearPermissions.allows(sender::hasPermission, LinearPermissions.Action.CONVERT)) {
             sender.sendMessage(LinearPermissions.denied("linear convert"));
             return;
         }
@@ -120,8 +118,7 @@ public final class LinearCommandExecutor {
     }
 
     private void runConvertExplicit(CommandSender sender, LinearAction.ExplicitConvertAction action) {
-        if (!sender.hasPermission(LinearPermissions.CONVERT)
-                && !sender.hasPermission(LinearPermissions.BASE)) {
+        if (!LinearPermissions.allows(sender::hasPermission, LinearPermissions.Action.CONVERT)) {
             sender.sendMessage(LinearPermissions.denied("linear convert"));
             return;
         }
@@ -133,7 +130,7 @@ public final class LinearCommandExecutor {
         job.setExplicit(action.from(), action.to(), action.grid());
         String words = "Copy from " + action.from().name().toLowerCase(java.util.Locale.ROOT)
             + " to " + action.to().name().toLowerCase(java.util.Locale.ROOT);
-        String params = net.linear.LinearRegionConverter.explicitParamsDetail(
+        String params = LinearRegionConverter.explicitParamsDetail(
             action.to(), action.level(), action.grid());
         if (action.dryRun()) {
             sender.sendMessage("Queued " + job.shortId() + " for " + action.world() + ": "
@@ -144,19 +141,18 @@ public final class LinearCommandExecutor {
         }
     }
 
-    private static ConvertDirection placeholderFor(net.linear.LinearRegionConverter.ConvertFormat to) {
-        if (to == net.linear.LinearRegionConverter.ConvertFormat.MCA) {
+    private static ConvertDirection placeholderFor(LinearRegionConverter.ConvertFormat to) {
+        if (to == LinearRegionConverter.ConvertFormat.MCA) {
             return ConvertDirection.LINEAR_TO_MCA;
         }
-        if (to == net.linear.LinearRegionConverter.ConvertFormat.B_LINEAR) {
+        if (to == LinearRegionConverter.ConvertFormat.B_LINEAR) {
             return ConvertDirection.MCA_TO_BLINEAR;
         }
         return ConvertDirection.MCA_TO_LINEAR;
     }
 
     private void runQueue(CommandSender sender, LinearAction.QueueAction action) {
-        if (!sender.hasPermission(LinearPermissions.QUEUE)
-                && !sender.hasPermission(LinearPermissions.BASE)) {
+        if (!LinearPermissions.allows(sender::hasPermission, LinearPermissions.Action.QUEUE)) {
             sender.sendMessage(LinearPermissions.denied("linear queue"));
             return;
         }
@@ -219,8 +215,7 @@ public final class LinearCommandExecutor {
     }
 
     private void runStatus(CommandSender sender, LinearAction.StatusAction action) {
-        if (!sender.hasPermission(LinearPermissions.QUEUE)
-                && !sender.hasPermission(LinearPermissions.BASE)) {
+        if (!LinearPermissions.allows(sender::hasPermission, LinearPermissions.Action.QUEUE)) {
             sender.sendMessage(LinearPermissions.denied("linear queue"));
             return;
         }

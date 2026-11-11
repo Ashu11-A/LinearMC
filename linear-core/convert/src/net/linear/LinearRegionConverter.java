@@ -151,7 +151,7 @@ public final class LinearRegionConverter {
 
     /** Folder-level totals. {@code failures} holds one entry per terminally failed file. */
     public record ConversionSummary(
-        int converted, int validated, int deleted, int failed, java.util.List<FileResult> failures) {}
+        int converted, int validated, int deleted, int failed, List<FileResult> failures) {}
 
     /** Thrown when one or more files exhaust all attempts. The caller (B2) halts for inspection. */
     public static class ConversionProtectionException extends Exception {
@@ -262,7 +262,7 @@ public final class LinearRegionConverter {
     }
 
     public static AbstractRegionFile openProbed(Path file, Path folder, int level) throws IOException {
-        return OPENER.open(file, folder, false, null, level);
+        return net.linear.probe.LinearStorageProbe.converterOpen(() -> OPENER.open(file, folder, false, null, level));
     }
 
     /** Write-side seam for the reverse ({@code .linear} -&gt; {@code .mca}) pipeline. */
@@ -463,7 +463,7 @@ public final class LinearRegionConverter {
     }
 
     /** Delegates to {@link ConversionAlerts#describePairExtensions}. */
-    public static String describePairExtensions(java.util.List<FileResult> failures) {
+    public static String describePairExtensions(List<FileResult> failures) {
         return ConversionAlerts.describePairExtensions(failures);
     }
 

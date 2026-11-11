@@ -59,6 +59,26 @@ public class JobRunnerTest {
 
     @Test
     public void reverseRunsConvertRegionFolderReverse() throws Exception {
+        runReverse(JobState.QUEUED);
+    }
+
+    @Test
+    public void aJobTheLegStartedBeforeItsQuiesceGateStillRuns() throws Exception {
+        runReverse(JobState.RUNNING);
+    }
+
+    @Test
+    public void aJobPausedDuringTheLegsQuiesceGateRunsAfterResume() throws Exception {
+        runReverse(JobState.PAUSED);
+    }
+
+    @Test
+    public void aJobCancelledBeforeTheRunTouchesNothing() throws Exception {
+        runReverse(JobState.CANCELLED);
+    }
+
+    /** Reverse run of one .linear file, with the job handed over in state {@code handedOver}. */
+    private void runReverse(JobState handedOver) throws Exception {
         Path region = temporaryFolder.newFolder("region").toPath();
         Path source = region.resolve("r.0.0.linear");
         long chunk = ChunkKey.of(0, 0);
@@ -83,7 +103,29 @@ public class JobRunnerTest {
 
         ConvertJob job = new ConvertJob(
             ConvertDirection.LINEAR_TO_MCA, "world", 6, 1, false, 0);
-        JobRunner.run(job, List.of(region), 6, 1);
+        if (handedOver == JobState.CANCELLED) {
+            job.cancel();
+            JobRunner.run(job, List.of(region), 6, 1);
+            assertEquals(JobState.CANCELLED, job.state());
+            assertEquals(0, sinkOpens.get());
+            assertTrue(Files.isRegularFile(source));
+            return;
+        }
+        if (handedOver != JobState.QUEUED) {
+            job.start();
+        }
+        if (handedOver == JobState.PAUSED) {
+            job.pause();
+            Thread runner = new Thread(() -> JobRunner.run(job, List.of(region), 6, 1));
+            runner.start();
+            Thread.sleep(300L);
+            assertTrue("a paused job converts nothing", Files.isRegularFile(source));
+            assertEquals(0, sinkOpens.get());
+            job.resume();
+            runner.join(30_000L);
+        } else {
+            JobRunner.run(job, List.of(region), 6, 1);
+        }
 
         assertEquals(JobState.DONE, job.state());
         assertEquals(1, sinkOpens.get());
@@ -127,6 +169,33 @@ public class JobRunnerTest {
         assertEquals(1, sinkOpens.get());
         assertFalse(Files.isRegularFile(source));
         assertArrayEquals(payload, mcaChunks.get(chunk));
+    }
+
+    @Test
+    public void towardBufferedConvertsToBLinear() throws Exception {
+        Path region = temporaryFolder.newFolder("regionfwb").toPath();
+        Path source = region.resolve("r.0.0.mca");
+        Files.write(source, new byte[(int) LinearRegionConverter.MIN_ANVIL_SIZE]);
+        Map<Long, byte[]> mcaChunks = new ConcurrentHashMap<>();
+        mcaChunks.put(ChunkKey.of(0, 0), new byte[]{7, 8, 9});
+        LinearRegionConverter.linear$setRegionOpener((file, folder, sync, format, level) -> {
+            String name = file.getFileName().toString();
+            if (name.endsWith(RegionFileFormat.ANVIL_EXTENSION)) {
+                return new FakeMcaFile(mcaChunks);
+            }
+            if (name.endsWith(RegionFileFormat.B_LINEAR_EXTENSION)) {
+                return new BufferedLinearRegionFile(file, level);
+            }
+            return new LinearRegionFile(file, level);
+        });
+
+        ConvertJob job = new ConvertJob(ConvertDirection.MCA_TO_BLINEAR, "world", 6, 1, false, 0);
+        JobRunner.run(job, List.of(region), 6, 1);
+
+        assertEquals(JobState.DONE, job.state());
+        assertFalse(Files.exists(source));
+        assertTrue(Files.isRegularFile(region.resolve("r.0.0.b_linear")));
+        assertFalse(Files.exists(region.resolve("r.0.0.linear")));
     }
 
     @Test

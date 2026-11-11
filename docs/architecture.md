@@ -91,5 +91,4 @@ Server legs under `versions/servers` are thin patches over the game. They adapt 
 - There is one shared, bounded worker pool for the whole server — no thread per file, no pool per folder.
 - Memory-heavy paths reuse direct buffers end to end instead of allocating on every flush, keeping garbage-collection pauses down on busy servers.
 - Save statistics use lock-free counters only, so measuring never slows saving.
-- Convert single-flight is per storage folder: Canvas and Horizon hold a static concurrent set of in-flight folders; a second `--execute` on an in-flight folder is rejected with `conversion already running for <folder>` (no queue, no block) and the entry is removed in `finally` after the worker settles. Folia already serializes converts through its singleton worker, so its threading is left alone.
-- Convert scope differs by leg on purpose: Horizon covers the single `region/` folder while Canvas and Folia cover `region/`, `entities/`, and `poi/`. This is pre-existing and intentional.
+- Convert single-flight is per storage folder on every leg (core `FolderClaims`): a job claims all of its folders (`region/`, `entities/`, `poi/`) or none, and a second `--execute` on a busy folder is rejected with `conversion already running for <folder>` before any job is queued. Folia additionally runs passes one after another on its single convert worker.

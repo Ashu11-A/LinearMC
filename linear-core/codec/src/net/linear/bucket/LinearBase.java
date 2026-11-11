@@ -4,7 +4,6 @@ import net.linear.versions.codecs.V1Linear;
 import net.linear.versions.codecs.V2Linear;
 import net.linear.versions.codecs.V3Linear;
 import net.linear.versions.Version;
-import net.linear.LinearRegionFile;
 
 /**
  * Single wire-to-implementation map for the linear region codecs

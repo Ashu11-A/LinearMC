@@ -100,7 +100,7 @@ public class RegionStorageUpgraderScanTest {
         // "(linear | mca)" stays rejected.
         String pattern = actual.pattern();
         assertFalse(pattern.contains(" "), "production REGEX must not contain literal spaces: " + pattern);
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\(([^)]+)\\)\\$$").matcher(pattern);
+        java.util.regex.Matcher m = Pattern.compile("\\(([^)]+)\\)\\$$").matcher(pattern);
         assertTrue(m.find(), "production REGEX must end with a parenthesised alternation: " + pattern);
         java.util.Set<String> alts = new java.util.HashSet<>(java.util.Arrays.asList(m.group(1).split("\\|")));
         assertEquals(new java.util.HashSet<>(java.util.Arrays.asList("mca", "linear", "b_linear")), alts,

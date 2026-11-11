@@ -133,12 +133,12 @@ public final class LinearRegionFile implements AbstractRegionFile {
 
     /** Adapter wiring: live {@code compression-workers} reader (registered once at startup). */
     public static void linear$setCompressionWorkersSupplier(java.util.function.IntSupplier supplier) {
-        COMPRESSION_WORKERS_SUPPLIER = java.util.Objects.requireNonNull(supplier, "supplier");
+        COMPRESSION_WORKERS_SUPPLIER = Objects.requireNonNull(supplier, "supplier");
     }
 
     /** Adapter wiring: live {@code long-distance-matching} reader (registered once at startup). */
     public static void linear$setLongDistanceMatchingSupplier(java.util.function.IntSupplier supplier) {
-        LONG_DISTANCE_MATCHING_SUPPLIER = java.util.Objects.requireNonNull(supplier, "supplier");
+        LONG_DISTANCE_MATCHING_SUPPLIER = Objects.requireNonNull(supplier, "supplier");
     }
 
     private final Path file;

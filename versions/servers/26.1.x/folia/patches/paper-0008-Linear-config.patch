@@ -8,25 +8,11 @@ per-world format selector; reads probe both extensions so flipping the
 format never hides existing data. Global flush keys are inert and
 threadless in this release (no pool wiring yet).
 
----
- src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java |   45 +++++++++++++++++++++++++++++++++++++++++++++
- src/main/java/io/papermc/paper/configuration/WorldConfiguration.java |   37 +++++++++++++++++++++++++++++++++++++
- src/main/java/io/papermc/paper/configuration/type/RegionFileFormat.java |   13 +++++++++++++
- src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java |  117 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- src/test/java/net/minecraft/world/level/chunk/storage/BrokenSymlinkGuardTest.java |  169 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- src/main/java/io/papermc/paper/world/PaperWorldLoader.java   |    3 ++-
- src/main/java/io/papermc/paper/linear/PaperFormatMapper.java |   30 ++++++++++++++++++++++++++++++
- 7 files changed, 413 insertions(+), 1 deletion(-)
- create mode 100644 src/main/java/io/papermc/paper/configuration/type/RegionFileFormat.java
- create mode 100644 src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java
- create mode 100644 src/test/java/net/minecraft/world/level/chunk/storage/BrokenSymlinkGuardTest.java
- create mode 100644 src/main/java/io/papermc/paper/linear/PaperFormatMapper.java
-
 diff --git a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
-index 10bec0f46f96605d82d8ec77327f2e8af18c0fd2..00f5db8bfbfb5c2bbbbc2ba50e416c8c133217f0 100644
+index 10bec0f46f96605d82d8ec77327f2e8af18c0fd2..a79887f22229d90ca747218ecc1e2c82f8091c02 100644
 --- a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
 +++ b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
-@@ -343,6 +343,51 @@ public class GlobalConfiguration extends ConfigurationPart {
+@@ -343,6 +343,57 @@ public class GlobalConfiguration extends ConfigurationPart {
          public IntOr.Disabled maxTrackingCombatEntries = new IntOr.Disabled(OptionalInt.of(10240));
      }
  
@@ -48,6 +34,10 @@ index 10bec0f46f96605d82d8ec77327f2e8af18c0fd2..00f5db8bfbfb5c2bbbbc2ba50e416c8c
 +            public int longDistanceMatching = 0;
 +            @Comment("Linear - log per-folder flush batches at info level. False (default) keeps current warn-only logging.")
 +            public boolean logFlushBatches = false;
++            @Comment("Writer inside new .linear files: V1 (single blob, default), V2 or V3 (bucketed, DivineMC-compatible). Readers accept every version. Unknown values log a warning and write V1. -Dlinearmc.implementation wins.")
++            public String implementation = "V1";
++            @Comment("Bucket grid for V2/V3 writes: 1, 2, 4, 8 (default), 16 or 32. Off-list values log a warning and use 8. -Dlinearmc.grid-size wins.")
++            public int gridSize = 8;
 +
 +            @PostProcess
 +            private void postProcess() {
@@ -71,6 +61,8 @@ index 10bec0f46f96605d82d8ec77327f2e8af18c0fd2..00f5db8bfbfb5c2bbbbc2ba50e416c8c
 +                    this.longDistanceMatching = 0;
 +                }
 +                // Linear - logFlushBatches is boolean: no clamp needed (false = current warn-only logging).
++                // Linear - writer keys: validated and published to the core once per config load.
++                net.linear.config.LinearFileConfig.pushWriterValues(this.implementation, this.gridSize, LOGGER::warn, LOGGER::info);
 +            }
 +        }
 +    }
@@ -79,7 +71,7 @@ index 10bec0f46f96605d82d8ec77327f2e8af18c0fd2..00f5db8bfbfb5c2bbbbc2ba50e416c8c
  
      public class BlockUpdates extends ConfigurationPart {
 diff --git a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
-index 7916d3762d3615910dc25e52e9a846db3729245f..c808a673a4c9364366005abe7e02ddf5e65ad9dc 100644
+index 7916d3762d3615910dc25e52e9a846db3729245f..4a0f636f3deafcb5c3f85ba46d737027729981e2 100644
 --- a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
 +++ b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
 @@ -15,6 +15,7 @@ import io.papermc.paper.configuration.type.DespawnRange;
@@ -135,7 +127,7 @@ index 7916d3762d3615910dc25e52e9a846db3729245f..c808a673a4c9364366005abe7e02ddf5
      public class FishingTimeRange extends ConfigurationPart {
 diff --git a/src/main/java/io/papermc/paper/configuration/type/RegionFileFormat.java b/src/main/java/io/papermc/paper/configuration/type/RegionFileFormat.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..ff1b3bc642d56726c3f6cf84478b33ebd9de1538
+index 0000000000000000000000000000000000000000..ba77d99b490b3978bd2593782fd54264e6d2d74b
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/configuration/type/RegionFileFormat.java
 @@ -0,0 +1,14 @@
@@ -153,9 +145,62 @@ index 0000000000000000000000000000000000000000..ff1b3bc642d56726c3f6cf84478b33eb
 +    LINEAR,
 +    B_LINEAR;
 +}
+diff --git a/src/main/java/io/papermc/paper/linear/PaperFormatMapper.java b/src/main/java/io/papermc/paper/linear/PaperFormatMapper.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..3cc448f3f6182a8034341e805a249bb1fac696f1
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/linear/PaperFormatMapper.java
+@@ -0,0 +1,33 @@
++package io.papermc.paper.linear;
++
++/**
++ * Paper-side config-to-core format mapping (Phase D).
++ *
++ * <p>Single mapping point from the Paper config enum
++ * ({@code io.papermc.paper.configuration.type.RegionFileFormat}) to the
++ * core enum ({@code net.linear.RegionFileFormat}). Takes {@code Object}
++ * and compares via {@code toString()} so this seam never imports the
++ * config type directly (avoids cross-tree type coupling). Callers
++ * (ServerChunkCache, ServerLevel,
++ * RegionStorageUpgrader.resolveTargetFormat) pass their raw
++ * {@code regionFormat.format} value through.</p>
++ *
++ * <p>Maps {@code LINEAR -> LINEAR}, {@code B_LINEAR -> B_LINEAR},
++ * everything else ({@code ANVIL},
++ * {@code null} pre-{@code @PostProcess} or direct unit-test calls) to
++ * {@code ANVIL}.</p>
++ */
++public final class PaperFormatMapper {
++
++    private PaperFormatMapper() {}
++
++    public static net.linear.RegionFileFormat map(final Object paperEnum) {
++        return paperEnum == null
++            ? net.linear.RegionFileFormat.ANVIL
++            : "LINEAR".equals(paperEnum.toString())
++                ? net.linear.RegionFileFormat.LINEAR
++                : "B_LINEAR".equals(paperEnum.toString())
++                    ? net.linear.RegionFileFormat.B_LINEAR
++                    : net.linear.RegionFileFormat.ANVIL;
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+index cd3e7cc8cf083915de46e03d9b2aaea3003f48fb..3cbdf1f71ae662ba70188e2e333d336296f01cb6 100644
+--- a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
++++ b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+@@ -167,7 +167,8 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
+             primaryLevelData.setModdedInfo(this.server.getServerModName(), this.server.getModdedStatus().shouldReportAsModified());
+         }
+ 
+-        if (this.server.options.has("forceUpgrade")) {
++        // Honor --recreateRegionFiles alongside --forceUpgrade when deciding to run the upgrade path.
++        if (this.server.options.has("forceUpgrade") || this.server.options.has("recreateRegionFiles")) {
+             Main.forceUpgrade(this.server.storageSource, DataFixers.getDataFixer(), this.server.options.has("eraseCache"), () -> true, this.server.registryAccess(), this.server.options.has("recreateRegionFiles"));
+         }
+ 
 diff --git a/src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java b/src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..891e8bde2005ed7af8dd323e933e4f6c3e23001b
+index 0000000000000000000000000000000000000000..ac9bc3fa28bdd887f2118d97fc00ad4ff6deaed1
 --- /dev/null
 +++ b/src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java
 @@ -0,0 +1,120 @@
@@ -452,58 +497,5 @@ index 0000000000000000000000000000000000000000..e81808273eda40d543d5d0f4d145a627
 +
 +        // Demonstrates the defect: the buggy guard stays silent.
 +        assertDoesNotThrow(() -> buggyGuard(brokenLink, Format.LINEAR, true));
-+    }
-+}
-diff --git a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
-index cd3e7cc8cf083915de46e03d9b2aaea3003f48fb..55257b03e975159be63aceeba22ad1dac458c50f 100644
---- a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
-+++ b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
-@@ -167,7 +167,8 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
-             primaryLevelData.setModdedInfo(this.server.getServerModName(), this.server.getModdedStatus().shouldReportAsModified());
-         }
- 
--        if (this.server.options.has("forceUpgrade")) {
-+        // Honor --recreateRegionFiles alongside --forceUpgrade when deciding to run the upgrade path.
-+        if (this.server.options.has("forceUpgrade") || this.server.options.has("recreateRegionFiles")) {
-             Main.forceUpgrade(this.server.storageSource, DataFixers.getDataFixer(), this.server.options.has("eraseCache"), () -> true, this.server.registryAccess(), this.server.options.has("recreateRegionFiles"));
-         }
- 
-diff --git a/src/main/java/io/papermc/paper/linear/PaperFormatMapper.java b/src/main/java/io/papermc/paper/linear/PaperFormatMapper.java
-new file mode 100644
-index 000000000..057c18c7cace7a1c5f944a80825f20b1e391dd81 100644
---- /dev/null
-+++ b/src/main/java/io/papermc/paper/linear/PaperFormatMapper.java
-@@ -0,0 +1,33 @@
-+package io.papermc.paper.linear;
-+
-+/**
-+ * Paper-side config-to-core format mapping (Phase D).
-+ *
-+ * <p>Single mapping point from the Paper config enum
-+ * ({@code io.papermc.paper.configuration.type.RegionFileFormat}) to the
-+ * core enum ({@code net.linear.RegionFileFormat}). Takes {@code Object}
-+ * and compares via {@code toString()} so this seam never imports the
-+ * config type directly (avoids cross-tree type coupling). Callers
-+ * (ServerChunkCache, ServerLevel,
-+ * RegionStorageUpgrader.resolveTargetFormat) pass their raw
-+ * {@code regionFormat.format} value through.</p>
-+ *
-+ * <p>Maps {@code LINEAR -> LINEAR}, {@code B_LINEAR -> B_LINEAR},
-+ * everything else ({@code ANVIL},
-+ * {@code null} pre-{@code @PostProcess} or direct unit-test calls) to
-+ * {@code ANVIL}.</p>
-+ */
-+public final class PaperFormatMapper {
-+
-+    private PaperFormatMapper() {}
-+
-+    public static net.linear.RegionFileFormat map(final Object paperEnum) {
-+        return paperEnum == null
-+            ? net.linear.RegionFileFormat.ANVIL
-+            : "LINEAR".equals(paperEnum.toString())
-+                ? net.linear.RegionFileFormat.LINEAR
-+                : "B_LINEAR".equals(paperEnum.toString())
-+                    ? net.linear.RegionFileFormat.B_LINEAR
-+                    : net.linear.RegionFileFormat.ANVIL;
 +    }
 +}

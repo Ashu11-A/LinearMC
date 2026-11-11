@@ -6,14 +6,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import net.linear.LinearImplementation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import net.linear.bucket.LinearBase;
-import net.linear.versions.base.AbstractBucketedVersion;
 import net.linear.versions.base.V2LinearBase;
 import net.linear.versions.decoders.PumpkinDecoder;
 import net.linear.versions.encoders.PumpkinEncoder;
 import net.linear.versions.ChunkSlotTable;
 import net.linear.versions.ChunkSlotView;
-import net.linear.versions.RegionFormatDetector;
 import net.linear.versions.VersionWriteParams;
 
 /**

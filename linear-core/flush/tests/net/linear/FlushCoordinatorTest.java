@@ -132,7 +132,7 @@ public class FlushCoordinatorTest {
         Path folder = temporaryFolder.newFolder("shutdownmode").toPath();
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
         LinearFlushCoordinator.linear$beginShutdown();
-        java.util.List<StubRegionFile> files = new java.util.ArrayList<>();
+        List<StubRegionFile> files = new ArrayList<>();
         for (int i = 0; i < LinearFlushCoordinator.MAX_DIRTY + 50; i++) {
             StubRegionFile file = new StubRegionFile();
             files.add(file);
@@ -210,13 +210,13 @@ public class FlushCoordinatorTest {
         // exactly once, joined before return, failures isolated per file.
         Path folder = temporaryFolder.newFolder("snapshot").toPath();
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
-        java.util.List<StubRegionFile> files = new java.util.ArrayList<>();
+        List<StubRegionFile> files = new ArrayList<>();
         for (int i = 0; i < 8; i++) {
             StubRegionFile file = new StubRegionFile();
             files.add(file);
         }
         coordinator.linear$flushSnapshot(
-            new java.util.ArrayList<AbstractRegionFile>(files), true);
+            new ArrayList<AbstractRegionFile>(files), true);
         for (StubRegionFile file : files) {
             assertEquals(1, file.flushCalls);
         }
@@ -234,7 +234,7 @@ public class FlushCoordinatorTest {
             }
         };
         StubRegionFile ok2 = new StubRegionFile();
-        java.util.List<AbstractRegionFile> snapshot = new java.util.ArrayList<>();
+        List<AbstractRegionFile> snapshot = new ArrayList<>();
         snapshot.add(ok1);
         snapshot.add(bad);
         snapshot.add(ok2);
@@ -253,12 +253,12 @@ public class FlushCoordinatorTest {
         LinearFlushCoordinator.linear$setFlushThreadsForTests(1);
         Path folder = temporaryFolder.newFolder("snapshotserial").toPath();
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
-        java.util.List<StubRegionFile> files = new java.util.ArrayList<>();
+        List<StubRegionFile> files = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
             files.add(new StubRegionFile());
         }
         coordinator.linear$flushSnapshot(
-            new java.util.ArrayList<AbstractRegionFile>(files), false);
+            new ArrayList<AbstractRegionFile>(files), false);
         for (StubRegionFile file : files) {
             assertEquals(1, file.flushCalls);
         }
@@ -394,7 +394,7 @@ public class FlushCoordinatorTest {
         // covers only the flush work, never the snapshot lock hold.
         Path folder = temporaryFolder.newFolder("timer").toPath();
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(folder);
-        final java.util.List<Long> elapsed = Collections.synchronizedList(new ArrayList<>());
+        final List<Long> elapsed = Collections.synchronizedList(new ArrayList<>());
         LinearFlushCoordinator.linear$setFlushListener((folderKey, filesAttempted, elapsedMicros) -> {
             flushEvents.add(folderKey);
             lastAttempted.set(filesAttempted);
@@ -432,7 +432,7 @@ public class FlushCoordinatorTest {
         };
         for (String candidate : candidates) {
             try {
-                java.nio.file.Path p = java.nio.file.Paths.get(candidate);
+                Path p = java.nio.file.Paths.get(candidate);
                 if (java.nio.file.Files.isRegularFile(p)) {
                     return java.nio.file.Files.readString(p);
                 }
@@ -524,5 +524,18 @@ public class FlushCoordinatorTest {
             marked = false;
             flushCalls++;
         }
+    }
+
+    @Test
+    public void fastPathNeverReturnsAnEvictedCoordinator() {
+        Path folder = Path.of("/tmp/linear-fastpath-test/region");
+        LinearFlushCoordinator first = LinearFlushCoordinator.forFolder(folder);
+        org.junit.Assert.assertSame(first, LinearFlushCoordinator.forFolder(folder));
+        LinearFlushCoordinator.evict(folder);
+        LinearFlushCoordinator second = LinearFlushCoordinator.forFolder(folder);
+        org.junit.Assert.assertNotSame(first, second);
+        LinearFlushCoordinator.evictAll();
+        org.junit.Assert.assertNotSame(second, LinearFlushCoordinator.forFolder(folder));
+        LinearFlushCoordinator.evict(folder);
     }
 }

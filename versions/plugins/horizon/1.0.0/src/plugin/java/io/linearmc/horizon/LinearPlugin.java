@@ -1,38 +1,16 @@
 package io.linearmc.horizon;
 
 import java.nio.file.Path;
-
-import net.linear.probe.AbstractRegionFileFactory;
-import net.linear.BufferedLinearRegionFile;
 import net.linear.LinearFlushCoordinator;
 import net.linear.LinearRegionConverter;
 import net.linear.LinearRegionFile;
+import io.linearmc.horizon.event.LinearRegionFlushCompletedEvent;
 import net.linear.LinearRegionTimings;
+import net.linear.probe.LinearFolderNames;
 import net.linear.RegionFileFormat;
-import net.linear.command.queue.JobQueue;
 import net.linear.config.LinearFileConfig;
 import net.linear.config.LinearPolicy;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
 import org.bukkit.plugin.java.JavaPlugin;
-import net.linear.command.parse.LinearCommandParser;
-import net.linear.command.parse.LinearPermissions;
-import net.linear.command.parse.LinearTabCompleter;
-import net.linear.command.queue.JobRunner;
-import net.linear.command.queue.JobState;
-import net.linear.command.queue.JobStatusView;
-import net.linear.command.queue.QueueOp;
-import net.linear.command.stats.LinearStatsCompact;
-import net.linear.command.stats.LinearStatsFormat;
-import net.linear.command.stats.LinearStatsView;
-import net.linear.command.stats.StatsProvider;
-import net.linear.command.stats.health.LinearStatsHealth;
-import net.linear.command.stats.health.LinearStatsStatus;
-import net.linear.command.CommandSender;
-import net.linear.command.ConvertDirection;
-import net.linear.command.ConvertJob;
-import net.linear.command.LinearAction;
-import net.linear.command.LinearCommandExecutor;
 
 public class LinearPlugin extends JavaPlugin {
 
@@ -106,29 +84,15 @@ public class LinearPlugin extends JavaPlugin {
             + " (" + warmed.skipped() + " skipped) in " + warmed.millis() + "ms"
             + ", natives " + (natives ? "ready" : "lazy"));
         saveDefaultConfig();
-        // Single file-holder lives in core: the mixin side reads it back via
-        // LinearFileConfig (Horizon's split source sets let plugin see main
-        // but never the reverse, so the mixin cannot reference this class).
-        LinearFileConfig.setFileValues(
-            getConfig().getString("region-format.format", null),
-            getConfig().isInt("region-format.linear.compression-level")
-                ? getConfig().getInt("region-format.linear.compression-level")
-                : null);
-        LinearFileConfig.setFileWriterValues(
-            getConfig().getString("region-format.linear.implementation", null),
-            getConfig().isInt("region-format.linear.grid-size")
-                ? getConfig().getInt("region-format.linear.grid-size")
-                : null);
-        LinearFileConfig.setFileSymlinkGuard(
-            getConfig().isBoolean("region-format.linear.crash-on-broken-symlink")
-                ? getConfig().getBoolean("region-format.linear.crash-on-broken-symlink")
-                : null);
+        // The bootstrapper pushed config.yml into the core before the server
+        // initialized; push here only if that failed.
+        LinearConfigLoader.pushIfMissing(getDataFolder().toPath(), getLogger());
         // Live core seams (Canvas parity): the suppliers below read
         // config.yml live on every call with the docs defaults
         // (flush-max-threads 1, flush-frequency 10, compression-workers 0,
         // long-distance-matching 0); mapping/clamping is core-owned
-        // (LinearPolicy via LinearFormatPolicy). No flush-completion bridge
-        // exists on this leg, so the coordinator listener stays no-op.
+        // (LinearPolicy via LinearFormatPolicy). The flush-completion listener
+        // fires the plugin's LinearRegionFlushCompletedEvent (fork parity).
         final LinearPlugin self = this;
         LinearFlushCoordinator.linear$setFlushThreadsSupplier(() -> {
             try {
@@ -163,27 +127,10 @@ public class LinearPlugin extends JavaPlugin {
                 return 0;
             }
         });
-        // Wire the core construction seam: anvil opens go through the
-        // HorizonAnvilRegionFile adapter (composition over vanilla
-        // RegionFile, mirroring the fork legs where RegionFile implements
-        // AbstractRegionFile directly). Linear opens straight into codec.
-        AbstractRegionFileFactory.linear$setAnvilOpener(
-            (info, file, dir, sync) -> new HorizonAnvilRegionFile(
-                (RegionStorageInfo) info, file, dir, sync));
-        AbstractRegionFileFactory.linear$setLinearOpener(LinearRegionFile::new);
-        AbstractRegionFileFactory.linear$setBufferedOpener(BufferedLinearRegionFile::new);
-        // Converter opens run before any world storage exists (startup and
-        // recreate triggers): the converter RegionOpener mirrors the
-        // storage-ctor registration so conversion storage opens resolve here.
-        LinearRegionConverter.linear$setRegionOpener((file, openFolder, openSync, format, level) ->
-            AbstractRegionFileFactory.get(file,
-                new RegionStorageInfo("converter", Level.OVERWORLD, "chunk"),
-                openFolder, openSync, level));
-        // Reverse seams: raw NBT from the linear source lands in a real NMS
-        // anvil file (enveloping is vanilla-owned, see AnvilChunkSink), and a
-        // linear source whose folder still has unflushed writes
-        // (dirtyDepth > 0) is reported SKIPPED, never queued mid-write.
-        LinearRegionConverter.linear$setChunkSinkOpener((file, folder, level) -> new AnvilChunkSink(file, folder));
+        // Core construction seams (shared with the pre-plugin startup
+        // conversion, which may have registered them already; idempotent).
+        HorizonSeams.registerOpeners();
+        LinearFlushCoordinator.linear$setFlushListener(this::fireFlushEvent);
         LinearRegionConverter.linear$setReverseSkipPredicate(LinearPlugin::reverseSkipDirty);
         // Soak parity (d-load, Oct 2026): forward defers loaded files with
         // the same folder-dirty check as reverse.
@@ -198,30 +145,23 @@ public class LinearPlugin extends JavaPlugin {
         getLogger().info("LinearMC: format=" + format + " level=" + level
             + " implementation=" + LinearFileConfig.resolveImplementation()
             + " grid-size=" + LinearFileConfig.resolveGridSize()
-            + " (set -Dlinearmc.format=LINEAR to enable)");
+            + (linearFamily ? "" : " (Linear writes off: set region-format.format or -Dlinearmc.format)"));
         if (!linearFamily) {
             getLogger().warning("LinearMC: format is ANVIL — no .linear/.b_linear files will be written.");
         }
-        // Storage-interception coverage: the exists-path redirect applies
-        // only where the host exposes the Moonrise bridge method (its
-        // injector is require = 0, so absence skips instead of failing the
-        // whole mixin). Log which paths are live so a silent gap is visible.
-        getLogger().info("LinearMC: storage interception: create-path armed"
-            + (hasMoonriseExistsBridge() ? ", exists-path armed"
-                : ", no Moonrise exists bridge on this host (create-path covers all opens)"));
+        // Storage interception is all-or-nothing: every injector is required
+        // (MixinDescriptorsTest checks each host method per dev bundle).
+        getLogger().info("LinearMC: storage interception armed (create and exists paths, stop barrier after final save)");
         LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_FORMAT)
             .ifPresent(getLogger()::info);
         LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_LEVEL)
-            .ifPresent(getLogger()::info);
-        LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_IMPLEMENTATION)
-            .ifPresent(getLogger()::info);
-        LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_GRID_SIZE)
             .ifPresent(getLogger()::info);
         // Durability heartbeat: the storage flush/close paths on this server
         // line cannot be trusted to run (verified live: neither fires for
         // region files), so durability must not depend on them. A repeating
         // async drain persists age-gated files on the flush-frequency rhythm
-        // without ever blocking the tick, and the stop barrier below forces
+        // without ever blocking the tick, and the post-save stop barrier
+        // (MinecraftServerMixin -> LinearShutdownBarrier.finalDrain) forces
         // everything out. Without this, live writes would sit in RAM until
         // process death.
         final int heartbeatSeconds = Math.max(1, getConfig().getInt("region-format.linear.flush-frequency", 10));
@@ -247,9 +187,6 @@ public class LinearPlugin extends JavaPlugin {
             () -> net.linear.flush.FlushReports.FolderDrain.onSave(false),
             heartbeatSeconds, heartbeatSeconds, java.util.concurrent.TimeUnit.SECONDS);
         getLogger().info("LinearMC: flush heartbeat every " + heartbeatSeconds + "s (async, age-gated)");
-        // The /linear queue is in-memory only: name the restart drop on every
-        // boot so operators re-issue converts instead of assuming they resume.
-        getLogger().info(JobQueue.droppedByRestartLine(0));
         LinearCommand command = new LinearCommand(this);
         this.registerCommand("linear", "Linear region tools (stats, convert, queue)", command);
         this.registerCommand(
@@ -262,13 +199,32 @@ public class LinearPlugin extends JavaPlugin {
      * exists-path redirect had no target and the create path covers all
      * opens on this host. Reflective probe only, never fatal.
      */
-    private static boolean hasMoonriseExistsBridge() {
+    /**
+     * Flush-completed event (fork parity: {@code LinearFlushBridge}): fired
+     * once per coordinator flush that attempted at least one file, off the
+     * flushing thread via the async scheduler; skipped once the plugin is
+     * disabled (the stop barrier flushes after that).
+     */
+    private void fireFlushEvent(final String folderKey, final int filesAttempted, final long elapsedMicros) {
+        if (filesAttempted < 1 || folderKey == null || !isEnabled()
+            || LinearRegionFlushCompletedEvent.getHandlerList().getRegisteredListeners().length == 0) {
+            return; // nobody listens: skip the snapshot copy
+        }
         try {
-            net.minecraft.world.level.chunk.storage.RegionFileStorage.class
-                .getDeclaredMethod("moonrise$getRegionFileIfExists", int.class, int.class);
-            return true;
-        } catch (final ReflectiveOperationException | LinkageError missed) {
-            return false;
+            final LinearRegionTimings.LinearFolderSnapshot totals = LinearFlushCoordinator.snapshots()
+                .getOrDefault(folderKey, LinearRegionTimings.LinearFolderSnapshot.EMPTY);
+            final LinearRegionFlushCompletedEvent event = new LinearRegionFlushCompletedEvent(
+                LinearFolderNames.inferWorld(folderKey), LinearFolderNames.inferFolderType(folderKey),
+                totals.filesFlushed(), totals.failures(), elapsedMicros, totals);
+            try {
+                getServer().getAsyncScheduler().runNow(this, task -> getServer().getPluginManager().callEvent(event));
+            } catch (RuntimeException schedulerGone) {
+                // Fork parity (LinearFlushBridge): fire synchronously when the
+                // async scheduler refuses; the event stays async-contract.
+                getServer().getPluginManager().callEvent(event);
+            }
+        } catch (RuntimeException ignored) {
+            // Observability only: never fail a flush over an event.
         }
     }
 
@@ -277,9 +233,11 @@ public class LinearPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        // Stop barrier: stop the heartbeat, then force every dirty file to
-        // disk and shut the shared pool down. A clean stop loses nothing,
-        // even though storage close() never runs on this line.
+        // Plugins are disabled BEFORE the host's final world save (Paper
+        // stopServer, Folia/Canvas RegionShutdownThread), so this is only a
+        // pre-save drain: force what is dirty now and keep the flush pool
+        // alive. The real stop barrier (shutdown mode, evict everything,
+        // pool shutdown) runs after the final save from MinecraftServerMixin.
         if (this.drainService != null) {
             try {
                 this.drainService.shutdownNow();
@@ -287,11 +245,7 @@ public class LinearPlugin extends JavaPlugin {
             }
             this.drainService = null;
         }
-        try {
-            net.linear.flush.FlushReports.FolderDrain.onServerStop();
-        } catch (RuntimeException e) {
-            getLogger().warning("LinearMC: stop drain failed: " + String.valueOf(e.getMessage()));
-        }
+        LinearShutdownBarrier.pluginDisableDrain();
     }
 
     /**

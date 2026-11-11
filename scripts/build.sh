@@ -67,54 +67,18 @@ for v in $VERSIONS; do
   if [ -n "$FOLIA_DIR" ]; then
     WORK="$FOLIA_DIR"
   else
-    WORK="/tmp/folia-linear/build-$v"
+    WORK="$(cd "$(dirname "$0")/.." && pwd)/proof/build-$v"
   fi
 
   echo "=== $v: $FOLIA_BRANCH @ $FOLIA_REF (mc $MC_VERSION) in $WORK ==="
-  # LinearMC leg resolution (mirrors .github/actions/stage): per-server leg
-  # first, legacy flat dirs as fallback; common/ patches stage alongside.
-  LEGDIR="$VDIR/folia"
-  [ -d "$LEGDIR/patches" ] || LEGDIR="$VDIR"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "DRY-RUN: git clone --branch $FOLIA_BRANCH --single-branch $FOLIA_REPO $WORK"
-    echo "DRY-RUN: git -C $WORK fetch origin && git -C $WORK checkout $FOLIA_REF"
-    echo "DRY-RUN: cp $VDIR/common/*.patch $WORK/folia-server/{minecraft,paper}-patches/features/ (when present)"
-    echo "DRY-RUN: cp $LEGDIR/patches/minecraft-*.patch $WORK/folia-server/minecraft-patches/features/"
-    echo "DRY-RUN: cp $LEGDIR/patches/paper-*.patch $WORK/folia-server/paper-patches/features/"
-    echo "DRY-RUN: python3 $LEGDIR/build-hunk.py $WORK/folia-server/build.gradle.kts.patch"
-    echo "DRY-RUN: mkdir -p $WORK/folia-server/src/test/java/net/linear && cp $LEGDIR/tests/*.java ..."
-    echo "DRY-RUN: (cd $WORK && ./gradlew applyAllPatches && ./gradlew build && ./gradlew folia-server:createPaperclipJar)"
-    echo "DRY-RUN: ls $WORK/folia-server/build/libs/folia-paperclip-*.jar"
+    echo "DRY-RUN: scripts/stage.sh folia $WORK --line $v   # clone/reset pin, patches, core, tests, applyAllPatches"
+    echo "DRY-RUN: (cd $WORK && ./gradlew build && ./gradlew folia-server:createPaperclipJar)"
     continue
   fi
-
-  if [ ! -d "$WORK/.git" ]; then
-    git clone --branch "$FOLIA_BRANCH" --single-branch "$FOLIA_REPO" "$WORK" \
-      || { echo "FAIL: $v clone"; fail=$((fail+1)); continue; }
-  fi
-  git -C "$WORK" fetch origin "$FOLIA_BRANCH" \
-    && git -C "$WORK" checkout "$FOLIA_REF" \
-    || { echo "FAIL: $v checkout $FOLIA_REF"; fail=$((fail+1)); continue; }
-  HEAD=$(git -C "$WORK" rev-parse HEAD)
-  if [ "$HEAD" != "$FOLIA_REF" ]; then
-    echo "WARN: $v branch moved ($HEAD); patches target $FOLIA_REF, apply step will prove compatibility"
-  fi
-
-  if ls "$VDIR"/common/*.patch >/dev/null 2>&1; then
-    cp "$VDIR"/common/minecraft-*.patch "$WORK/folia-server/minecraft-patches/features/" 2>/dev/null || true
-    cp "$VDIR"/common/paper-*.patch "$WORK/folia-server/paper-patches/features/" 2>/dev/null || true
-  fi
-  cp "$LEGDIR"/patches/minecraft-*.patch "$WORK/folia-server/minecraft-patches/features/" \
-    && cp "$LEGDIR"/patches/paper-*.patch "$WORK/folia-server/paper-patches/features/" \
-    && python3 "$LEGDIR/build-hunk.py" "$WORK/folia-server/build.gradle.kts.patch" \
-    && mkdir -p "$WORK/folia-server/src/test/java/net/linear" \
-    && cp "$LEGDIR"/tests/*.java "$WORK/folia-server/src/test/java/net/linear/" \
-    || { echo "FAIL: $v staging"; fail=$((fail+1)); continue; }
-
-  git -C "$WORK" config user.name "folia-linear-build" >/dev/null
-  git -C "$WORK" config user.email "folia-linear-build@users.noreply.github.com" >/dev/null
-  (cd "$WORK" && ./gradlew applyAllPatches --stacktrace) \
-    || { echo "FAIL: $v applyAllPatches (rebase conflict?)"; fail=$((fail+1)); continue; }
+  # Same staging as CI and local workspaces (scripts/stage.sh).
+  bash "$(dirname "$0")/stage.sh" folia "$WORK" --line "$v" \
+    || { echo "FAIL: $v staging/applyAllPatches"; fail=$((fail+1)); continue; }
   (cd "$WORK" && ./gradlew build --stacktrace) \
     || { echo "FAIL: $v build"; fail=$((fail+1)); continue; }
   (cd "$WORK" && ./gradlew folia-server:createPaperclipJar --stacktrace) \

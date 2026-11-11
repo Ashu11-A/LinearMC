@@ -42,6 +42,8 @@ on large survival worlds. Players, plugins, and Bedrock players all see the same
 * **CanvasMC 26.3** — supported.
 * **Horizon plugin 1.0.0** — supported on Paper, Folia and CanvasMC 26.1 through 26.3, no server rebuild needed. One jar; the plugin adapts to the host. [What is Horizon?](https://github.com/CraftCanvasMC/Horizon).
 
+Every leg ships the same features (format, commands, permissions, config keys, startup conversion, save/stop durability); the contract is `parity/capabilities.yml`, and a release with any missing feature on any leg is refused.
+
 ## 🚀 Quick start
 
 You do **not** need to compile anything. Every server type ships as a ready-to-run file on the [GitHub Releases page](https://github.com/Ashu11-A/LinearMC/releases).
@@ -77,7 +79,7 @@ Four JVM flags, passed on the `java` command line before `-jar`. Each one beats 
 
 | Parameter | Values | Effect |
 | --- | --- | --- |
-| `-Dlinearmc.format` | `LINEAR`, `B_LINEAR` or `ANVIL` (any case) | Format for newly written regions. On Horizon this flag is the whole on/off switch. |
+| `-Dlinearmc.format` | `LINEAR`, `B_LINEAR` or `ANVIL` (any case) | Format for newly written regions. |
 | `-Dlinearmc.compression-level` | `1`–`22` | Compression for newly written regions, overriding the config default of `6`. Levels `12` and above are unsafe. |
 | `-Dlinearmc.implementation` | `V1`, `V2` or `V3` (any case) | Writer used inside newly written `.linear` files (see Versions). Unknown values log a warning and write `V1`. Does not affect `.b_linear` files. |
 | `-Dlinearmc.grid-size` | `1`, `2`, `4`, `8`, `16` or `32` | Bucket grid for `V2`/`V3` writes, overriding the config default of `8`. Ignored by `V1`. |
@@ -127,7 +129,7 @@ java -Dlinearmc.format=B_LINEAR -jar <jar> --nogui
 
 You are never locked in, and reverting needs no script — the conversion commands above handle it:
 
-1. **Stop writing Linear:** set the world's format back to `ANVIL` (or drop `-Dlinearmc.format` on Horizon). Existing `.linear` files keep loading through the multi-format reader; only new writes go to `.mca`.
+1. **Stop writing Linear:** set the world's format back to `ANVIL` (Horizon: `region-format.format: ANVIL` in `plugins/LinearMC/config.yml`, or `-Dlinearmc.format=ANVIL`). Existing `.linear` files keep loading through the multi-format reader; only new writes go to `.mca`.
 2. **Convert files back:** run `/linear convert <world> --to-mca --execute` in game. Each file is converted, validated, and only then replaces the original; without `--execute` it just reports what it would do. Do one world at a time, then run a save cycle and restart to confirm.
 3. **Leave entirely:** once every world is back on `.mca`, swap in the stock server jar.
 

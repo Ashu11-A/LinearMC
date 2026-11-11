@@ -45,7 +45,7 @@ resolve_jar() { # $1 = dest name, $2.. = candidate paths/URLs (URLs start with h
   for cand in "$@"; do
     case "$cand" in
       https://*)
-        curl -sL --max-time 90 -o "$dest" "$cand" && [ -s "$dest" ] && return 0
+        curl -fsSL --max-time 90 -o "$dest" "$cand" && [ -s "$dest" ] && return 0
         rm -f "$dest"
         ;;
       *)
@@ -62,6 +62,9 @@ resolve_jar lz4-java.jar \
   "https://repo1.maven.org/maven2/org/lz4/lz4-java/1.8.0/lz4-java-1.8.0.jar" || fail=1
 resolve_jar zstd-jni.jar \
   "https://repo1.maven.org/maven2/com/github/luben/zstd-jni/1.5.6-8/zstd-jni-1.5.6-8.jar" || fail=1
+resolve_jar openhft-hashing.jar \
+  "$GRADLE_MOD/net.openhft/zero-allocation-hashing/2026.0/"*/zero-allocation-hashing-2026.0.jar \
+  "https://repo1.maven.org/maven2/net/openhft/zero-allocation-hashing/2026.0/zero-allocation-hashing-2026.0.jar" || fail=1
 resolve_jar junit.jar \
   "https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar" || fail=1
 resolve_jar hamcrest.jar \
@@ -71,8 +74,8 @@ resolve_jar slf4j.jar \
   "https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.13/slf4j-api-2.0.13.jar" || fail=1
 resolve_jar mojang-logging.jar \
   "$GRADLE_MOD/com.mojang/logging/1.6.11/"*/logging-1.6.11.jar \
-  "https://repo1.maven.org/maven2/com/mojang/logging/1.6.11/logging-1.6.11.jar" || fail=1
-CP_DEPS="$LIBS/lz4-java.jar:$LIBS/zstd-jni.jar:$LIBS/slf4j.jar:$LIBS/mojang-logging.jar"
+  "https://libraries.minecraft.net/com/mojang/logging/1.6.11/logging-1.6.11.jar" || fail=1
+CP_DEPS="$LIBS/lz4-java.jar:$LIBS/zstd-jni.jar:$LIBS/openhft-hashing.jar:$LIBS/slf4j.jar:$LIBS/mojang-logging.jar"
 echo "--- javac NMS-free module sources (single invocation) ---"
 OUT="$(mktemp -d /tmp/linearmc-core-classes.XXXXXX)"
 if [ -n "$SRC_FILES" ]; then

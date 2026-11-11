@@ -15,8 +15,9 @@ scripts/preflight.sh --compile  # the above, plus fork compileJava
 scripts/preflight.sh --tests    # the above, plus the Linear suites
 ```
 
-- Default `--folia-dir` is `/tmp/folia-linear/folia`. Pass your own with
-  `scripts/preflight.sh --folia-dir /path/to/folia`.
+- Default `--folia-dir` is `proof/fork-folia` (create it with
+  `scripts/stage.sh folia`), else the legacy `/tmp/folia-linear/folia`.
+  Pass your own with `scripts/preflight.sh --folia-dir /path/to/folia`.
 - `--compile` and `--tests` run Gradle in that directory and need network
   access. The plain run does not.
 - Exit code 0 means push-ready. Anything else means fix it locally first.
@@ -50,7 +51,7 @@ scripts/preflight.sh --tests    # the above, plus the Linear suites
 `versions/servers/<line>/folia/build-hunk.py` splices three things into
 Folia's own `folia-server/build.gradle.kts.patch`: the `net/linear` test
 source directory, the zstd-jni dependency, and the OpenHFT XXH64 dependency.
-The Canvas stage-overlay action wires the same two dependencies into the
+`scripts/stage.sh canvas` wires the same two dependencies into the
 post-apply `canvas-server/build.gradle.kts`; the Horizon plugin JiJ-embeds
 them from its own build file.
 
@@ -105,7 +106,12 @@ Porting checklist:
 Every surface change moves together: a new or changed player-facing surface
 (command grammar, flags, permissions, config keys with defaults, `linear$`
 seams) must land on the Folia patches, the Canvas overlay, and the Horizon
-plugin in the same change. The Horizon `plugins/LinearMC/config.yml` template
+plugin in the same change. The machine-readable contract is
+`parity/capabilities.yml` (one entry per capability and leg, with evidence
+and tests); `scripts/parity-check.sh` validates it on every push and
+`--release` (no `gap` allowed) gates the release upload. Data-path changes
+(open, save, stop, convert) also need a live `scripts/migration-smoke.sh`
+PASS on the affected hosts. The Horizon `plugins/LinearMC/config.yml` template
 (`versions/plugins/horizon/1.0.0/src/plugin/resources/config.yml`) must stay
 key-identical with the `docs/configuration.md` settings table. The
 plugin-internal version (`paper-plugin.yml`, `horizon.plugin.json`,

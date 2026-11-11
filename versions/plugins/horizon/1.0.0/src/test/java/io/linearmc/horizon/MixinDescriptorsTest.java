@@ -68,7 +68,10 @@ public class MixinDescriptorsTest {
         if (!Files.isRegularFile(mixin)) {
             return; // Source tree absent (e.g. binary-only CI layout): nothing to check.
         }
-        final List<String> selectors = selectorsIn(Files.readString(mixin));
+        final List<String> selectors = new ArrayList<>();
+        for (final Path source : mixinSources()) {
+            selectors.addAll(selectorsIn(Files.readString(source)));
+        }
         assertTrue(selectors.size() >= 2,
             "expected at least the two RegionFile construction redirects, found " + selectors.size());
         for (final String selector : selectors) {
@@ -89,6 +92,138 @@ public class MixinDescriptorsTest {
     }
 
     /**
+     * Every REQUIRED injector's INVOKE / NEW / FIELD target must really be
+     * called inside (one of) its host methods on this bundle, read from the
+     * bytecode: a method that still exists but no longer makes the call would
+     * otherwise only fail at boot. {@code require = 0} injectors are skipped.
+     */
+    @Test
+    public void requiredCallSitesExistInHostBytecode() throws Exception {
+        final List<String> problems = new ArrayList<>();
+        final Pattern block = Pattern.compile(
+            "@(?:Inject|Redirect)\\s*\\((.*?)\\)\\s*\\n\\s*(?:private|protected|public)", Pattern.DOTALL);
+        final Pattern atTarget = Pattern.compile(
+            "value\\s*=\\s*\"(INVOKE|NEW|FIELD)\"[^)]*?target\\s*=\\s*\"([^\"]+)\"", Pattern.DOTALL);
+        for (final Path file : mixinSources()) {
+            final String source = Files.readString(file);
+            final Matcher decl = Pattern.compile("@Mixin\\(([^)]+)\\)").matcher(source);
+            if (!decl.find()) {
+                continue;
+            }
+            final String fqcn = resolveTargetName(decl.group(1).replace(".class", "").trim(), importsIn(source));
+            final Matcher b = block.matcher(source);
+            while (b.find()) {
+                final String body = b.group(1);
+                if (Pattern.compile("require\\s*=\\s*0\\b").matcher(body).find()) {
+                    continue;
+                }
+                final Matcher t = atTarget.matcher(body);
+                if (!t.find()) {
+                    continue;
+                }
+                final List<String> hosts = new ArrayList<>();
+                final Matcher single = METHOD_SELECTOR.matcher(body);
+                while (single.find()) {
+                    hosts.add(single.group(1));
+                }
+                final Matcher array = Pattern.compile("method\\s*=\\s*\\{([^}]*)\\}").matcher(body);
+                if (array.find()) {
+                    final Matcher n = Pattern.compile("\"([^\"]+)\"").matcher(array.group(1));
+                    while (n.find()) {
+                        hosts.add(n.group(1));
+                    }
+                }
+                // Per host method: the first listed one must carry the site
+                // (a lost site cannot hide behind another method's); the rest
+                // carry it, delegate to a listed method (26.3 exists path), or
+                // are absent from this bundle (Folia-only stopPart2).
+                for (int i = 0; i < hosts.size(); i++) {
+                    final int[] found = countSites(fqcn, hosts.get(i), hosts, t.group(1), t.group(2));
+                    if (found[0] < 1 && (i == 0 || (found[1] < 1 && found[2] > 0))) {
+                        problems.add(file.getFileName() + ": no " + t.group(1) + " " + t.group(2)
+                            + " in " + hosts.get(i));
+                    }
+                }
+            }
+        }
+        assertTrue(problems.isEmpty(), "required call sites missing on this bundle: " + String.join("; ", problems));
+    }
+
+    private static String resolveTargetName(final String simple, final java.util.Map<String, String> imports) {
+        return simple.contains(".") ? simple : imports.getOrDefault(simple, simple);
+    }
+
+    /**
+     * {sites, delegations, methods} for one host method selector (name, or
+     * name+descriptor): matching instructions, calls to another listed method,
+     * and how many host methods the selector matched.
+     */
+    private int[] countSites(final String hostClass, final String hostSelector, final List<String> hostSelectors,
+        final String kind, final String target) throws Exception {
+        final byte[] bytes;
+        try (java.io.InputStream in = getClass().getClassLoader()
+            .getResourceAsStream(hostClass.replace('.', '/') + ".class")) {
+            if (in == null) {
+                return new int[3];
+            }
+            bytes = in.readAllBytes();
+        }
+        final int[] count = new int[3];
+        new org.objectweb.asm.ClassReader(bytes).accept(new org.objectweb.asm.ClassVisitor(org.objectweb.asm.Opcodes.ASM9) {
+            @Override
+            public org.objectweb.asm.MethodVisitor visitMethod(final int access, final String name, final String desc,
+                final String sig, final String[] exceptions) {
+                final int open = hostSelector.indexOf('(');
+                if (!(open < 0 ? hostSelector.equals(name) : (hostSelector.substring(0, open).equals(name)
+                    && hostSelector.substring(open).equals(desc)))) {
+                    return null;
+                }
+                count[2]++;
+                return new org.objectweb.asm.MethodVisitor(org.objectweb.asm.Opcodes.ASM9) {
+                    @Override
+                    public void visitMethodInsn(final int op, final String owner, final String mName,
+                        final String mDesc, final boolean itf) {
+                        if (kind.equals("INVOKE") && target.equals("L" + owner + ";" + mName + mDesc)) {
+                            count[0]++;
+                        }
+                        if (owner.equals(hostClass.replace('.', '/')) && !mName.equals(name)
+                            && hostSelectors.stream().anyMatch(sel -> sel.equals(mName) || sel.startsWith(mName + "("))) {
+                            count[1]++;
+                        }
+                    }
+
+                    @Override
+                    public void visitTypeInsn(final int op, final String type) {
+                        if (kind.equals("NEW") && op == org.objectweb.asm.Opcodes.NEW && target.equals(type)) {
+                            count[0]++;
+                        }
+                    }
+
+                    @Override
+                    public void visitFieldInsn(final int op, final String owner, final String fName, final String fDesc) {
+                        if (kind.equals("FIELD") && target.equals("L" + owner + ";" + fName + ":" + fDesc)) {
+                            count[0]++;
+                        }
+                    }
+                };
+            }
+        }, org.objectweb.asm.ClassReader.SKIP_DEBUG | org.objectweb.asm.ClassReader.SKIP_FRAMES);
+        return count;
+    }
+
+    @Test
+    public void requireZeroMarksOnlyThatInjectorOptional() {
+        final String source = String.join("\n",
+            "@Inject(method = \"stopPart2\", at = @At(\"HEAD\"), require = 0)",
+            "private void a(final CallbackInfo ci) {}",
+            "@Inject(method = \"stopServer\", at = @At(\"TAIL\"))",
+            "private void b(final CallbackInfo ci) {}");
+        final java.util.Set<String> optional = optionalSelectorsIn(source);
+        assertTrue(optional.contains("stopPart2"), "require = 0 injector must be optional");
+        assertEquals(false, optional.contains("stopServer"), "required injector must stay required");
+    }
+
+    /**
      * Per-bundle patcher check: every mixin contact point must exist in the
      * NMS classes of the bundle under test (the test classpath carries the
      * dev-bundle target of this matrix leg: 26.1.2, 26.2 or 26.3). A missing
@@ -98,34 +233,85 @@ public class MixinDescriptorsTest {
      */
     @Test
     public void mixinTargetsExistInThisBundle() throws Exception {
-        final Path mixin = Path.of(System.getProperty("user.dir"),
-            "src/main/java/io/linearmc/horizon/mixins/RegionFileStorageMixin.java");
-        if (!Files.isRegularFile(mixin)) {
+        final List<Path> sources = mixinSources();
+        if (sources.isEmpty()) {
             return; // Same binary-only-layout rule as above.
         }
-        final String source = Files.readString(mixin);
-        final java.util.Map<String, String> imports = importsIn(source);
         final List<String> problems = new ArrayList<>();
+        for (final Path mixin : sources) {
+            checkMixinSource(mixin.getFileName().toString(), Files.readString(mixin), problems);
+        }
+        assertTrue(problems.isEmpty(),
+            "mixin would fail boot apply on this bundle: " + String.join("; ", problems));
+    }
+
+    /** Every {@code *Mixin.java} under the mixins package (sorted), or empty without a source tree. */
+    private static List<Path> mixinSources() throws java.io.IOException {
+        final Path dir = Path.of(System.getProperty("user.dir"),
+            "src/main/java/io/linearmc/horizon/mixins");
+        if (!Files.isDirectory(dir)) {
+            return List.of();
+        }
+        try (java.util.stream.Stream<Path> files = Files.list(dir)) {
+            return files.filter(f -> f.getFileName().toString().endsWith("Mixin.java")).sorted().toList();
+        }
+    }
+
+    /**
+     * Method selectors whose injector declares {@code require = 0}: host-shape
+     * optional (e.g. Folia/Canvas {@code stopPart2}, absent on Paper). A miss on
+     * such a selector is legal on this bundle; a miss on any other is a red leg.
+     */
+    static java.util.Set<String> optionalSelectorsIn(final String source) {
+        final java.util.Set<String> out = new java.util.HashSet<>();
+        final Matcher block = Pattern.compile(
+            "@(?:Inject|Redirect|ModifyArg|ModifyArgs|ModifyVariable|ModifyConstant)\\s*\\((.*?)\\)\\s*(?:private|protected|public)",
+            Pattern.DOTALL).matcher(source);
+        while (block.find()) {
+            final String body = block.group(1);
+            if (!Pattern.compile("require\\s*=\\s*0\\b").matcher(body).find()) {
+                continue;
+            }
+            final Matcher sel = METHOD_SELECTOR.matcher(body);
+            while (sel.find()) {
+                out.add(sel.group(1));
+            }
+        }
+        return out;
+    }
+
+    private void checkMixinSource(final String file, final String source, final List<String> problems) {
+        final java.util.Map<String, String> imports = importsIn(source);
+        final java.util.Set<String> optional = optionalSelectorsIn(source);
         final Matcher mixinDecl = Pattern.compile("@Mixin\\(([^)]+)\\)").matcher(source);
         if (!mixinDecl.find()) {
-            fail("no @Mixin target declared");
+            fail(file + ": no @Mixin target declared");
         }
         final String[] targets = mixinDecl.group(1).split(",");
         if (targets.length != 1) {
-            fail("single-target mixin expected, found " + targets.length);
+            fail(file + ": single-target mixin expected, found " + targets.length);
         }
+        final int before = problems.size();
         final Class<?> target = load(mixinDecl, targets[0].trim(), imports, problems);
-        if (target == null || !problems.isEmpty()) {
-            fail("unresolvable @Mixin target: " + String.join("; ", problems));
+        if (target == null || problems.size() != before) {
+            fail(file + ": unresolvable @Mixin target: " + String.join("; ", problems));
         }
-        // Injection hosts + overwrite: exact descriptor match.
+        // Injection hosts + overwrite: exact descriptor match. require = 0
+        // selectors may be absent on this bundle (host-shape optional).
         final Matcher sel = METHOD_SELECTOR.matcher(source);
         while (sel.find()) {
+            final boolean isOptional = optional.contains(sel.group(1));
             for (final String part : sel.group(1).split("[,\\s]+")) {
                 if (part.isEmpty()) {
                     continue;
                 }
-                checkMethodSelector(target, part, problems);
+                final List<String> found = new ArrayList<>();
+                checkMethodSelector(target, part, found);
+                if (!isOptional) {
+                    for (final String problem : found) {
+                        problems.add(file + ": " + problem);
+                    }
+                }
             }
         }
         // NEW targets (@At value NEW): the class must exist.
@@ -138,6 +324,43 @@ public class MixinDescriptorsTest {
             } catch (final LinkageError | ReflectiveOperationException missing) {
                 problems.add("NEW target missing in this bundle: " + internal);
             }
+        }
+        // Multi-host injectors: method = {"a", "b"} must hit at least one
+        // host method on this bundle (e.g. stopServer on Paper, stopPart2 on
+        // Folia/Canvas). The required call-site count is enforced at boot.
+        final Matcher arrays = Pattern.compile("method\\s*=\\s*\\{([^}]*)\\}").matcher(source);
+        while (arrays.find()) {
+            final Matcher names = Pattern.compile("\"([^\"]+)\"").matcher(arrays.group(1));
+            final List<String> listed = new ArrayList<>();
+            boolean anyFound = false;
+            while (names.find()) {
+                listed.add(names.group(1));
+                final List<String> found = new ArrayList<>();
+                checkMethodSelector(target, names.group(1), found);
+                anyFound |= found.isEmpty();
+            }
+            if (!anyFound) {
+                problems.add(file + ": none of the multi-host selectors exist in this bundle: " + listed);
+            }
+        }
+        // INVOKE targets (@At value INVOKE): owner class + exact method
+        // descriptor must exist in this bundle. Redirects with require = 0
+        // still need a resolvable owner/method shape, or the redirect is dead.
+        final Matcher invokes = Pattern.compile(
+            "value\\s*=\\s*\"INVOKE\"[^}]*?target\\s*=\\s*\"L([\\w/$]+);([\\w$<>]+)(\\([^\"]*)\"",
+            Pattern.DOTALL).matcher(source);
+        while (invokes.find()) {
+            final String owner = invokes.group(1).replace('/', '.');
+            final String name = invokes.group(2);
+            final String desc = invokes.group(3);
+            final Class<?> ownerClass;
+            try {
+                ownerClass = Class.forName(owner, false, getClass().getClassLoader());
+            } catch (final LinkageError | ReflectiveOperationException missing) {
+                problems.add("INVOKE owner missing in this bundle: " + owner);
+                continue;
+            }
+            checkMethodSelector(ownerClass, name + desc, problems);
         }
         // Shadows: field exists with matching type and static-ness.
         final Matcher shadows = Pattern.compile(
@@ -190,8 +413,6 @@ public class MixinDescriptorsTest {
                 problems.add("@Overwrite target missing in this bundle: " + name);
             }
         }
-        assertTrue(problems.isEmpty(),
-            "mixin would fail boot apply on this bundle: " + String.join("; ", problems));
     }
 
     private static Class<?> load(final Matcher where, final String ref,

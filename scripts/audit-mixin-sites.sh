@@ -47,7 +47,13 @@ for i, l in enumerate(lines):
         sites.append(enc[1])
 
 src = open(mixin).read()
-redirects = re.findall(r'method = "([^"]+)"', src)
+# Only @Redirect blocks at a NEW site count: other annotations name the same methods.
+blocks = re.split(r'(?m)^(?=\s*@(?!At\b)\w+)', src)
+redirects = [n for blk in blocks
+             if blk.lstrip().startswith('@Redirect')
+             and re.search(r'@At\(\s*(?:value\s*=\s*)?"NEW"', blk)
+             for m in re.finditer(r'method\s*=\s*(\{[^}]*\}|"[^"]+")', blk)
+             for n in re.findall(r'"([^"]+)"', m.group(1))]
 covered = {r.split("(")[0] for r in redirects}
 
 print(f"NEW RegionFile sites: {len(sites)}")

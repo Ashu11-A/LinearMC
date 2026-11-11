@@ -63,9 +63,9 @@ public final class ConvertJob {
      * detect; {@code to==null} means legacy (route via {@code direction()} only).
      * {@code grid==0} means unspecified (format default: Pumpkin 2, V2/V3 8).
      */
-    private volatile net.linear.LinearRegionConverter.ConvertFormat fromFormat =
-        net.linear.LinearRegionConverter.ConvertFormat.AUTO;
-    private volatile net.linear.LinearRegionConverter.ConvertFormat toFormat = null;
+    private volatile LinearRegionConverter.ConvertFormat fromFormat =
+        LinearRegionConverter.ConvertFormat.AUTO;
+    private volatile LinearRegionConverter.ConvertFormat toFormat = null;
     private volatile int gridSize = 0;
 
     private volatile JobState state;
@@ -136,12 +136,12 @@ public final class ConvertJob {
     }
 
     /** Explicit {@code --from} filter ({@code AUTO} = detect; default for legacy jobs). */
-    public net.linear.LinearRegionConverter.ConvertFormat fromFormat() {
+    public LinearRegionConverter.ConvertFormat fromFormat() {
         return this.fromFormat;
     }
 
     /** Explicit {@code --to} target ({@code null} = legacy, route via {@code direction()}). */
-    public net.linear.LinearRegionConverter.ConvertFormat toFormat() {
+    public LinearRegionConverter.ConvertFormat toFormat() {
         return this.toFormat;
     }
 
@@ -156,10 +156,10 @@ public final class ConvertJob {
     }
 
     /** Sets explicit routing (called once by the executor right after submit). */
-    public void setExplicit(net.linear.LinearRegionConverter.ConvertFormat from,
-            net.linear.LinearRegionConverter.ConvertFormat to, int gridSize) {
-        if (to == null || to == net.linear.LinearRegionConverter.ConvertFormat.AUTO
-                || to == net.linear.LinearRegionConverter.ConvertFormat.LINEAR) {
+    public void setExplicit(LinearRegionConverter.ConvertFormat from,
+            LinearRegionConverter.ConvertFormat to, int gridSize) {
+        if (to == null || to == LinearRegionConverter.ConvertFormat.AUTO
+                || to == LinearRegionConverter.ConvertFormat.LINEAR) {
             throw new IllegalArgumentException("explicit to must be concrete, got " + to
                 + " (--to linear means V1, normalized at parse time)");
         }

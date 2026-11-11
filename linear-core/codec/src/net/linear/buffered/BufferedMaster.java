@@ -6,7 +6,6 @@ import java.nio.file.Path;
 import net.jpountz.lz4.LZ4Factory;
 import net.jpountz.xxhash.XXHash32;
 import net.jpountz.xxhash.XXHashFactory;
-import net.linear.BufferedLinearRegionFile;
 import net.linear.LinearRegionFile;
 
 /**

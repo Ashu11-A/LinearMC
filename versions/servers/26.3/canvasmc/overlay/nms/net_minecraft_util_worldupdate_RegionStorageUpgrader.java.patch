@@ -212,7 +212,7 @@ diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/min
 +        // reverse beside it, so live converts defer loaded regions instead of
 +        // copying files under live writes.
 +        // Open-but-clean handles stay undetected; shadow protection is the backstop.
-+        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked.
++        // Skip via core isFolderDirty (tracked-dirty defers; never-tracked proceeds).
 +        net.linear.LinearRegionConverter.linear$setForwardSkipPredicate(path -> {
 +            try {
 +                final Path parent = path.toAbsolutePath().getParent();

@@ -8,7 +8,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import net.linear.convert.scan.CandidateScanner;
-import net.linear.LinearRegionConverter;
 import net.linear.RegionFileFormat;
 
 /**

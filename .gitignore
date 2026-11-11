@@ -30,3 +30,9 @@ __pycache__/
 
 # Local server test workspaces (jars, worlds, logs).
 /tests/
+
+# Claude Code: version the project skills only (local settings stay private).
+/.claude/*
+!/.claude/skills/
+/CLAUDE.local.md
+/.ai-memory.toml

@@ -124,6 +124,7 @@ public final class AbstractRegionFileFactory {
     public static AbstractRegionFile get(
         Path file, Object info, Path folder, boolean sync, int compressionLevel
     ) throws IOException {
+        file = LinearStorageProbe.hostOpening(file);
         String fileName = file.getFileName().toString();
         if (fileName.endsWith(B_LINEAR_EXTENSION)) {
             return bufferedOpener.open(file, clampCompressionLevel(compressionLevel));

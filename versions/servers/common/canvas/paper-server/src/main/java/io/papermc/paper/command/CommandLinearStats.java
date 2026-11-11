@@ -43,6 +43,16 @@ public class CommandLinearStats extends Command {
         if (!this.testPermission(sender)) {
             return false;
         }
+        renderPanel(sender, args);
+        return true;
+    }
+
+    /**
+     * The stats panel without a permission check: {@code /linearstats} checks
+     * {@code Action.LINEARSTATS}, {@code /linear stats} checks
+     * {@code Action.LINEAR_STATS} (core rule) before calling this.
+     */
+    static void renderPanel(@NotNull CommandSender sender, @NotNull String[] args) {
         Map<String, LinearRegionTimings.LinearFolderSnapshot> snaps = LinearFlushCoordinator.snapshots();
         Optional<String> filter = args.length > 0 && args[0] != null && !args[0].isEmpty()
             ? Optional.of(args[0]) : Optional.empty();
@@ -51,7 +61,6 @@ public class CommandLinearStats extends Command {
         for (LinearStatsCompact.CompactRow row : rows) {
             sender.sendMessage(render(row));
         }
-        return true;
     }
 
     static Component render(LinearStatsCompact.CompactRow row) {
@@ -153,7 +162,7 @@ public class CommandLinearStats extends Command {
         String prefix = args.length == 0 || args[0] == null ? "" : args[0];
         List<String> out = new ArrayList<>();
         try {
-            for (org.bukkit.World w : org.bukkit.Bukkit.getWorlds()) {
+            for (org.bukkit.World w : Bukkit.getWorlds()) {
                 String name = w.getName();
                 if (name == null) {
                     continue;

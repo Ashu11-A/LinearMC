@@ -22,7 +22,11 @@ public class LinearFileConfigTest {
         LinearFileConfig.setFileValues(null, null);
         LinearFileConfig.setFileWriterValues(null, null);
         LinearFileConfig.setFileSymlinkGuard(null);
+        LinearFileConfig.setWorldValues(null);
+        LinearFileConfig.resetWriterLogForTests();
         System.clearProperty(LinearPolicy.SYSPROP_FORMAT);
+        System.clearProperty(LinearPolicy.SYSPROP_IMPLEMENTATION);
+        System.clearProperty(LinearPolicy.SYSPROP_GRID_SIZE);
         System.clearProperty(LinearPolicy.SYSPROP_LEVEL);
         System.clearProperty(LinearPolicy.SYSPROP_IMPLEMENTATION);
         System.clearProperty(LinearPolicy.SYSPROP_GRID_SIZE);
@@ -138,13 +142,13 @@ public class LinearFileConfigTest {
 
     @Test
     public void implementationSyspropOverFileOverDefault() {
-        assertEquals(net.linear.LinearImplementation.V1, LinearFileConfig.resolveImplementation());
+        assertEquals(LinearImplementation.V1, LinearFileConfig.resolveImplementation());
         LinearFileConfig.setFileWriterValues("V3", null);
-        assertEquals(net.linear.LinearImplementation.V3, LinearFileConfig.resolveImplementation());
+        assertEquals(LinearImplementation.V3, LinearFileConfig.resolveImplementation());
         System.setProperty(LinearPolicy.SYSPROP_IMPLEMENTATION, "V2");
-        assertEquals(net.linear.LinearImplementation.V2, LinearFileConfig.resolveImplementation());
+        assertEquals(LinearImplementation.V2, LinearFileConfig.resolveImplementation());
         System.setProperty(LinearPolicy.SYSPROP_IMPLEMENTATION, "BOGUS");
-        assertEquals(net.linear.LinearImplementation.V3, LinearFileConfig.resolveImplementation());
+        assertEquals(LinearImplementation.V3, LinearFileConfig.resolveImplementation());
     }
 
     @Test
@@ -169,5 +173,67 @@ public class LinearFileConfigTest {
         assertFalse(LinearFileConfig.resolveCrashOnBrokenSymlink());
         LinearFileConfig.setFileSymlinkGuard(Boolean.TRUE);
         assertTrue(LinearFileConfig.resolveCrashOnBrokenSymlink());
+    }
+    @Test
+    public void perWorldValuesOverrideTheGlobalFileValuesByDimensionKey() {
+        LinearFileConfig.setFileValues("LINEAR", 6);
+        LinearFileConfig.setWorldValues(java.util.Map.of(
+            "minecraft:the_nether", new LinearFileConfig.WorldValues("ANVIL", null),
+            "minecraft:the_end", new LinearFileConfig.WorldValues(null, 9)));
+        final String nether = "/srv/world/dimensions/minecraft/the_nether/region";
+        final String end = "/srv/world/dimensions/minecraft/the_end/entities";
+        final String overworld = "/srv/world/dimensions/minecraft/overworld/poi";
+        assertEquals(RegionFileFormat.ANVIL, LinearFileConfig.resolveFormatFor(nether));
+        assertEquals(6, LinearFileConfig.resolveLevelFor(nether));
+        assertEquals(RegionFileFormat.LINEAR, LinearFileConfig.resolveFormatFor(end));
+        assertEquals(9, LinearFileConfig.resolveLevelFor(end));
+        assertEquals(RegionFileFormat.LINEAR, LinearFileConfig.resolveFormatFor(overworld));
+        assertEquals(6, LinearFileConfig.resolveLevelFor(overworld));
+    }
+
+    @Test
+    public void syspropStillWinsOverPerWorldValues() {
+        LinearFileConfig.setWorldValues(java.util.Map.of(
+            "minecraft:the_nether", new LinearFileConfig.WorldValues("ANVIL", 3)));
+        System.setProperty(LinearPolicy.SYSPROP_FORMAT, "LINEAR");
+        System.setProperty(LinearPolicy.SYSPROP_LEVEL, "8");
+        try {
+            final String nether = "/srv/world/dimensions/minecraft/the_nether/region";
+            assertEquals(RegionFileFormat.LINEAR, LinearFileConfig.resolveFormatFor(nether));
+            assertEquals(8, LinearFileConfig.resolveLevelFor(nether));
+        } finally {
+            System.clearProperty(LinearPolicy.SYSPROP_LEVEL);
+        }
+    }
+
+    @Test
+    public void pushWriterValuesPublishesValidKeysAndWarnsOnceForBadOnes() {
+        final java.util.List<String> warns = new java.util.ArrayList<>();
+        final java.util.List<String> infos = new java.util.ArrayList<>();
+        LinearFileConfig.pushWriterValues("v2", 16, warns::add, infos::add);
+        assertEquals(LinearImplementation.V2, LinearFileConfig.resolveImplementation());
+        assertEquals(16, LinearFileConfig.resolveGridSize());
+        assertTrue(warns.isEmpty());
+
+        LinearFileConfig.resetWriterLogForTests();
+        LinearFileConfig.pushWriterValues("V9", 7, warns::add, infos::add);
+        assertEquals(LinearImplementation.V1, LinearFileConfig.resolveImplementation());
+        assertEquals(8, LinearFileConfig.resolveGridSize());
+        assertEquals(2, warns.size());
+        assertTrue(warns.get(0).contains("must be V1, V2 or V3"));
+        assertTrue(warns.get(1).contains("must be one of 1, 2, 4, 8, 16, 32"));
+
+        LinearFileConfig.pushWriterValues("V9", 7, warns::add, infos::add);
+        assertEquals("bad values warn once per process", 2, warns.size());
+    }
+
+    @Test
+    public void pushWriterValuesNamesSyspropOverridesOnce() {
+        System.setProperty(LinearPolicy.SYSPROP_IMPLEMENTATION, "V3");
+        final java.util.List<String> infos = new java.util.ArrayList<>();
+        LinearFileConfig.pushWriterValues("V1", 8, null, infos::add);
+        assertEquals(LinearImplementation.V3, LinearFileConfig.resolveImplementation());
+        assertEquals(1, infos.size());
+        assertTrue(infos.get(0).contains(LinearPolicy.SYSPROP_IMPLEMENTATION));
     }
 }

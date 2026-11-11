@@ -17,7 +17,8 @@ What this release does not cover. Read it before a rollout, not after.
 
 ## Conversion
 
-- The only converter in this repository runs automatically at startup. When a world is set to the new format, leftover old-format region files are converted, checked, and then deleted, with a few retries and a full stop if errors keep happening.
+- Leftover old-format region files of a world set to the new format convert automatically at startup (every leg, before plugins load): converted, checked, then deleted, with a few retries and a full stop if errors keep happening. `/linear convert` converts on demand in either direction.
+- A live `/linear convert --execute` away from `.mca` never deletes an `.mca` region the server opened since startup (a handle to a deleted `.mca` would lose every later write) and defers Linear regions with unflushed writes. Those files are reported SKIPPED and kept. To finish them, restart and re-run the convert before the region loads; startup conversion finishes them only on a world set to a linear format, and only into that format.
 - Worlds explicitly set to the old format never convert.
 - The offline two-way converter used for earlier measurements is not part of this repository.
 - Empty zero-byte region files are skipped and reported, never converted. They are usually the cause when a single file reports a conversion error, and a failed file leaves the live world untouched.

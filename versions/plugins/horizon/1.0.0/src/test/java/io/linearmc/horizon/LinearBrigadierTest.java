@@ -98,8 +98,27 @@ public class LinearBrigadierTest {
     }
 
     @Test
-    public void permissionStringExact() {
-        assertEquals("linear.command.linear", new Harness().command.permission());
+    public void noCommandLevelNodeRootFollowsTheCoreRule() {
+        // No single node gates /linear: a convert-only or queue-only holder
+        // must reach their subcommand (core LinearPermissions Action.ROOT).
+        assertEquals(null, new Harness().command.permission());
+        final LinearCommand command = new Harness().command;
+        assertTrue(command.canUse(senderWith("linear.command.convert")));
+        assertTrue(command.canUse(senderWith("linear.command.queue")));
+        assertTrue(command.canUse(senderWith("linear.command.linearstats")));
+        assertTrue(command.canUse(senderWith("linear.command.linear")));
+        assertFalse(command.canUse(senderWith()));
+    }
+
+    private static CommandSender senderWith(String... nodes) {
+        final java.util.Set<String> held = java.util.Set.of(nodes);
+        return (CommandSender) Proxy.newProxyInstance(LinearBrigadierTest.class.getClassLoader(),
+            new Class<?>[]{CommandSender.class}, (proxy, method, args) -> {
+                if (method.getName().equals("hasPermission") && args != null && args[0] instanceof String n) {
+                    return held.contains(n);
+                }
+                return method.getReturnType() == boolean.class ? false : null;
+            });
     }
 
     @Test

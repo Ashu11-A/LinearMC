@@ -41,6 +41,12 @@ The first three settings are per-world. The rest are global-only.
 | linear.implementation | paper-global.yml | V1 | Unknown value logs a warning and writes V1 |
 | linear.grid-size | paper-global.yml | 8 | Outside 1, 2, 4, 8, 16, 32 logs a warning and uses 8 |
 
+On the Canvas fork the same keys live in Canvas' own files: the per-world
+ones in `config/canvas-worlds.yml` (and `<dimension>/canvas-patch.yml`)
+under `region-format`, the global ones in Canvas' global configuration
+under `linear` (camelCase: `flushFrequency`, `implementation`, `gridSize`,
+...). Every `-Dlinearmc.*` override is named once in the boot log.
+
 The format setting chooses the file extension used for new writes:
 `ANVIL` (`.mca`), `LINEAR` (`.linear`), or `B_LINEAR` (`.b_linear` plus a
 `.b_linear.swp` swap file that travels beside the master; never delete or
@@ -139,15 +145,31 @@ while the file still holds the bad value.
 
 The Horizon plugin does not read `paper-world-defaults.yml`,
 `paper-world.yml`, or `paper-global.yml`. It uses `plugins/LinearMC/config.yml`
-with the same keys, plus the same system properties above, set on the
-server JVM. All four overrides work there: `-Dlinearmc.format`,
-`-Dlinearmc.compression-level`, `-Dlinearmc.implementation`, and
-`-Dlinearmc.grid-size`.
+with the same keys (shipped default `format: LINEAR`, like the forks), plus
+the same system properties above, set on the server JVM. The file is read in
+the plugin bootstrap, before the server initializes, so the startup
+conversion and the first world storages already use it.
+
+Per-world values go in a `worlds:` section keyed by dimension id (quote the
+key because of the ':'); only `format` and `compression-level` can be
+overridden per world, and system properties still win:
+
+```yaml
+worlds:
+  "minecraft:the_nether":
+    format: ANVIL
+  "minecraft:the_end":
+    compression-level: 9
+```
 
 On Horizon, durability does not depend on storage flush/close (verified
 live: neither fires on that line). A repeating async heartbeat persists
-age-gated files on the flush-frequency rhythm, and disabling the plugin
-force-flushes everything, so a clean stop loses nothing.
+age-gated files on the flush-frequency rhythm. Plugins are disabled before
+the server's final world save, so disabling the plugin only drains what is
+dirty at that moment; the real stop barrier runs after the final save and
+region I/O flush (`MinecraftServerMixin`, right before `onServerExit()`),
+and the boot log says `stop barrier armed`. A clean stop without
+`save-all` loses nothing (`scripts/migration-smoke.sh`, marker D).
 
 ## Example
 

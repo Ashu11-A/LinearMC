@@ -8,8 +8,6 @@ import net.linear.versions.ChunkSlotView;
 import net.linear.versions.codecs.V1Linear;
 import net.linear.versions.Version;
 import net.linear.versions.VersionWriteParams;
-import net.linear.buffered.BufferedSwapFile;
-import net.linear.BufferedLinearRegionFile;
 import net.linear.RegionFileFormat;
 
 /**

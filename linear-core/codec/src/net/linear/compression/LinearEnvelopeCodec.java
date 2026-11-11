@@ -9,7 +9,6 @@ import java.util.Arrays;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 import net.jpountz.lz4.LZ4BlockInputStream;
-import net.linear.versions.Version;
 
 /**
  * Normalizes region chunk payloads to raw NBT (multi-version axis #2).

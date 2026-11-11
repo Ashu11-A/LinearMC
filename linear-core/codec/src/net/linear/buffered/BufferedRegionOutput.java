@@ -6,9 +6,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.Objects;
-import net.linear.flush.FlushReports;
 import net.linear.AbstractRegionFile;
-import net.linear.LinearFlushCoordinator;
 
 /**
  * Buffered chunk-output contract for the Linear region file.

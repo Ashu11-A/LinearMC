@@ -13,7 +13,6 @@ import net.linear.probe.LinearBucketGrid;
 import net.linear.LinearRegionFile;
 import net.linear.compression.LinearHash;
 import net.linear.compression.Lz4SlotCodec;
-import net.linear.bucket.LinearBucketReader;
 import net.linear.versions.ChunkSlotTable;
 import net.linear.versions.ChunkSlotView;
 import net.linear.versions.VersionWriteParams;

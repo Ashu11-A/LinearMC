@@ -9,7 +9,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import net.linear.RegionFileFormat;
 import net.linear.convert.versions.AbstractVersionConvertModule;
-import net.linear.LinearRegionConverter;
 import net.linear.versions.ChunkSlotTable;
 import net.linear.versions.VersionWriteParams;
 

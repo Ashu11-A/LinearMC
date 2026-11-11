@@ -457,7 +457,7 @@ public final class CandidateScanner {
                     boolean shadowAmbiguousPumpkin = false;
                     try {
                         shadowIsPumpkin = LinearRegionConverter.detectLinearFormat(shadow)
-                            == net.linear.versions.RegionFormatDetector.DetectedFormat.PUMPKIN;
+                            == RegionFormatDetector.DetectedFormat.PUMPKIN;
                     } catch (IOException detectFail) {
                         String msg = String.valueOf(detectFail.getMessage());
                         // Ambiguous layouts naming PUMPKIN could be genuine Pumpkin bytes

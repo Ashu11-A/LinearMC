@@ -5,7 +5,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import net.linear.BufferedLinearRegionFile;
 import net.linear.LinearRegionFile;
 
 /**

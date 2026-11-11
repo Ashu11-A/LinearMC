@@ -1,0 +1,172 @@
+# LinearMC leg-parity contract, checked by scripts/parity-check.sh.
+#
+# Every user-facing capability lists one cell per leg:
+#   {ev: ["path#symbol", ...], test: "<Test classes>"}  supported; every symbol must
+#       appear verbatim in the file (in a .patch: on an ADDED line). Name real *Test
+#       classes; with none (or with live-only proof) add test_gap: "<plan>".
+#   {gap: "<plan>"}                                      missing; refused by --release.
+#   {exempt: "<reason>", approved: "<who/when>"}         host limit the user signed off.
+# `core:` evidence is shared by every leg. Rule (decision 2026-11-10): a capability
+# lands on all legs in one change; releases ship with zero gaps.
+version: 2
+legs: [folia, canvas, horizon]
+aliases:
+  "@F/": versions/servers/26.1.x/folia/patches/
+  "@FC/": versions/servers/26.1.x/common/
+  "@C/": versions/servers/26.3/canvasmc/
+  "@CH/": versions/servers/common/canvas/
+  "@CMD/": versions/servers/common/canvas/paper-server/src/main/java/io/papermc/paper/command/
+  "@H/": versions/plugins/horizon/1.0.0/src/
+  "@HM/": versions/plugins/horizon/1.0.0/src/main/java/io/linearmc/horizon/
+  "@HP/": versions/plugins/horizon/1.0.0/src/plugin/java/io/linearmc/horizon/
+  "@core/": linear-core/
+  "@RFS": versions/servers/26.3/canvasmc/overlay/nms/net_minecraft_world_level_chunk_storage_RegionFileStorage.java.patch
+
+capabilities:
+  - id: write-formats
+    title: Write ANVIL, LINEAR (V1) and B_LINEAR (+ .swp) region files
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#import net.linear.probe.AbstractRegionFileFactory; // Linear"], test: CoreFactoryTest}
+    canvas: {ev: ["@RFS#AbstractRegionFileFactory.get(regionPath"], test: CoreFactoryTest}
+    horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#return HorizonSeams.openRegion(", "@HM/HorizonSeams.java#return new HorizonLinearRegionFile(path, level);", "@HM/HorizonSeams.java#return new HorizonBufferedRegionFile(path, level);"], test: LinearFormatPolicyTest}
+
+  - id: read-all-layouts
+    title: Read V1/V2/V3, Pumpkin and DivineMC files (auto-detected)
+    core: ["@core/codec/src/net/linear/versions/RegionFormatDetector.java#class RegionFormatDetector"]
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#AbstractRegionFileFactory.get("], test: RegionFormatDetectorTest PumpkinLinearTest}
+    canvas: {ev: ["@RFS#AbstractRegionFileFactory.get(regionPath"], test: RegionFormatDetectorTest PumpkinLinearTest}
+    horizon: {ev: ["@HM/HorizonLinearRegionFile.java#class HorizonLinearRegionFile"], test: RegionFormatDetectorTest PumpkinLinearTest}
+
+  - id: read-existing-other-format
+    title: An existing region in another format is found, never regenerated (incl. mid-conversion)
+    core: ["@core/format/src/net/linear/probe/LinearStorageProbe.java#public static Path probeExisting"]
+    folia: {ev: ["@F/minecraft-0018-Linear-core-decoupling.patch#net.linear.probe.LinearStorageProbe.probeExisting("], test: LinearStorageProbeTest, test_gap: "live migration-smoke on the fork jar (PASS 2026-11-10, not in CI)"}
+    canvas: {ev: ["@RFS#net.linear.probe.LinearStorageProbe.probeExisting("], test: LinearStorageProbeTest, test_gap: "live migration-smoke on the fork jar (PASS 2026-11-10, not in CI)"}
+    horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#private String linear$existingFirstName"], test: LinearStorageProbeTest MixinDescriptorsTest}
+
+  - id: no-split-regions
+    title: A write to an existing region lands in that file (no new .linear beside an .mca)
+    core: ["@core/format/src/net/linear/probe/LinearStorageProbe.java#public static String resolveFileName"]
+    folia: {ev: ["@F/minecraft-0014-Linear-default-format.patch#LinearStorageProbe.resolveFileName("], test: LinearStorageProbeTest}
+    canvas: {ev: ["@RFS#LinearStorageProbe.resolveFileName("], test: LinearStorageProbeTest}
+    horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#LinearStorageProbe.resolveFileName("], test: LinearStorageProbeTest}
+
+  - id: storage-folders
+    title: region/, entities/ and poi/ all go through the Linear dispatch
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#final net.linear.RegionFileFormat format, // Linear - world region format"], test_gap: "live entities/poi assertion in migration-smoke"}
+    canvas: {ev: ["@CH/overlay/nms/net_minecraft_world_entity_ai_village_poi_PoiManager.java.patch#final net.linear.RegionFileFormat format, // Linear - threaded from ChunkMap"], test_gap: "live entities/poi assertion in migration-smoke"}
+    horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#@Mixin(RegionFileStorage.class)"], test_gap: "live entities/poi assertion in migration-smoke (entities converted on Canvas 2026-11-10)"}
+
+  - id: default-format-linear
+    title: Shipped default format is LINEAR
+    folia: {ev: ["@F/paper-0010-Linear-default-format.patch#public RegionFileFormat format = RegionFileFormat.LINEAR;"], test_gap: "assert the default in LinearGlobalConfigTest"}
+    canvas: {ev: ["@CH/overlay/config/io_canvasmc_canvas_WorldConfig.java.patch#public net.linear.RegionFileFormat format = net.linear.RegionFileFormat.LINEAR;"], test_gap: "assert the default in a Canvas config test"}
+    horizon: {ev: ["@H/plugin/resources/config.yml#  format: LINEAR"], test: LinearConfigLoaderTest}
+
+  - id: per-world-format
+    title: Format and compression level configurable per world
+    folia: {ev: ["@F/paper-0008-Linear-config.patch#public RegionFormat regionFormat;"], test: LinearGlobalConfigTest}
+    canvas: {ev: ["@CH/overlay/config/io_canvasmc_canvas_WorldConfig.java.patch#public int compressionLevel = 6;"], test: LinearGlobalConfigTest}
+    horizon: {ev: ["@HP/LinearConfigLoader.java#LinearFileConfig.setWorldValues(worldValues(", "@HM/mixins/RegionFileStorageMixin.java#LinearFileConfig.fileFormatFor(scope)"], test: LinearConfigLoaderTest LinearFileConfigTest LinearFolderNamesTest}
+
+  - id: global-flush-keys
+    title: flush-frequency, flush-max-threads, compression-workers, long-distance-matching, crash-on-broken-symlink
+    folia: {ev: ["@F/paper-0008-Linear-config.patch#public int flushFrequency = 10;", "@F/paper-0008-Linear-config.patch#public boolean crashOnBrokenSymlink = true;"], test: LinearGlobalConfigTest}
+    canvas: {ev: ["@C/overlay/config/io_canvasmc_canvas_GlobalConfiguration.java.patch#public long flushFrequency = 10L;", "@RFS#public final boolean linearCrashOnBrokenSymlink;"], test: LinearGlobalConfigTest}
+    horizon: {ev: ["@H/plugin/resources/config.yml#long-distance-matching: 0", "@HM/mixins/RegionFileStorageMixin.java#LinearFileConfig.resolveCrashOnBrokenSymlink()"], test: LinearFormatPolicyTest}
+
+  - id: sysprop-overrides
+    title: -Dlinearmc.format / compression-level / implementation / grid-size override config
+    core: ["@core/config/src/net/linear/config/LinearPolicy.java#SYSPROP_FORMAT"]
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#net.linear.config.LinearPolicy.resolveFormatWithOverride(linearSysFormat"], test: LinearPolicyTest}
+    canvas: {ev: ["@C/overlay/nms/net_minecraft_server_level_ServerChunkCache.java.patch#System.getProperty(net.linear.config.LinearPolicy.SYSPROP_FORMAT)"], test: LinearPolicyTest}
+    horizon: {ev: ["@HP/LinearPlugin.java#LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_FORMAT)"], test: LinearPolicyTest LinearFormatPolicyTest}
+
+  - id: writer-keys-and-override-log
+    title: implementation / grid-size config keys take effect, bad values warn, sysprop overrides are logged
+    core: ["@core/config/src/net/linear/config/LinearFileConfig.java#public static void pushWriterValues"]
+    folia: {ev: ["@F/paper-0008-Linear-config.patch#LinearFileConfig.pushWriterValues(this.implementation, this.gridSize, LOGGER::warn, LOGGER::info);"], test: LinearFileConfigTest}
+    canvas: {ev: ["@C/overlay/config/io_canvasmc_canvas_GlobalConfiguration.java.patch#public String implementation = \"V1\";", "@C/overlay/config/io_canvasmc_canvas_GlobalConfiguration.java.patch#LinearFileConfig.pushWriterValues("], test: LinearFileConfigTest}
+    horizon: {ev: ["@HP/LinearConfigLoader.java#LinearFileConfig.pushWriterValues("], test: LinearFileConfigTest LinearConfigLoaderTest}
+
+  - id: commands
+    title: /linearstats [filter], /linear stats [world] | help | queue ... | convert (dry-run default)
+    core: ["@core/command/src/net/linear/command/parse/LinearCommandParser.java#class LinearCommandParser"]
+    folia: {ev: ["@F/paper-0009-Linear-linearstats.patch#new LinearCommandParser().parse(args)"], test: LinearCommandBindingTest LinearStatsCommandTest}
+    canvas: {ev: ["@CMD/CommandLinear.java#new LinearCommandParser().parse(args)"], test: LinearCommandBindingTest LinearStatsCommandTest}
+    horizon: {ev: ["@HP/LinearCommand.java#LinearCommandParser", "@HP/LinearPlugin.java#new LinearStatsCommand(this)"], test: LinearCommandTest LinearBrigadierTest LinearStatsCommandTest}
+
+  - id: convert-all-storage-folders
+    title: /linear convert covers region/, entities/ and poi/ (full revert possible)
+    folia: {ev: ["@F/paper-0009-Linear-linearstats.patch#for (String folder : LinearFolderNames.STORAGE_FOLDERS)"], test: LinearCommandBindingTest}
+    canvas: {ev: ["@CMD/CommandLinear.java#STORAGE_FOLDERS"], test: LinearCommandBindingTest}
+    horizon: {ev: ["@HP/LinearCommand.java#for (String name : LinearFolderNames.STORAGE_FOLDERS)"], test_gap: "LinearCommandTest for resolveStorageFolders + live --to-mca revert"}
+
+  - id: convert-job-concurrency
+    title: One convert per storage folder; a busy folder rejects --execute before any job is queued
+    core: ["@core/command/src/net/linear/command/queue/FolderClaims.java#public static Path claimAll"]
+    folia: {ev: ["@F/paper-0009-Linear-linearstats.patch#FolderClaims.claimAll(folders)"], test: FolderClaimsTest}
+    canvas: {ev: ["@CMD/CommandLinear.java#FolderClaims.claimAll(folders)"], test: FolderClaimsTest}
+    horizon: {ev: ["@HP/LinearCommand.java#FolderClaims.claimAll(storageFolders)"], test: FolderClaimsTest}
+
+  - id: convert-level-sysprop
+    title: /linear convert level honours -Dlinearmc.compression-level
+    folia: {ev: ["@F/paper-0009-Linear-linearstats.patch#System.getProperty(LinearPolicy.SYSPROP_LEVEL)"], test: LinearCommandBindingTest}
+    canvas: {ev: ["@CMD/CommandLinear.java#System.getProperty(LinearPolicy.SYSPROP_LEVEL)"], test: LinearCommandBindingTest}
+    horizon: {ev: ["@HP/LinearCommand.java#private static int effectiveConvertLevel"], test: LinearPolicyTest, test_gap: "LinearCommandTest for the override line"}
+
+  - id: permission-semantics
+    title: One permission rule on every leg (core LinearPermissions.allows; docs/commands.md table)
+    core: ["@core/command/src/net/linear/command/parse/LinearPermissions.java#public static boolean allows"]
+    folia: {ev: ["@F/paper-0009-Linear-linearstats.patch#LinearPermissions.Action.LINEAR_STATS"], test: LinearPermissionsTest}
+    canvas: {ev: ["@CMD/CommandLinear.java#LinearPermissions.Action.LINEAR_STATS"], test: LinearPermissionsTest}
+    horizon: {ev: ["@HP/LinearCommand.java#LinearPermissions.Action.ROOT"], test: LinearPermissionsTest LinearBrigadierTest}
+
+  - id: flush-unlock
+    title: Region-cache eviction close runs outside the storage lock
+    folia: {ev: ["@FC/minecraft-0011-Linear-flush-unlock.patch#AbstractRegionFile evicted = null;"], test: LinearFlushUnlockTest}
+    canvas: {ev: ["@RFS#evicted = evictedOpt.get();"], test: LinearFlushUnlockTest}
+    horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#private void linear$deferEvictionClose", "@HM/DeferredRegionCloses.java#public static void awaitPending"], test: MixinDescriptorsTest, test_gap: "concurrency test: eviction close never under the monitor, reopen waits"}
+
+  - id: save-all-forced-flush
+    title: /save-all (flush) forces every dirty Linear file to disk
+    core: ["@core/flush/src/net/linear/flush/FlushReports.java#public static void onSave"]
+    folia: {ev: ["@F/minecraft-0017-Linear-save-drain.patch#net.linear.LinearFlushCoordinator.flushAllDirty(true);"], test: LinearSaveDrainTest}
+    canvas: {ev: ["@C/overlay/nms/net_minecraft_server_level_ServerChunkCache.java.patch#net.linear.LinearFlushCoordinator.flushAllDirty(true);"], test: LinearSaveDrainTest}
+    horizon: {ev: ["@HM/mixins/ServerChunkCacheMixin.java#FlushReports.FolderDrain.onSave(flushStorage);"], test: MixinDescriptorsTest}
+
+  - id: final-stop-drain
+    title: Final drain runs AFTER the server's last world save and region I/O flush
+    folia: {ev: ["@F/minecraft-0017-Linear-save-drain.patch#net.linear.LinearFlushCoordinator.linear$beginShutdown();"], test: LinearSaveDrainTest}
+    canvas: {ev: ["@C/overlay/nms/io_papermc_paper_threadedregions_RegionShutdownThread.java.patch#linear$beginShutdown"], test: LinearSaveDrainTest}
+    horizon: {ev: ["@HM/mixins/MinecraftServerMixin.java#private void linear$finalDrainBeforeExit", "@HM/LinearShutdownBarrier.java#FlushReports.FolderDrain.onServerStop();"], test: MixinDescriptorsTest, test_gap: "live clean stop (migration-smoke marker D) not in CI"}
+
+  - id: startup-conversion
+    title: Leftover .mca regions convert automatically at startup, before plugins/worlds load
+    core: ["@core/convert/src/net/linear/StartupConversion.java#public static int convertDimension"]
+    folia: {ev: ["@F/paper-0011-Linear-startup-conversion.patch#class LinearStartupConversion"], test: LinearStartupConversionTest}
+    canvas: {ev: ["@C/paper-server/src/main/java/io/papermc/paper/linear/LinearStartupConversion.java#for (final String folderName : STORAGE_FOLDERS)"], test: LinearStartupConversionTest}
+    horizon: {ev: ["@HM/mixins/DedicatedServerMixin.java#LinearStartup.runPrePluginConversion("], test: StartupConversionTest}
+
+  - id: force-upgrade
+    title: --forceUpgrade / --recreateRegionFiles see .linear files
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#RegionStorageUpgrader"], test_gap: "share RegionStorageUpgraderScanTest with Folia"}
+    canvas: {ev: ["@C/overlay/nms/net_minecraft_util_worldupdate_RegionStorageUpgrader.java.patch#import net.linear.probe.AbstractRegionFileFactory; // Linear"], test: RegionStorageUpgraderScanTest}
+    horizon: {gap: "Decision needed: Paper 26.x (so every Horizon host) stubs --forceUpgrade; RegionStorageUpgraderMixin is ready. Un-stub the host via mixins (Main.main, Main.forceUpgrade, PaperWorldLoader) or approve an exempt."}
+
+  - id: flush-event
+    title: LinearRegionFlushCompletedEvent fires per flush (Horizon FQN io.linearmc.horizon.event)
+    folia: {ev: ["@F/paper-0009-Linear-linearstats.patch#class LinearRegionFlushCompletedEvent"], test: LinearStatsCommandTest}
+    canvas: {ev: ["@CH/paper-server/src/main/java/io/papermc/paper/linear/LinearFlushBridge.java#LinearRegionFlushCompletedEvent"], test: LinearStatsCommandTest}
+    horizon: {ev: ["@HP/LinearPlugin.java#LinearFlushCoordinator.linear$setFlushListener(this::fireFlushEvent);"], test_gap: "plugin listener test"}
+
+  - id: cache-counters
+    title: /linearstats cache hit/miss and oversize counters are live
+    folia: {ev: ["@F/minecraft-0010-Linear-region-observability.patch#reportCacheHit"], test: LinearMeasurementCountersTest}
+    canvas: {ev: ["@RFS#reportCacheHit"], test: LinearMeasurementCountersTest}
+    horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#private Object linear$countedLookup", "@HM/OversizeGate.java#FlushReports.reportOversizeQuietly("], test: MixinDescriptorsTest, test_gap: "live /linear stats hit/miss assertion"}
+
+  - id: broken-symlink-halt
+    title: A broken linear-family symlink halts the server (crash-on-broken-symlink)
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#guardAgainstBrokenSymlinks"], test_gap: "share BrokenSymlinkGuardTest with Folia"}
+    canvas: {ev: ["@RFS#guardAgainstBrokenSymlinks"], test: BrokenSymlinkGuardTest}
+    horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#server.halt(false);"], test_gap: "live only (halts, keeps the symlink: tests/sym-paper 2026-11-10)"}

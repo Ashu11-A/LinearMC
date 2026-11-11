@@ -7,9 +7,6 @@ import net.linear.versions.ChunkSlotTable;
 import net.linear.versions.base.V2LinearBase;
 import net.linear.versions.Version;
 import net.linear.probe.LinearBucketGrid;
-import net.linear.versions.codecs.V2Linear;
-import net.linear.versions.codecs.V3Linear;
-import net.linear.LinearRegionFile;
 
 /**
  * DivineMC-compatible V2/V3 bucket reader (wire 3/4) inflating into V1 slot tables.

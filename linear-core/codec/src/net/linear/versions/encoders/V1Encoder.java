@@ -7,7 +7,6 @@ import java.nio.ByteBuffer;
 import net.linear.LinearRegionFile;
 import net.linear.compression.Lz4SlotCodec;
 import net.linear.RegionFileFormat;
-import net.linear.versions.codecs.V1Linear;
 import net.linear.versions.ChunkSlotTable;
 import net.linear.versions.ChunkSlotView;
 import net.linear.versions.VersionWriteParams;

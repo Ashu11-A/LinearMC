@@ -26,11 +26,18 @@ repositories {
 
 dependencies {
     // One jar for every 26.x line: compile against the OLDEST supported bundle
-    // (26.1.2) and let api-version stay at 26.1. CI substitutes this pin from
-    // upstream.horizon.properties; per-bundle tests cover 26.2/26.3.
+    // (26.1.2) and let api-version stay at 26.1. CI passes the pin from
+    // upstream.horizon*.properties as -PdevBundle=<pin> (or
+    // ORG_GRADLE_PROJECT_devBundle); per-bundle tests cover 26.2/26.3.
+    // The fallback must equal HORIZON_DEV_BUNDLE in upstream.horizon.properties.
     // Our mixins target Mojang-mapped 26.x; defaultRequire:1 in
     // mixins.linearmc.json fails the boot loudly on selector drift.
-    paperweight.paperDevBundle("26.1.2.build.74-stable")
+    val devBundle = providers.gradleProperty("devBundle").getOrElse("26.1.2.build.74-stable")
+    require(Regex("""^\d+\.\d+(\.\d+)?\.build\.\d+-(stable|beta|alpha)$""").matches(devBundle)) {
+        "devBundle '$devBundle' is not a <mc>.build.<n>-<channel> pin (see upstream.horizon*.properties)"
+    }
+    logger.lifecycle("LinearMC Horizon: paperDevBundle=$devBundle")
+    paperweight.paperDevBundle(devBundle)
     // Horizon's own mixin artifact (NOT org.spongepowered:mixin:0.8.5).
     implementation("net.fabricmc:sponge-mixin:0.17.3+mixin.0.8.7")
     // JiJ-embedded: the server runtime never sees our compile classpath

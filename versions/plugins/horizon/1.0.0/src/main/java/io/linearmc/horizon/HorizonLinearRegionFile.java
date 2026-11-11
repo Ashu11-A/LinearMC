@@ -110,6 +110,15 @@ public class HorizonLinearRegionFile extends RegionFile implements AbstractRegio
         return this.hasChunk(ChunkPosCoords.toKey(pos));
     }
 
+    /**
+     * Upgrader probe ({@code RegionStorageUpgrader.getAllChunkPositions})
+     * asks the vanilla header; answer from the Linear store instead.
+     */
+    @Override
+    public boolean doesChunkExist(final ChunkPos pos) {
+        return this.hasChunk(pos);
+    }
+
     @Override
     public boolean hasChunk(final long chunk) {
         return this.delegate.hasChunk(chunk);
@@ -129,7 +138,7 @@ public class HorizonLinearRegionFile extends RegionFile implements AbstractRegio
         // Storing the envelope serves the version byte as the NBT tag type:
         // "Root tag must be a named compound tag" + Moonrise discards the chunk.
         // Empty buffers pass through as the delete-slot sentinel.
-        this.delegate.write(chunk, LinearWritePath.normalizeWritePayload(data));
+        OversizeGate.writeOrReject(this.delegate, this.realPath, chunk, LinearWritePath.normalizeWritePayload(data));
         this.markDirty();
     }
 
@@ -191,7 +200,7 @@ public class HorizonLinearRegionFile extends RegionFile implements AbstractRegio
                     final ByteBuffer normalized = raw.length == 0
                         ? ByteBuffer.allocate(0)
                         : LinearWritePath.normalizeWritePayload(ByteBuffer.wrap(raw));
-                    delegate.write(chunk, normalized);
+                    OversizeGate.writeOrReject(delegate, realPath, chunk, normalized);
                 } finally {
                     markDirty();
                 }

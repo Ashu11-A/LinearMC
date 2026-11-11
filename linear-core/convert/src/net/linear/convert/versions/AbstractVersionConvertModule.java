@@ -10,10 +10,8 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import net.linear.LinearRegionConverter;
 import net.linear.versions.ChunkSlotTable;
 import net.linear.versions.RegionFormatDetector;
-import net.linear.versions.Version;
 import net.linear.versions.VersionWriteParams;
 
 /**

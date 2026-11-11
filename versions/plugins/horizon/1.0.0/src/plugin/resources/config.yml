@@ -1,12 +1,15 @@
 # LinearMC file layer (plugins/LinearMC/config.yml).
 #
 # Precedence: -Dlinearmc.* system properties win over this file, which wins
-# over the shipped defaults. The shipped default format is ANVIL (fail-open:
-# no .linear files are written unless this file or a sysprop opts in).
+# over the shipped defaults. The shipped default format is LINEAR, like the
+# Folia and Canvas forks: on the first boot, leftover .mca regions of every
+# LINEAR world are converted (region/, entities/, poi/) before plugins load.
+# Set ANVIL (here, per world below, or -Dlinearmc.format=ANVIL) to opt out;
+# existing .linear files keep loading either way.
 # Edits require a restart; nothing here is re-read at runtime.
 region-format:
   # ANVIL, LINEAR or B_LINEAR (case-sensitive; unknown values fall back to ANVIL).
-  format: ANVIL
+  format: LINEAR
   linear:
     compression-level: 6
     # V1 (single blob), V2/V3 (bucketed DivineMC-compatible). Writers only;
@@ -21,10 +24,20 @@ region-format:
     long-distance-matching: 0
     log-flush-batches: false
 
+# Per-world overrides (optional). Keys are dimension ids, quoted because of
+# the ':' (minecraft:overworld, minecraft:the_nether, minecraft:the_end, or a
+# plugin dimension such as myplugin:arena). Only format and compression-level
+# can be overridden; everything else is server-wide. Sysprops still win.
+worlds: {}
+#  "minecraft:the_nether":
+#    format: ANVIL
+#  "minecraft:the_end":
+#    compression-level: 9
+
 # /linear convert copies one world's region files to another layout.
 # Five migration formats: mca, v1, v2, v3, blinear (--to linear means v1).
 # Pumpkin migrates explicit-only:
 #   /linear convert <world> --from pumpkin --to <target> --execute
 # (per-job --grid 1|2|4|8|16|32; Pumpkin target fixes level 1, grid default 2).
-# Startup auto-conversion never rewrites Pumpkin files. No settings here
-# affect conversion: it takes the level above plus the per-job flags.
+# Startup auto-conversion never rewrites Pumpkin files. /linear convert uses
+# --level (default 6, like the forks); -Dlinearmc.compression-level wins.

@@ -37,8 +37,8 @@ import net.linear.versions.VersionWriteParams;
  * {@link CandidateScanner#parseRegionName} and its private counters/openers
  * replaced by {@link ConversionValidator} plus
  * {@link LinearRegionConverter#openProbed} call-throughs). This file calls
- * {@link net.linear.versions.RegionFormatDetector},
- * {@link net.linear.bucket.LinearBase} and {@link net.linear.versions.codecs.PumpkinLinear}
+ * {@link RegionFormatDetector},
+ * {@link LinearBase} and {@link PumpkinLinear}
  * directly and duplicates the two grid-default constants locally.</p>
  *
  * <p>NMS-dependent per-file convert bodies ({@code convertSingleFileExplicit},
@@ -71,7 +71,7 @@ public final class ExplicitConvertRouter {
      * @throws IOException fail-closed with diagnosis (corrupt/unknown or ambiguous,
      *         candidates named; never falls through into another layout's reader)
      */
-    public static net.linear.versions.RegionFormatDetector.DetectedFormat detectLinearFormat(Path file)
+    public static RegionFormatDetector.DetectedFormat detectLinearFormat(Path file)
             throws IOException {
         CandidateScanner.RegionName coords = CandidateScanner.parseRegionName(file.getFileName().toString());
         if (coords == null) {
@@ -85,7 +85,7 @@ public final class ExplicitConvertRouter {
         }
         ByteBuffer image = ByteBuffer.wrap(raw);
         try {
-            return net.linear.versions.RegionFormatDetector.shared().detect(image, coords.x(), coords.z());
+            return RegionFormatDetector.shared().detect(image, coords.x(), coords.z());
         } catch (IOException e) {
             throw new IOException(e.getMessage() + " in " + file, e);
         }
@@ -105,7 +105,7 @@ public final class ExplicitConvertRouter {
         }
         try {
             return detectLinearFormat(file)
-                == net.linear.versions.RegionFormatDetector.DetectedFormat.PUMPKIN;
+                == RegionFormatDetector.DetectedFormat.PUMPKIN;
         } catch (IOException detectFail) {
             String msg = String.valueOf(detectFail.getMessage());
             return msg.contains("Ambiguous") && msg.contains("PUMPKIN");
@@ -123,7 +123,7 @@ public final class ExplicitConvertRouter {
      * fail loudly without diagnosis — replaced here by detect-then-parse,
      * still fail-closed, now with detector diagnosis).
      */
-    public static net.linear.versions.ChunkSlotTable parseLinearToSlots(Path file) throws IOException {
+    public static ChunkSlotTable parseLinearToSlots(Path file) throws IOException {
         CandidateScanner.RegionName coords = CandidateScanner.parseRegionName(file.getFileName().toString());
         if (coords == null) {
             throw new IOException("Unparseable region name: " + file);
@@ -136,7 +136,7 @@ public final class ExplicitConvertRouter {
      * (for temp images like {@code *.pumpkin-tmpV1.linear} whose filenames do
      * not match {@code REGION_NAME} but whose coords are known from the source).
      */
-    public static net.linear.versions.ChunkSlotTable parseLinearToSlots(Path file, int regionX, int regionZ)
+    public static ChunkSlotTable parseLinearToSlots(Path file, int regionX, int regionZ)
             throws IOException {
         byte[] raw;
         try {
@@ -145,30 +145,30 @@ public final class ExplicitConvertRouter {
             throw new IOException("Cannot read source " + file + ": " + e.getMessage(), e);
         }
         ByteBuffer image = ByteBuffer.wrap(raw);
-        net.linear.versions.RegionFormatDetector.DetectedFormat detected;
+        RegionFormatDetector.DetectedFormat detected;
         try {
-            detected = net.linear.versions.RegionFormatDetector.shared().detect(image, regionX, regionZ);
+            detected = RegionFormatDetector.shared().detect(image, regionX, regionZ);
         } catch (IOException e) {
             throw new IOException(e.getMessage() + " in " + file, e);
         }
-        net.linear.versions.Version version;
+        Version version;
         switch (detected) {
             case V1:
-                version = net.linear.bucket.LinearBase.getShared((byte) 2);
+                version = LinearBase.getShared((byte) 2);
                 break;
             case V2:
-                version = net.linear.bucket.LinearBase.getShared((byte) 3);
+                version = LinearBase.getShared((byte) 3);
                 break;
             case V3:
-                version = net.linear.bucket.LinearBase.getShared((byte) 4);
+                version = LinearBase.getShared((byte) 4);
                 break;
             case PUMPKIN:
-                version = net.linear.versions.codecs.PumpkinLinear.shared();
+                version = PumpkinLinear.shared();
                 break;
             default:
                 throw new IOException("Unsupported linear layout " + detected + " in " + file);
         }
-        net.linear.versions.ChunkSlotTable out = new net.linear.versions.ChunkSlotTable();
+        ChunkSlotTable out = new ChunkSlotTable();
         out.sourceName = file.toString();
         try {
             version.parse(image, out);
@@ -188,7 +188,7 @@ public final class ExplicitConvertRouter {
             return LinearRegionConverter.ConvertFormat.MCA;
         }
         if (name.endsWith(RegionFileFormat.LINEAR_EXTENSION)) {
-            net.linear.versions.RegionFormatDetector.DetectedFormat d = detectLinearFormat(file);
+            RegionFormatDetector.DetectedFormat d = detectLinearFormat(file);
             switch (d) {
                 case V1:
                     return LinearRegionConverter.ConvertFormat.V1;
@@ -228,24 +228,24 @@ public final class ExplicitConvertRouter {
     /** Grid for explicit targets (0/whitelist-miss => format default; Pumpkin 2, V2/V3 8). */
     public static int resolveExplicitGrid(LinearRegionConverter.ConvertFormat to, int requestedGrid) {
         if (to == LinearRegionConverter.ConvertFormat.PUMPKIN) {
-            return net.linear.probe.LinearBucketGrid.isValid(requestedGrid) ? requestedGrid : PUMPKIN_DEFAULT_GRID;
+            return LinearBucketGrid.isValid(requestedGrid) ? requestedGrid : PUMPKIN_DEFAULT_GRID;
         }
         if (to == LinearRegionConverter.ConvertFormat.V2
                 || to == LinearRegionConverter.ConvertFormat.V3) {
-            return net.linear.probe.LinearBucketGrid.isValid(requestedGrid) ? requestedGrid : BUCKETED_DEFAULT_GRID;
+            return LinearBucketGrid.isValid(requestedGrid) ? requestedGrid : BUCKETED_DEFAULT_GRID;
         }
         return requestedGrid;
     }
 
     /** Maps explicit {@code to} to a staging implementation (V1/V2/V3 via LinearRegionFile). */
-    public static net.linear.LinearImplementation implForExplicit(LinearRegionConverter.ConvertFormat to) {
+    public static LinearImplementation implForExplicit(LinearRegionConverter.ConvertFormat to) {
         if (to == LinearRegionConverter.ConvertFormat.V2) {
-            return net.linear.LinearImplementation.V2;
+            return LinearImplementation.V2;
         }
         if (to == LinearRegionConverter.ConvertFormat.V3) {
-            return net.linear.LinearImplementation.V3;
+            return LinearImplementation.V3;
         }
-        return net.linear.LinearImplementation.V1;
+        return LinearImplementation.V1;
     }
 
     /**
@@ -268,9 +268,9 @@ public final class ExplicitConvertRouter {
     }
 
     /** Present-slot count of an already-parsed slot table (slots with {@code uncompressedSize > 0}). */
-    public static int countPresentSlots(net.linear.versions.ChunkSlotTable slots) {
+    public static int countPresentSlots(ChunkSlotTable slots) {
         int n = 0;
-        for (int i = 0; i < net.linear.versions.ChunkSlotTable.SLOTS; i++) {
+        for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
             if (slots.uncompressedSize[i] > 0) {
                 n++;
             }
@@ -291,19 +291,19 @@ public final class ExplicitConvertRouter {
             throw new IOException("Cannot read pumpkin candidate " + file + ": " + e.getMessage(), e);
         }
         ByteBuffer image = ByteBuffer.wrap(raw);
-        net.linear.versions.RegionFormatDetector.DetectedFormat detected;
+        RegionFormatDetector.DetectedFormat detected;
         try {
-            detected = net.linear.versions.RegionFormatDetector.shared().detect(image, regionX, regionZ);
+            detected = RegionFormatDetector.shared().detect(image, regionX, regionZ);
         } catch (IOException e) {
             throw new IOException(e.getMessage() + " in " + file, e);
         }
-        if (detected != net.linear.versions.RegionFormatDetector.DetectedFormat.PUMPKIN) {
+        if (detected != RegionFormatDetector.DetectedFormat.PUMPKIN) {
             throw new IOException("Expected PUMPKIN layout, detected " + detected + " in " + file);
         }
-        net.linear.versions.ChunkSlotTable probe = new net.linear.versions.ChunkSlotTable();
+        ChunkSlotTable probe = new ChunkSlotTable();
         probe.sourceName = file.toString();
         try {
-            net.linear.versions.codecs.PumpkinLinear.shared().parse(image, probe);
+            PumpkinLinear.shared().parse(image, probe);
         } catch (IOException e) {
             throw new IOException(e.getMessage() + " in " + file, e);
         }
@@ -365,9 +365,9 @@ public final class ExplicitConvertRouter {
         int sourceCount;
         String sourceName = source.getFileName().toString();
         if (sourceName.endsWith(RegionFileFormat.LINEAR_EXTENSION)) {
-            net.linear.versions.ChunkSlotTable probe = parseLinearToSlots(source);
+            ChunkSlotTable probe = parseLinearToSlots(source);
             int n = 0;
-            for (int i = 0; i < net.linear.versions.ChunkSlotTable.SLOTS; i++) {
+            for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
                 if (probe.uncompressedSize[i] > 0) {
                     n++;
                 }
@@ -433,9 +433,9 @@ public final class ExplicitConvertRouter {
                 }
             }
             if (sourceName.endsWith(RegionFileFormat.LINEAR_EXTENSION)) {
-                net.linear.versions.ChunkSlotTable probe = parseLinearToSlots(source);
+                ChunkSlotTable probe = parseLinearToSlots(source);
                 int n = 0;
-                for (int i = 0; i < net.linear.versions.ChunkSlotTable.SLOTS; i++) {
+                for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
                     if (probe.uncompressedSize[i] > 0) {
                         n++;
                     }
@@ -600,7 +600,7 @@ public final class ExplicitConvertRouter {
             return;
         }
         // V1/V2/V3 targets via existing LinearRegionFile staging (impl + grid from job params).
-        net.linear.LinearImplementation impl = implForExplicit(to);
+        LinearImplementation impl = implForExplicit(to);
         int grid = resolveExplicitGrid(to, requestedGrid);
         if (samePath) {
             convertSingleFileToLinearSamePath(source, level, impl, grid);
@@ -618,7 +618,7 @@ public final class ExplicitConvertRouter {
                     ChunkKey.of(coords.x() * 32, coords.z() * 32));
                 // Re-stage with the requested impl/grid when it is not the default V1:
                 // materializeEmptyTarget always writes V1, so rewrite buckets when needed.
-                if (impl != net.linear.LinearImplementation.V1) {
+                if (impl != LinearImplementation.V1) {
                     restageAsImpl(stagingTarget, level, impl, grid);
                 }
             } else {
@@ -636,7 +636,7 @@ public final class ExplicitConvertRouter {
     }
 
     /** Restages a just-materialized empty V1 file as V2/V3 (empty targets have no chunks to copy). */
-    public static void restageAsImpl(Path stagingTarget, int level, net.linear.LinearImplementation impl, int grid)
+    public static void restageAsImpl(Path stagingTarget, int level, LinearImplementation impl, int grid)
             throws IOException {
         Path tmp = stagingTarget.resolveSibling(stagingTarget.getFileName() + ".restage-tmp");
         Files.deleteIfExists(tmp);
@@ -665,7 +665,7 @@ public final class ExplicitConvertRouter {
      * BEFORE the swap; on failure the staging is dropped and the source stands.
      */
     public static void convertSingleFileToLinearSamePath(Path source, int level,
-            net.linear.LinearImplementation impl, int grid) throws IOException {
+            LinearImplementation impl, int grid) throws IOException {
         CandidateScanner.RegionName coords =
             CandidateScanner.parseRegionName(source.getFileName().toString());
         if (coords == null) {
@@ -681,7 +681,7 @@ public final class ExplicitConvertRouter {
             if (sourceCount == 0) {
                 ChunkCopier.materializeEmptyTarget(staging, level,
                     ChunkKey.of(coords.x() * 32, coords.z() * 32));
-                if (impl != net.linear.LinearImplementation.V1) {
+                if (impl != LinearImplementation.V1) {
                     restageAsImpl(staging, level, impl, grid);
                 }
             } else {
@@ -736,12 +736,12 @@ public final class ExplicitConvertRouter {
         }
         String sourceName = source.getFileName().toString();
         boolean sourceLinear = sourceName.endsWith(RegionFileFormat.LINEAR_EXTENSION);
-        net.linear.versions.ChunkSlotTable slots;
+        ChunkSlotTable slots;
         if (Files.size(source) == 0L) {
             // 0-byte sources are trivially empty (same rule as the other
             // targets): materialize an empty Pumpkin image instead of
             // detector-failing and burning 3 retries on a certain FAILED.
-            slots = new net.linear.versions.ChunkSlotTable();
+            slots = new ChunkSlotTable();
         } else if (sourceLinear) {
             slots = parseLinearToSlots(source);
         } else {
@@ -771,7 +771,7 @@ public final class ExplicitConvertRouter {
             long newest = 0L;
             int[] snapSize = slots.uncompressedSize();
             int[] snapTime = slots.timestamps();
-            for (int i = 0; i < net.linear.versions.ChunkSlotTable.SLOTS; i++) {
+            for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
                 if (snapSize[i] > 0) {
                     long ts = snapTime[i] & 0xFFFFFFFFL;
                     if (ts > newest) {
@@ -779,18 +779,18 @@ public final class ExplicitConvertRouter {
                     }
                 }
             }
-            net.linear.versions.VersionWriteParams params = new net.linear.versions.VersionWriteParams(
+            VersionWriteParams params = new VersionWriteParams(
                 1, grid, coords.x(), coords.z(), newest, 0, 0);
             ByteBuffer image;
             try {
-                image = net.linear.versions.codecs.PumpkinLinear.shared().flush(slots, params);
+                image = PumpkinLinear.shared().flush(slots, params);
             } catch (IOException e) {
                 throw new IOException(e.getMessage() + " (pumpkin flush)", e);
             }
             Files.createDirectories(tmp.toAbsolutePath().getParent());
             try (FileChannel channel = FileChannel.open(tmp, StandardOpenOption.CREATE,
                     StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-                net.linear.io.LinearDirectStreams.writeFully(channel, image);
+                LinearDirectStreams.writeFully(channel, image);
                 channel.force(true);
             } catch (IOException e) {
                 try {
@@ -832,7 +832,7 @@ public final class ExplicitConvertRouter {
         long newest = 0L;
         int[] snapSize2 = slots.uncompressedSize();
         int[] snapTime2 = slots.timestamps();
-        for (int i = 0; i < net.linear.versions.ChunkSlotTable.SLOTS; i++) {
+        for (int i = 0; i < ChunkSlotTable.SLOTS; i++) {
             if (snapSize2[i] > 0) {
                 long ts = snapTime2[i] & 0xFFFFFFFFL;
                 if (ts > newest) {
@@ -840,17 +840,17 @@ public final class ExplicitConvertRouter {
                 }
             }
         }
-        net.linear.versions.VersionWriteParams params2 = new net.linear.versions.VersionWriteParams(
+        VersionWriteParams params2 = new VersionWriteParams(
             1, grid, coords.x(), coords.z(), newest, 0, 0);
         ByteBuffer image2;
         try {
-            image2 = net.linear.versions.codecs.PumpkinLinear.shared().flush(slots, params2);
+            image2 = PumpkinLinear.shared().flush(slots, params2);
         } catch (IOException e) {
             throw new IOException(e.getMessage() + " (pumpkin flush)", e);
         }
         try (FileChannel channel = FileChannel.open(stagingTmp, StandardOpenOption.CREATE,
                 StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            net.linear.io.LinearDirectStreams.writeFully(channel, image2);
+            LinearDirectStreams.writeFully(channel, image2);
             channel.force(true);
         } catch (IOException e) {
             try {

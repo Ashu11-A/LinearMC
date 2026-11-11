@@ -3,7 +3,6 @@ package net.linear.versions.codecs;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import net.linear.LinearImplementation;
-import net.linear.bucket.LinearBase;
 import net.linear.versions.base.AbstractLinearVersion;
 import net.linear.versions.decoders.V1Decoder;
 import net.linear.versions.encoders.V1Encoder;

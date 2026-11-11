@@ -92,6 +92,15 @@ public class HorizonBufferedRegionFile extends RegionFile implements AbstractReg
         return this.hasChunk(ChunkPosCoords.toKey(pos));
     }
 
+    /**
+     * Upgrader probe ({@code RegionStorageUpgrader.getAllChunkPositions})
+     * asks the vanilla header; answer from the Linear store instead.
+     */
+    @Override
+    public boolean doesChunkExist(final ChunkPos pos) {
+        return this.hasChunk(pos);
+    }
+
     @Override
     public boolean hasChunk(final long chunk) {
         return this.delegate.hasChunk(chunk);
@@ -104,7 +113,7 @@ public class HorizonBufferedRegionFile extends RegionFile implements AbstractReg
 
     @Override
     public void write(final long chunk, final ByteBuffer data) throws IOException {
-        this.delegate.write(chunk, LinearWritePath.normalizeWritePayload(data));
+        OversizeGate.writeOrReject(this.delegate, this.realPath, chunk, LinearWritePath.normalizeWritePayload(data));
         this.markDirty();
     }
 
@@ -152,7 +161,7 @@ public class HorizonBufferedRegionFile extends RegionFile implements AbstractReg
                     final ByteBuffer normalized = raw.length == 0
                         ? ByteBuffer.allocate(0)
                         : LinearWritePath.normalizeWritePayload(ByteBuffer.wrap(raw));
-                    delegate.write(chunk, normalized);
+                    OversizeGate.writeOrReject(delegate, realPath, chunk, normalized);
                 } finally {
                     markDirty();
                 }

@@ -89,6 +89,9 @@ public final class LinearFlushCoordinator {
 
     private static final ConcurrentHashMap<String, LinearFlushCoordinator> BY_FOLDER = new ConcurrentHashMap<>();
 
+    /** Fast-path cache for {@link #forFolder}; entries die with their coordinator. */
+    private static final ConcurrentHashMap<Path, LinearFlushCoordinator> BY_PATH = new ConcurrentHashMap<>();
+
     /**
      * Shutdown mode: set once from the server stop barrier before the final
      * drains. While set, markDirty only tracks (never spawns pressure/age
@@ -141,7 +144,17 @@ public final class LinearFlushCoordinator {
 
     /** Per-folder singleton; creates on first use for a storage folder. */
     public static LinearFlushCoordinator forFolder(Path folder) {
-        return BY_FOLDER.computeIfAbsent(key(folder), key -> new LinearFlushCoordinator(folder));
+        // Hot path (every chunk I/O and region-cache lookup): Path-keyed fast
+        // map first (Path caches its hash), the normalized string key only on
+        // a miss. A coordinator dropped by evict/evictAll is never returned.
+        final LinearFlushCoordinator fast = BY_PATH.get(folder);
+        if (fast != null && !fast.evicted) {
+            return fast;
+        }
+        final LinearFlushCoordinator coordinator =
+            BY_FOLDER.computeIfAbsent(key(folder), key -> new LinearFlushCoordinator(folder));
+        BY_PATH.put(folder, coordinator);
+        return coordinator;
     }
 
     /**
@@ -193,6 +206,8 @@ public final class LinearFlushCoordinator {
     public static void evict(Path folder) {
         LinearFlushCoordinator coordinator = BY_FOLDER.remove(key(folder));
         if (coordinator != null) {
+            coordinator.evicted = true;
+            BY_PATH.values().removeIf(c -> c == coordinator);
             coordinator.flushDirty(true);
             for (int i = 0; i < 2 && !coordinator.isEmpty(); i++) {
                 coordinator.flushDirty(true);
@@ -225,9 +240,13 @@ public final class LinearFlushCoordinator {
      * {@code ServerLevel.close()}. Idempotent.
      */
     public static void evictAll() {
-        java.util.List<LinearFlushCoordinator> all =
-            new java.util.ArrayList<>(BY_FOLDER.values());
+        List<LinearFlushCoordinator> all =
+            new ArrayList<>(BY_FOLDER.values());
         BY_FOLDER.clear();
+        for (LinearFlushCoordinator coordinator : all) {
+            coordinator.evicted = true;
+        }
+        BY_PATH.clear();
         for (LinearFlushCoordinator coordinator : all) {
             try {
                 coordinator.flushDirty(true);
@@ -318,7 +337,7 @@ public final class LinearFlushCoordinator {
             if (this.dirty.isEmpty()) {
                 return null;
             }
-            final java.util.List<AbstractRegionFile> batch;
+            final List<AbstractRegionFile> batch;
             if (force) {
                 batch = new ArrayList<>(this.dirty.keySet());
             } else {
@@ -350,6 +369,8 @@ public final class LinearFlushCoordinator {
     }
 
     private final Path folder;
+    /** Set once this instance left the registry (evict/evictAll): the fast path skips it. */
+    private volatile boolean evicted;
     private final java.util.LinkedHashMap<AbstractRegionFile, Long> dirty = new java.util.LinkedHashMap<>();
     /** Folder-wide timing + windowed latency (all counters live here). */
     private final FlushLatencyWindow timings = new FlushLatencyWindow();
@@ -472,8 +493,8 @@ public final class LinearFlushCoordinator {
     }
 
     /** Test-only view of first-dirty order (head = longest-unflushed). */
-    synchronized java.util.List<AbstractRegionFile> linear$dirtyOrderForTests() {
-        return new java.util.ArrayList<>(this.dirty.keySet());
+    synchronized List<AbstractRegionFile> linear$dirtyOrderForTests() {
+        return new ArrayList<>(this.dirty.keySet());
     }
 
     /**
@@ -481,7 +502,7 @@ public final class LinearFlushCoordinator {
      * single-threaded or trivially small, else ONE shared pool with caller
      * participation and join-before-return (durability barrier).
      */
-    public void linear$flushSnapshot(java.util.List<AbstractRegionFile> snapshot, boolean forceBarrier) {
+    public void linear$flushSnapshot(List<AbstractRegionFile> snapshot, boolean forceBarrier) {
         ParallelFlushFanout.flushSnapshot(snapshot, forceBarrier, this::flushOne);
     }
 

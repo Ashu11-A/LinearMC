@@ -12,7 +12,6 @@ import net.linear.versions.ChunkSlotView;
 import net.linear.versions.Version;
 import net.linear.versions.VersionWriteParams;
 import net.linear.io.LinearDirectStreams;
-import net.linear.LinearRegionFile;
 import net.linear.RegionFileFormat;
 
 /**
@@ -20,7 +19,7 @@ import net.linear.RegionFileFormat;
  *
  * <h2>Version x format matrix</h2>
  * <p>Two axes are independent. The <em>codec</em> ({@code V1}/{@code V2}/
- * {@code V3}/{@code Pumpkin} {@link net.linear.versions.Version}) renders slot
+ * {@code V3}/{@code Pumpkin} {@link Version}) renders slot
  * tables into a whole file image; the <em>container</em> (this hierarchy)
  * owns the file-system shape around that image:</p>
  * <ul>

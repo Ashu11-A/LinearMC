@@ -40,6 +40,9 @@ Seam changes vs 26.2 (all verified by `apply --check` + full compile +
   `GlobalConfiguration`: carried from 26.2 (hunk-count repair + one restored
   context line each where session edits had dropped them; content verified
   against the 26.3 tree).
+- `GlobalConfiguration` also gains a `postLoad` hunk (writer keys pushed to
+  the core after validation) and the `implementation`/`grid-size` options:
+  re-anchor both hunks on a bump.
 - `LinearStartupConversion.java`: unchanged from 26.2
   (`Registries.levelStemToLevel` inline mapping); compiles as-is.
 

@@ -2,12 +2,6 @@ package net.linear.versions.base;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import net.linear.bucket.LinearBucketReader;
-import net.linear.bucket.LinearBucketWriter;
-import net.linear.versions.codecs.PumpkinLinear;
-import net.linear.versions.codecs.V2Linear;
-import net.linear.versions.codecs.V3Linear;
-import net.linear.versions.RegionFormatDetector;
 
 /**
  * Deprecated compat supertype for the bucketed codecs.

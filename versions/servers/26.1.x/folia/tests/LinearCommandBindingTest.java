@@ -22,7 +22,6 @@ import net.linear.command.parse.LinearPermissions;
 import net.linear.command.queue.QueueOp;
 
 import org.junit.jupiter.api.Test;
-import net.linear.command.queue.JobRunner;
 
 /**
  * {@code /linear} command-tree binding: parser grammar plus core executor

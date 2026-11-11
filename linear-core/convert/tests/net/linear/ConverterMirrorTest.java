@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import net.linear.probe.AbstractRegionFileFactory;
 import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
@@ -233,6 +234,76 @@ public class ConverterMirrorTest {
     }
 
     @Test
+    public void forwardKeepsAnAnvilSourceTheServerOpened() throws Exception {
+        Path region = temporaryFolder.newFolder("hostopen").toPath();
+        Path source = region.resolve("r.0.1.mca");
+        Files.write(source, new byte[(int) LinearRegionConverter.MIN_ANVIL_SIZE]);
+        wireForwardMca(new ConcurrentHashMap<>(sampleChunks(0, 1)));
+        net.linear.probe.LinearStorageProbe.hostOpening(source);
+
+        RecordingListener events = new RecordingListener();
+        LinearRegionConverter.ConversionSummary summary =
+            LinearRegionConverter.convertRegionFolder(region, 6, events);
+
+        assertEquals(0, summary.deleted());
+        assertEquals(0, summary.failed());
+        assertTrue("a source the server opened must survive", Files.isRegularFile(source));
+        assertFalse("the deferred attempt must leave no target",
+            Files.isRegularFile(region.resolve("r.0.1.linear")));
+        assertTrue("SKIPPED must be reported", events.sawStatus(LinearRegionConverter.Status.SKIPPED));
+    }
+
+    @Test
+    public void explicitKeepsAnAnvilSourceTheServerOpened() throws Exception {
+        Path region = temporaryFolder.newFolder("hostopenexplicit").toPath();
+        Path source = region.resolve("r.0.1.mca");
+        Files.write(source, new byte[(int) LinearRegionConverter.MIN_ANVIL_SIZE]);
+        wireForwardMca(new ConcurrentHashMap<>(sampleChunks(0, 1)));
+        net.linear.probe.LinearStorageProbe.hostOpening(source);
+
+        RecordingListener events = new RecordingListener();
+        LinearRegionConverter.ConversionSummary summary = LinearRegionConverter.convertRegionFolderExplicit(
+            region, 6, 0, events, false, LinearRegionConverter.ConvertFormat.MCA,
+            LinearRegionConverter.ConvertFormat.V1);
+
+        assertEquals(0, summary.deleted());
+        assertEquals(0, summary.failed());
+        assertTrue("a source the server opened must survive", Files.isRegularFile(source));
+        try (java.util.stream.Stream<Path> left = Files.list(region)) {
+            assertEquals("the deferred attempt must leave only the source",
+                List.of(source), left.toList());
+        }
+        assertTrue("SKIPPED must be reported", events.sawStatus(LinearRegionConverter.Status.SKIPPED));
+    }
+
+    @Test
+    public void forwardThroughTheStorageFactoryStillDeletesItsSource() throws Exception {
+        // Every leg's converter opener calls the storage factory: its own opens
+        // must never count as host opens (or every live convert would defer).
+        Path region = temporaryFolder.newFolder("factoryopen").toPath();
+        Path source = region.resolve("r.0.1.mca");
+        Files.write(source, new byte[(int) LinearRegionConverter.MIN_ANVIL_SIZE]);
+        Map<Long, byte[]> chunks = new ConcurrentHashMap<>(sampleChunks(0, 1));
+        AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) -> new FakeMcaFile(chunks));
+        AbstractRegionFileFactory.linear$setLinearOpener(LinearRegionFile::new);
+        LinearRegionConverter.linear$setRegionOpener((file, folder, sync, format, level) ->
+            AbstractRegionFileFactory.get(file, new Object(), folder, sync, level));
+        try {
+            LinearRegionConverter.ConversionSummary summary =
+                LinearRegionConverter.convertRegionFolder(region, 6, new RecordingListener());
+            assertEquals(1, summary.deleted());
+            assertFalse("the converted source must be deleted", Files.exists(source));
+        } finally {
+            AbstractRegionFileFactory.linear$setAnvilOpener((info, file, dir, sync) -> {
+                throw new IOException("no AnvilOpener registered");
+            });
+            AbstractRegionFileFactory.linear$setLinearOpener((file, level) -> {
+                throw new IOException("no LinearOpener registered");
+            });
+        }
+    }
+
+    @Test
     public void forwardSkipPredicateThrowDefersClosed() throws Exception {
         Path region = temporaryFolder.newFolder("fwskipthrow").toPath();
         Path source = region.resolve("r.0.2.mca");
@@ -302,7 +373,7 @@ public class ConverterMirrorTest {
     }
 
     /** In-memory stand-in for a vanilla .mca handle (no NMS, no IO). */
-    private static final class FakeMcaFile implements AbstractRegionFile {
+    static final class FakeMcaFile implements AbstractRegionFile {
         private final Map<Long, byte[]> chunks;
 
         FakeMcaFile(Map<Long, byte[]> chunks) {

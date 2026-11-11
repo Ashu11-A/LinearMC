@@ -8,11 +8,14 @@ the full set plus permissions.
 
 Operators hold these by default. Anyone else needs the exact node;
 `linear.command.linear` is the family-wide fallback that also grants
-convert, queue, and stats.
+convert, queue, and stats. The rule is one core function
+(`LinearPermissions.allows`) on every leg: `/linear` itself needs any of
+the four nodes, so a holder of only `linear.command.convert` or
+`linear.command.queue` reaches their subcommand.
 
 | Node | Grants |
 | --- | --- |
-| `linear.command.linearstats` | `/linearstats` only — nothing else grants it |
+| `linear.command.linearstats` | `/linearstats` and `/linear stats` — nothing else grants `/linearstats` |
 | `linear.command.linear` | The whole `/linear` family plus `/linear stats` |
 | `linear.command.convert` | `/linear convert` |
 | `linear.command.queue` | `/linear queue ...` |
@@ -34,11 +37,11 @@ Queues a conversion job for one world. Direction defaults to old-format-to-new, 
 
 Converting rewrites live world data, so treat it like a rollout: quiesced backup with the verification marker first (see the operator manual), one world at a time, then a save cycle and a restart to confirm. Each file converts, is checked, and only then replaces the original; a file that fails validation stops the job with the live world untouched.
 
-Only one convert may run per storage folder at a time (Canvas and Horizon). A second `--execute` on an in-flight folder is rejected with `conversion already running for <folder>` — it queues nothing and blocks nothing. Folia serializes converts through its single-thread worker instead, so no second pass can overlap there.
+Only one convert may run per storage folder at a time, on every leg. A second `--execute` on an in-flight folder is rejected with `conversion already running for <folder>` and blocks nothing. Folia additionally runs passes for different worlds one after another on its single convert worker; Canvas and Horizon run them in parallel.
 
 Progress totals and dry-run candidate lists are estimates only. They count union-per-target files matching `r.X.Z.(mca|linear|b_linear)` (toward LINEAR: `.mca + .b_linear`; toward B_LINEAR: `.mca + .linear`; toward ANVIL: `.linear + .b_linear`), honoring `--from` at extension level for explicit jobs. Ambiguous same-coordinate groups and source-beside-target shadows are excluded (the real collection escalates those to FAILED with nothing queued; only file-IO validation could requeue an invalid-shadow orphan). Pumpkin layout detection and folder-dirty skips need file/detector IO and can only shrink the real queue further, so when in doubt the estimate undercounts. Folia legacy and explicit dry-runs both echo candidates on the same path.
 
-Scope is intentional and differs by leg: Horizon converts the single `region/` folder; Canvas and Folia convert all three (`region/`, `entities/`, `poi/`). Do not "fix" the Horizon scope.
+Every leg converts all three storage folders of the world (`region/`, `entities/`, `poi/`), so a full revert to `.mca` leaves nothing behind. Online conversion of `entities/` and `poi/` touches files the server reopens often; prefer a quiet server (or run it right after a restart) and keep the backup rule above.
 
 ## Queue
 

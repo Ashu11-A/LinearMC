@@ -1,7 +1,6 @@
 package net.linear.versions.encoders;
 
 import java.nio.ByteBuffer;
-import net.linear.versions.codecs.V2Linear;
 import net.linear.versions.ChunkSlotView;
 import net.linear.versions.VersionWriteParams;
 

@@ -13,8 +13,8 @@ import net.linear.LinearRegionConverter;
 import net.linear.command.ConvertDirection;
 import net.linear.command.ConvertJob;
 import net.linear.command.parse.InvalidUsageException;
+import net.linear.command.queue.FolderClaims;
 import net.linear.command.queue.JobQueue;
-import net.linear.command.queue.JobState;
 import net.linear.command.queue.JobStatusView;
 import net.linear.command.LinearAction;
 import net.linear.command.LinearCommandExecutor;
@@ -26,7 +26,6 @@ import net.linear.config.LinearFormatOverride;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
-import net.linear.command.queue.JobRunner;
 
 /**
  * Linear {@code /linear} tree: stats / convert / queue / help.
@@ -46,15 +45,13 @@ import net.linear.command.queue.JobRunner;
  *   <li>{@code stats} reuses the pinned {@link CommandLinearStats} rendering
  *       by calling it (no fork). The grammar's optional world filter is
  *       accepted but the shared panel renders all tracked folders.</li>
- *   <li>{@code convert --execute} runs
- *       {@link LinearRegionConverter#convertRegionFolder} (towards LINEAR) or
- *       {@link LinearRegionConverter#convertRegionFolderReverse} (towards MCA,
- *       via the NMS {@code AnvilChunkSink}) off-tick (daemon worker, never the
- *       tick thread) with per-file job updates and pause polling in the
- *       listener; dry runs plan only (core executor message, no conversion).
- *       Explicit any-to-any jobs ({@code --from/--to/--grid --execute}, the
- *       only way Pumpkin migrates) run
- *       {@code convertRegionFolderExplicit} through the same worker.
+ *   <li>{@code convert --execute} runs the core
+ *       {@link net.linear.command.queue.JobRunner} off-tick (daemon worker,
+ *       never the tick thread), which routes by direction (towards MCA via
+ *       the NMS {@code AnvilChunkSink}) or by the explicit
+ *       {@code --from/--to/--grid} (the only way Pumpkin migrates), records
+ *       per-file job updates and honours pause; dry runs plan only (core
+ *       executor message, no conversion).
  *       Reverse sets a {@code LinearFormatOverride} ANVIL on the world so new
  *       writes land in {@code .mca} while unconverted {@code .linear} files
  *       keep serving reads, cleared when the worker settles. A quiesce gate
@@ -65,19 +62,6 @@ import net.linear.command.queue.JobRunner;
  */
 public class CommandLinear extends Command {
 
-    // Storage folders converted per world (mirrors the startup pass).
-    private static final List<String> STORAGE_FOLDERS = List.of("region", "entities", "poi");
-
-    // Per-folder single-flight: in-flight storage-folder keys (absolute normalized paths).
-    // A second --execute on an in-flight folder is rejected with
-    // "conversion already running for <folder>" (no queue, no block); entries are
-    // removed in finally after the worker finishes (including failure paths).
-    // Covers legacy AND explicit paths (both spawn threads).
-    private static final java.util.regex.Pattern REGION_NAME =
-        java.util.regex.Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear|b_linear)$");
-    private static final java.util.Set<String> IN_FLIGHT_FOLDERS =
-        java.util.concurrent.ConcurrentHashMap.newKeySet();
-
     // In-memory convert-job registry, shared by every /linear invocation.
     static final JobQueue QUEUE = new JobQueue();
 
@@ -87,9 +71,16 @@ public class CommandLinear extends Command {
     public CommandLinear(String name) {
         super(name);
         this.setDescription("Linear region management (stats/convert/queue/help)");
-        this.setUsage("/linear stats [world] | /linear convert <world> [--to-linear|--to-mca|--to-blinear] [--from mca|v1|v2|v3|blinear|pumpkin|linear|auto] [--to mca|v1|v2|v3|blinear|pumpkin|linear] [--grid 1|2|4|8|16|32] [--level 1..22] [--threads N] [--execute|--dry-run] | /linear queue list|clear|pause|resume|cancel [jobId] | /linear help. Pumpkin migrates explicit-only (--from pumpkin --to <target> --execute); startup never rewrites Pumpkin files.");
-        this.setPermission(LinearPermissions.BASE);
+        this.setUsage(LinearCommandParser.USAGE);
+        // No command-level node: a convert-only or queue-only holder must
+        // reach their subcommand (core rule LinearPermissions.allows, ROOT);
+        // each subcommand checks its own action.
         this.setPermissionMessage(LinearPermissions.denied("linear"));
+    }
+
+    @Override
+    public boolean testPermissionSilent(CommandSender target) {
+        return LinearPermissions.allows(target::hasPermission, LinearPermissions.Action.ROOT);
     }
 
     /**
@@ -112,17 +103,28 @@ public class CommandLinear extends Command {
             return true;
         }
         if (action instanceof LinearAction.StatsAction stats) {
-            // Single rendering path: call the pinned panel, never fork it.
+            // Single rendering path: the pinned panel, gated by the core rule
+            // for /linear stats (linearstats OR linear node).
+            if (!LinearPermissions.allows(sender::hasPermission, LinearPermissions.Action.LINEAR_STATS)) {
+                sender.sendMessage(LinearPermissions.denied("linearstats"));
+                return true;
+            }
             final String[] statsArgs = stats.worldFilter()
                 .map(world -> new String[]{world})
                 .orElseGet(() -> new String[0]);
-            return new CommandLinearStats("linear").execute(sender, commandLabel, statsArgs);
+            CommandLinearStats.renderPanel(sender, statsArgs);
+            return true;
         }
-        if (action instanceof LinearAction.ConvertAction convert && !convert.dryRun()) {
-            return executeConvert(sender, convert);
+        if (action instanceof LinearAction.ConvertAction c && !c.dryRun()) {
+            return executeConvert(sender, c.world(), c.level(), c.threads(), c.direction(),
+                c.direction().plainDirection(),
+                folder -> countLegacyCandidates(folder, c.direction().targetFormat()), null);
         }
-        if (action instanceof LinearAction.ExplicitConvertAction explicit && !explicit.dryRun()) {
-            return executeExplicitConvert(sender, explicit);
+        if (action instanceof LinearAction.ExplicitConvertAction e && !e.dryRun()) {
+            return executeConvert(sender, e.world(), e.level(), e.threads(), placeholderForExplicit(e.to()),
+                "explicit " + e.from().name().toLowerCase(java.util.Locale.ROOT)
+                    + " to " + e.to().name().toLowerCase(java.util.Locale.ROOT),
+                folder -> countExplicitCandidates(folder, e.from(), e.to()), e);
         }
         // Help, queue ops, and dry-run convert plans (no conversion runs).
         this.executor.execute(new BukkitSender(sender), action);
@@ -133,157 +135,81 @@ public class CommandLinear extends Command {
     }
 
     /**
-     * Real conversion execution (dry runs never reach here).
-     * Direction routes to the matching converter entry point
-     * (core {@code JobRunner.run} switches the same way); reverse holds a
+     * Real conversion execution for legacy and explicit jobs (dry runs never
+     * reach here). Claims every storage folder of the world first (core
+     * {@link FolderClaims}); the quiesce-gated worker then routes by the job's
+     * direction, or by its explicit {@code from/to/grid} when {@code explicit}
+     * is set (core {@code JobRunner} switches per folder). Reverse holds a
      * {@code LinearFormatOverride} ANVIL for the run, cleared on settle.
      */
-    private static boolean executeConvert(CommandSender sender, LinearAction.ConvertAction convert) {
-        if (!sender.hasPermission(LinearPermissions.CONVERT)
-                && !sender.hasPermission(LinearPermissions.BASE)) {
+    private static boolean executeConvert(CommandSender sender, String worldName, int parsedLevel, int threads,
+                                          ConvertDirection direction, String label,
+                                          java.util.function.ToIntFunction<Path> countCandidates,
+                                          LinearAction.ExplicitConvertAction explicit) {
+        if (!LinearPermissions.allows(sender::hasPermission, LinearPermissions.Action.CONVERT)) {
             sender.sendMessage(LinearPermissions.denied("linear convert"));
             return true;
         }
-        final org.bukkit.World world = Bukkit.getWorld(convert.world());
+        final org.bukkit.World world = Bukkit.getWorld(worldName);
         if (world == null) {
-            sender.sendMessage("Unknown world '" + convert.world() + "'.");
+            sender.sendMessage("Unknown world '" + worldName + "'.");
             return true;
         }
         final Path worldFolder = world.getWorldFolder().toPath();
-        final List<Path> folders = new ArrayList<>(STORAGE_FOLDERS.size());
-        for (String folderName : STORAGE_FOLDERS) {
+        final List<Path> folders = new ArrayList<>(net.linear.probe.LinearFolderNames.STORAGE_FOLDERS.size());
+        for (String folderName : net.linear.probe.LinearFolderNames.STORAGE_FOLDERS) {
             folders.add(worldFolder.resolve(folderName));
         }
-        final Path conflict = claimFoldersOrConflict(folders);
+        final Path conflict = FolderClaims.claimAll(folders);
         if (conflict != null) {
-            sender.sendMessage("conversion already running for " + conflict);
+            sender.sendMessage(FolderClaims.busyMessage(conflict));
             return true;
         }
-        int total = 0;
-        final net.linear.RegionFileFormat legacyTarget = convert.direction().targetFormat();
-        for (Path folder : folders) {
-            total += countLegacyCandidates(folder, legacyTarget);
-        }
-        final String sysLevel = System.getProperty(LinearPolicy.SYSPROP_LEVEL);
-        final int effectiveLevel = LinearPolicy.resolveLevel(
-            sysLevel, convert.level(), net.linear.RegionFileFormat.DEFAULT_COMPRESSION_LEVEL);
-        if (sysLevel != null && effectiveLevel != convert.level()) {
-            sender.sendMessage(LinearPolicy.overrideLine(LinearPolicy.SYSPROP_LEVEL, sysLevel,
-                String.valueOf(convert.level()), String.valueOf(effectiveLevel), "global"));
-        }
-        final ConvertJob job = QUEUE.submit(new JobQueue.Spec(
-            convert.direction(), convert.world(), effectiveLevel,
-            convert.threads(), false, total));
-        job.start();
-        final long queuedMs = System.currentTimeMillis();
-        Bukkit.getLogger().info("[Linear] Queued convert " + job.shortId()
-            + " (" + convert.direction().plainDirection() + " " + convert.world()
-            + " level " + effectiveLevel + " threads " + convert.threads()
-            + "); running off-tick.");
-        sender.sendMessage("Queued convert " + JobStatusView.queueListLine(job, queuedMs)
-            + "; running off-tick.");
-        // The quiesce gate (flushAllDirty + dirty check) and the conversion
-        // itself run inside the worker below — never on the calling (tick)
-        // thread. A whole-region zstd flush can exceed the watchdog limit,
-        // so even the drain must stay off-tick.
-        final List<Path> claimed = List.copyOf(folders);
-        final Thread worker = new Thread(
-            () -> {
-                try {
-                    runConvertWorker(sender, job, folders, effectiveLevel,
-                        convert.direction(), convert.world());
-                } finally {
-                    releaseFolders(claimed);
-                }
-            },
-            "linear-convert-" + job.id().toString().substring(0, 8));
-        worker.setDaemon(true);
+        boolean handedOff = false;
         try {
+            int total = 0;
+            for (Path folder : folders) {
+                total += countCandidates.applyAsInt(folder);
+            }
+            final String sysLevel = System.getProperty(LinearPolicy.SYSPROP_LEVEL);
+            final int effectiveLevel = LinearPolicy.resolveLevel(
+                sysLevel, parsedLevel, net.linear.RegionFileFormat.DEFAULT_COMPRESSION_LEVEL);
+            if (sysLevel != null && effectiveLevel != parsedLevel) {
+                sender.sendMessage(LinearPolicy.overrideLine(LinearPolicy.SYSPROP_LEVEL, sysLevel,
+                    String.valueOf(parsedLevel), String.valueOf(effectiveLevel), "global"));
+            }
+            final ConvertJob job = QUEUE.submit(new JobQueue.Spec(
+                direction, worldName, effectiveLevel, threads, false, total));
+            if (explicit != null) {
+                job.setExplicit(explicit.from(), explicit.to(), explicit.grid());
+            }
+            job.start();
+            final long queuedMs = System.currentTimeMillis();
+            Bukkit.getLogger().info("[Linear] Queued convert " + job.shortId() + " (" + label + " " + worldName
+                + " level " + effectiveLevel + " threads " + threads + "); running off-tick.");
+            sender.sendMessage("Queued convert " + JobStatusView.queueListLine(job, queuedMs)
+                + "; running off-tick.");
+            // The quiesce gate (flushAllDirty + dirty check) and the conversion
+            // run inside the worker, never on the tick thread: a whole-region
+            // zstd flush can exceed the watchdog limit.
+            final Thread worker = new Thread(
+                () -> {
+                    try {
+                        runConvertWorker(sender, job, folders, effectiveLevel, direction, worldName);
+                    } finally {
+                        FolderClaims.releaseAll(folders);
+                    }
+                },
+                "linear-convert-" + job.id().toString().substring(0, 8));
+            worker.setDaemon(true);
             worker.start();
-        } catch (RuntimeException startFailed) {
-            releaseFolders(claimed);
-            throw startFailed;
-        }
-        return true;
-    }
-
-    /**
-     * Explicit any-to-any convert execution ({@code --from/--to/--grid},
-     * {@code --execute} only; dry runs plan via the core executor above).
-     * Mirrors {@link #executeConvert}: the same quiesce-gated worker runs the
-     * job (no new guard semantics). The job carries a legacy placeholder
-     * direction for display plus explicit {@code from/to/grid} routing, which
-     * {@link #runConversionInner} switches on per folder; the core folder-dirty
-     * per-file skip applies exactly as for legacy jobs.
-     */
-    private static boolean executeExplicitConvert(
-        CommandSender sender, LinearAction.ExplicitConvertAction explicit) {
-        if (!sender.hasPermission(LinearPermissions.CONVERT)
-                && !sender.hasPermission(LinearPermissions.BASE)) {
-            sender.sendMessage(LinearPermissions.denied("linear convert"));
+            handedOff = true;
             return true;
+        } finally {
+            if (!handedOff) {
+                FolderClaims.releaseAll(folders);
+            }
         }
-        final org.bukkit.World world = Bukkit.getWorld(explicit.world());
-        if (world == null) {
-            sender.sendMessage("Unknown world '" + explicit.world() + "'.");
-            return true;
-        }
-        final Path worldFolder = world.getWorldFolder().toPath();
-        final List<Path> folders = new ArrayList<>(STORAGE_FOLDERS.size());
-        for (String folderName : STORAGE_FOLDERS) {
-            folders.add(worldFolder.resolve(folderName));
-        }
-        final Path conflict = claimFoldersOrConflict(folders);
-        if (conflict != null) {
-            sender.sendMessage("conversion already running for " + conflict);
-            return true;
-        }
-        int total = 0;
-        for (Path folder : folders) {
-            total += countExplicitCandidates(folder, explicit.from(), explicit.to());
-        }
-        final String sysLevel = System.getProperty(LinearPolicy.SYSPROP_LEVEL);
-        final int effectiveLevel = LinearPolicy.resolveLevel(
-            sysLevel, explicit.level(), net.linear.RegionFileFormat.DEFAULT_COMPRESSION_LEVEL);
-        if (sysLevel != null && effectiveLevel != explicit.level()) {
-            sender.sendMessage(LinearPolicy.overrideLine(LinearPolicy.SYSPROP_LEVEL, sysLevel,
-                String.valueOf(explicit.level()), String.valueOf(effectiveLevel), "global"));
-        }
-        final ConvertDirection placeholder = placeholderForExplicit(explicit.to());
-        final ConvertJob job = QUEUE.submit(new JobQueue.Spec(
-            placeholder, explicit.world(), effectiveLevel,
-            explicit.threads(), false, total));
-        job.setExplicit(explicit.from(), explicit.to(), explicit.grid());
-        job.start();
-        final long queuedMs = System.currentTimeMillis();
-        Bukkit.getLogger().info("[Linear] Queued convert " + job.shortId()
-            + " (explicit " + explicit.from().name().toLowerCase(java.util.Locale.ROOT)
-            + " to " + explicit.to().name().toLowerCase(java.util.Locale.ROOT)
-            + " " + explicit.world()
-            + " level " + effectiveLevel + " threads " + explicit.threads()
-            + "); running off-tick.");
-        sender.sendMessage("Queued convert " + JobStatusView.queueListLine(job, queuedMs)
-            + "; running off-tick.");
-        // Same quiesce-gated worker as legacy convert (never the tick thread).
-        final List<Path> claimed = List.copyOf(folders);
-        final Thread worker = new Thread(
-            () -> {
-                try {
-                    runConvertWorker(sender, job, folders, effectiveLevel,
-                        placeholder, explicit.world());
-                } finally {
-                    releaseFolders(claimed);
-                }
-            },
-            "linear-convert-" + job.id().toString().substring(0, 8));
-        worker.setDaemon(true);
-        try {
-            worker.start();
-        } catch (RuntimeException startFailed) {
-            releaseFolders(claimed);
-            throw startFailed;
-        }
-        return true;
     }
 
     /**
@@ -331,7 +257,7 @@ public class CommandLinear extends Command {
                     world, folders, reverse);
                 return;
             }
-            runConversion(sender, job, folders, effectiveLevel, direction, world);
+            runConversion(sender, job, folders, effectiveLevel);
         } finally {
             if (reverse) {
                 clearReverseOverride(world, folders);
@@ -352,21 +278,17 @@ public class CommandLinear extends Command {
         }
     }
 
-    // Off-tick worker: one folder at a time through the converter, per-file
-    // outcomes forwarded to the job by the listener. Completion/failure and
-    // the operator's sender message settle here. Reverse holds the ANVIL
-    // override for the run; it is cleared in the finally below (and on the
-    // quiesce-fail arms above, which never start the worker).
-    private static void runConversion(CommandSender sender, ConvertJob job,
-            List<Path> folders, int level, ConvertDirection direction, String scope) {
-        final boolean reverse =
-            direction.targetFormat() == net.linear.RegionFileFormat.ANVIL;
-        try {
-            runConversionInner(sender, job, folders, level, reverse);
-        } finally {
-            if (reverse) {
-                clearReverseOverride(scope, folders);
-            }
+    // Off-tick worker: core JobRunner converts every folder (direction and
+    // explicit routing owned by core, same as Folia and Horizon) and settles
+    // the job; the reverse override is cleared by runConvertWorker.
+    private static void runConversion(CommandSender sender, ConvertJob job, List<Path> folders, int level) {
+        net.linear.command.queue.JobRunner.run(job, folders, level, Math.max(1, job.threads()));
+        final long nowMs = System.currentTimeMillis();
+        final String status = JobStatusView.statusLine(job, nowMs);
+        Bukkit.getLogger().info("[Linear] Convert " + job.shortId() + " settled: " + status);
+        sender.sendMessage("Convert " + job.shortId() + " " + status);
+        for (String line : JobStatusView.detailLines(job, nowMs)) {
+            sender.sendMessage(line);
         }
     }
 
@@ -385,127 +307,6 @@ public class CommandLinear extends Command {
         LinearFormatOverride.clear(world);
         for (Path folder : folders) {
             LinearFormatOverride.clear(folder.toString());
-        }
-    }
-
-    private static void runConversionInner(CommandSender sender, ConvertJob job,
-            List<Path> folders, int level, boolean reverse) {
-        final ConvertListener listener = new ConvertListener(job);
-        int converted = 0;
-        int validated = 0;
-        int deleted = 0;
-        int failed = 0;
-        Path current = folders.isEmpty() ? Path.of(".") : folders.get(0);
-        try {
-            for (Path folder : folders) {
-                current = folder;
-                if (job.state() == JobState.CANCELLED) {
-                    break;
-                }
-                final LinearRegionConverter.ConversionSummary summary;
-                if (job.isExplicit()) {
-                    // Explicit any-to-any: layout-level from/to routing with
-                    // the per-job grid (same gate above, same
-                    // validate-then-delete below; the core skips folder-dirty
-                    // files per file exactly as for legacy jobs).
-                    summary = LinearRegionConverter.convertRegionFolderExplicit(
-                        folder, level, job.gridSize(), listener, false,
-                        job.fromFormat(), job.toFormat());
-                } else {
-                    summary = reverse
-                        ? LinearRegionConverter.convertRegionFolderReverse(folder, level, listener)
-                        : LinearRegionConverter.convertRegionFolder(folder, level, listener);
-                }
-                converted += summary.converted();
-                validated += summary.validated();
-                deleted += summary.deleted();
-                failed += summary.failed();
-            }
-        } catch (LinearRegionConverter.ConversionProtectionException halted) {
-            final LinearRegionConverter.ConversionSummary summary = halted.getSummary();
-            final String reason = "protection halt in " + current + ": "
-                + summary.failures().size() + " file(s) failed after "
-                + LinearRegionConverter.MAX_ATTEMPTS + " attempts"
-                + " (converted=" + summary.converted()
-                + " validated=" + summary.validated()
-                + " deleted=" + summary.deleted()
-                + " failed=" + summary.failed() + "); sources left untouched for inspection";
-            try {
-                job.fail(reason);
-            } catch (IllegalStateException ignored) {
-            }
-            // Sender messaging from the worker thread: view lines only (plain
-            // strings, never world state — callers must schedule back for world
-            // access); the full reason with paths and tallies goes to the log.
-            Bukkit.getLogger().warning("[Linear] Convert " + job.shortId() + " FAILED: " + reason);
-            sender.sendMessage("Convert " + job.shortId() + " FAILED. "
-                + JobStatusView.failedAction(reason));
-            return;
-        } catch (RuntimeException broken) {
-            final String reason = "unexpected error in " + current + ": " + broken;
-            try {
-                job.fail(reason);
-            } catch (IllegalStateException ignored) {
-            }
-            Bukkit.getLogger().warning("[Linear] Convert " + job.shortId() + " FAILED: " + reason);
-            sender.sendMessage("Convert " + job.shortId() + " FAILED. "
-                + JobStatusView.failedAction(reason));
-            return;
-        }
-        final String totals = "converted=" + converted + " validated=" + validated
-            + " deleted=" + deleted + " failed=" + failed;
-        Bukkit.getLogger().info("[Linear] Convert " + job.shortId() + " settled (" + totals + ").");
-        final long settledMs = System.currentTimeMillis();
-        try {
-            if (job.state() == JobState.CANCELLED) {
-                sender.sendMessage("Convert " + job.shortId() + " cancelled. "
-                    + JobStatusView.statusLine(job, settledMs));
-                return;
-            }
-            job.complete();
-            sender.sendMessage("Convert " + job.shortId() + " done. "
-                + JobStatusView.statusLine(job, settledMs));
-        } catch (IllegalStateException settled) {
-            sender.sendMessage("Convert " + job.shortId()
-                + " settled as " + job.state() + " "
-                + JobStatusView.statusLine(job, settledMs));
-        }
-    }
-
-    private static String folderKey(Path folder) {
-        try {
-            return folder.toAbsolutePath().normalize().toString();
-        } catch (RuntimeException fallback) {
-            return folder.toString();
-        }
-    }
-
-    /**
-     * Tries to claim every folder for a convert worker. Returns null on success
-     * (all claimed); otherwise returns the conflicting in-flight folder and releases
-     * any folders claimed by this attempt (no partial claim, no queue, no block).
-     */
-    private static Path claimFoldersOrConflict(List<Path> folders) {
-        final List<String> claimed = new ArrayList<>(folders.size());
-        for (Path folder : folders) {
-            final String key = folderKey(folder);
-            if (!IN_FLIGHT_FOLDERS.add(key)) {
-                for (String k : claimed) {
-                    IN_FLIGHT_FOLDERS.remove(k);
-                }
-                return folder;
-            }
-            claimed.add(key);
-        }
-        return null;
-    }
-
-    private static void releaseFolders(List<Path> folders) {
-        for (Path folder : folders) {
-            try {
-                IN_FLIGHT_FOLDERS.remove(folderKey(folder));
-            } catch (RuntimeException ignored) {
-            }
         }
     }
 
@@ -534,15 +335,15 @@ public class CommandLinear extends Command {
         } else {
             targetExt = net.linear.RegionFileFormat.LINEAR_EXTENSION;
         }
-        final java.util.Map<String, java.util.List<String>> sourcesByCoords = new java.util.HashMap<>();
-        final java.util.Set<String> targetCoords = new java.util.HashSet<>();
+        final java.util.Map<String, List<String>> sourcesByCoords = new java.util.HashMap<>();
+        final Set<String> targetCoords = new HashSet<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(folder)) {
             for (Path file : stream) {
                 if (!Files.isRegularFile(file)) {
                     continue;
                 }
                 final String name = file.getFileName().toString();
-                final java.util.regex.Matcher m = REGION_NAME.matcher(name);
+                final java.util.regex.Matcher m = net.linear.probe.LinearStorageProbe.REGION_NAME.matcher(name);
                 if (!m.matches()) {
                     continue;
                 }
@@ -559,7 +360,7 @@ public class CommandLinear extends Command {
             return 0;
         }
         int count = 0;
-        for (java.util.Map.Entry<String, java.util.List<String>> e : sourcesByCoords.entrySet()) {
+        for (java.util.Map.Entry<String, List<String>> e : sourcesByCoords.entrySet()) {
             if (e.getValue().size() > 1) {
                 continue;
             }
@@ -590,14 +391,14 @@ public class CommandLinear extends Command {
             return 0;
         }
         final String targetExt = to.extension();
-        final java.util.Map<String, java.util.List<Path>> byCoords = new java.util.HashMap<>();
+        final java.util.Map<String, List<Path>> byCoords = new java.util.HashMap<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(folder)) {
             for (Path file : stream) {
                 if (!Files.isRegularFile(file)) {
                     continue;
                 }
                 final String name = file.getFileName().toString();
-                final java.util.regex.Matcher m = REGION_NAME.matcher(name);
+                final java.util.regex.Matcher m = net.linear.probe.LinearStorageProbe.REGION_NAME.matcher(name);
                 if (!m.matches()) {
                     continue;
                 }
@@ -625,7 +426,7 @@ public class CommandLinear extends Command {
             return 0;
         }
         int count = 0;
-        for (java.util.Map.Entry<String, java.util.List<Path>> e : byCoords.entrySet()) {
+        for (java.util.Map.Entry<String, List<Path>> e : byCoords.entrySet()) {
             // Ambiguous same-coords sources mapping onto one target path: real escalates
             // to FAILED with 0 queued; UNDERcount as 0.
             if (e.getValue().size() > 1) {
@@ -637,7 +438,7 @@ public class CommandLinear extends Command {
         // validation IO to separate valid-shadow escalation (0) from orphan-delete + requeue (1);
         // leg-visible check: if the target path exists on disk, UNDERcount that coords as 0.
         // Re-scan for target-path occupancy (cheap, name-only, no file IO beyond existence).
-        for (java.util.Map.Entry<String, java.util.List<Path>> e : byCoords.entrySet()) {
+        for (java.util.Map.Entry<String, List<Path>> e : byCoords.entrySet()) {
             if (e.getValue().size() != 1) {
                 continue;
             }
@@ -690,48 +491,6 @@ public class CommandLinear extends Command {
     // Converter listener: forwards per-file outcomes to the job and parks the
     // worker while the job is PAUSED (pause polling). A record racing a
     // pause retries after the unpause; terminal states drop the record.
-    private static final class ConvertListener implements LinearRegionConverter.Listener {
-        private final ConvertJob job;
-
-        private ConvertListener(ConvertJob job) {
-            this.job = job;
-        }
-
-        @Override
-        public void onFile(LinearRegionConverter.FileResult result) {
-            awaitUnpaused(this.job);
-            for (int attempt = 0; attempt < 10; attempt++) {
-                try {
-                    this.job.recordFile(result);
-                    return;
-                } catch (IllegalStateException busy) {
-                    final JobState state = this.job.state();
-                    if (state == JobState.DONE || state == JobState.FAILED
-                            || state == JobState.CANCELLED) {
-                        return;
-                    }
-                    awaitUnpaused(this.job);
-                }
-            }
-        }
-
-        @Override
-        public void onRetry(Path source, int attempt, String reason) {
-            awaitUnpaused(this.job);
-        }
-
-        private static void awaitUnpaused(ConvertJob job) {
-            while (job.state() == JobState.PAUSED) {
-                try {
-                    Thread.sleep(100L);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            }
-        }
-    }
-
     // Bukkit-to-core sender adaptation (plain strings only).
     private static final class BukkitSender implements net.linear.command.CommandSender {
         private final CommandSender sender;
@@ -761,7 +520,7 @@ public class CommandLinear extends Command {
         List<String> base = LinearTabCompleter.suggest(args, QUEUE, () -> {
             try {
                 final Set<String> names = new HashSet<>();
-                for (org.bukkit.World w : org.bukkit.Bukkit.getWorlds()) {
+                for (org.bukkit.World w : Bukkit.getWorlds()) {
                     names.add(w.getName());
                 }
                 return names;

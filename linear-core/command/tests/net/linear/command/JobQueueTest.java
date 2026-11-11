@@ -19,7 +19,6 @@ import net.linear.LinearRegionConverter.FileResult;
 import net.linear.LinearRegionConverter.Status;
 
 import org.junit.Test;
-import net.linear.LinearRegionConverter;
 import net.linear.command.parse.LinearPermissions;
 import net.linear.command.queue.JobQueue;
 import net.linear.command.queue.JobState;

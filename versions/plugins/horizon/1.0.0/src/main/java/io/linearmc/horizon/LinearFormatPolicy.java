@@ -4,7 +4,6 @@ import net.linear.LinearImplementation;
 import net.linear.RegionFileFormat;
 import net.linear.config.LinearFileConfig;
 import net.linear.config.LinearPolicy;
-import net.linear.probe.AbstractRegionFileFactory;
 
 /**
  * Horizon-side counterpart of {@code AbstractRegionFileFactory#fromConfig()}.
