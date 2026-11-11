@@ -13,6 +13,7 @@ What this release does not cover. Read it before a rollout, not after.
 
 - Local disk on a single node only. Shared disks, network filesystems, two servers sharing one world folder, and cold archiving are all untested. Never run two servers against the same world folder.
 - There is no cold archiver in this release.
+- `--forceUpgrade` and `--recreateRegionFiles` work on the Folia and CanvasMC forks only: Paper 26.x disables them on every host the Horizon plugin runs on.
 - Plan on about two and a half times the current world size in free space before converting or rolling back, so copies, backups, and rewritten files all fit at once.
 
 ## Conversion

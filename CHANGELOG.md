@@ -10,10 +10,11 @@ one universal jar for Paper/Folia/CanvasMC 26.1-26.3 as
 `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar`, built against the
 oldest bundle with `api-version: 26.1`.
 
-## Unreleased
+## v1.2.0-release.1
 
-Releases are refused until every leg ships every capability: one open item,
-`force-upgrade` on Horizon (see `parity/capabilities.yml`).
+Every leg ships every capability. One approved host exemption: Paper 26.x
+stubs `--forceUpgrade` / `--recreateRegionFiles` on every Horizon host, so
+they work on the forks only (see `parity/capabilities.yml`).
 
 ### Fixed: data loss on the Horizon plugin
 

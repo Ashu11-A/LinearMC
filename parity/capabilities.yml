@@ -151,7 +151,7 @@ capabilities:
     title: --forceUpgrade / --recreateRegionFiles see .linear files
     folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#RegionStorageUpgrader"], test_gap: "share RegionStorageUpgraderScanTest with Folia"}
     canvas: {ev: ["@C/overlay/nms/net_minecraft_util_worldupdate_RegionStorageUpgrader.java.patch#import net.linear.probe.AbstractRegionFileFactory; // Linear"], test: RegionStorageUpgraderScanTest}
-    horizon: {gap: "Decision needed: Paper 26.x (so every Horizon host) stubs --forceUpgrade; RegionStorageUpgraderMixin is ready. Un-stub the host via mixins (Main.main, Main.forceUpgrade, PaperWorldLoader) or approve an exempt."}
+    horizon: {exempt: "Host limit: Paper 26.x (so every Horizon host) stubs --forceUpgrade/--recreateRegionFiles itself; RegionStorageUpgraderMixin is ready if a host re-enables them.", approved: "maintainer, 2026-11-11 (v1.2.0-release.1)"}
 
   - id: flush-event
     title: LinearRegionFlushCompletedEvent fires per flush (Horizon FQN io.linearmc.horizon.event)
