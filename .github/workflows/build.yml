@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       versions:
-        description: "Version folders to build (comma-separated, e.g. '26.1.x'); 'all' builds every folder; add 'horizon' to include the standalone plugin (its version id is the plugin dir, e.g. 1.0.0, so a line filter alone drops it)"
+        description: "Version folders to build (comma-separated, e.g. '26.3'); 'all' builds every folder; add 'horizon' to include the standalone plugin (its version id is the plugin dir, e.g. 1.0.0, so a line filter alone drops it)"
         required: false
         default: 'all'
 
@@ -106,7 +106,7 @@ jobs:
           # never change. Per-MC horizon stems (`horizon-26.1`) likewise map
           # to the stable `horizon` id with HORIZON key lookup, so asset
           # names keep their shape. `version` is the grandparent line dir for servers
-          # (26.1.x) and the plugin version dir (1.0.0) for horizon. A leg
+          # (26.3) and the plugin version dir (1.0.0) for horizon. A leg
           # is emitted only when it actually has content (see below): pins
           # without patches, and archive-only folders such as
           # versions/servers/removed/, are reported and skipped, never fail.
@@ -247,7 +247,7 @@ jobs:
           # that applies to one line, or a partial release re-run via
           # `gh workflow run build.yml --ref <tag> -f versions=<list>`).
           # Empty/'all' builds every version. Unknown names fail fast.
-          # Server legs filter on line names (26.1.x/26.3); the
+          # Server legs filter on line names (26.3); the
           # horizon leg filters on its plugin version dir (1.0.0) OR the
           # leg token 'horizon' (a line filter alone would silently drop the
           # plugin, whose version id never matches a server line).
@@ -595,7 +595,7 @@ jobs:
           #   project tags  v<project> (e.g. v1.1.4): every matrix leg uploads
           #     its own asset with the upstream build number:
           #     linearmc-<server>-<mcversion>-<project>+build.<N>.jar
-          #     (e.g. linearmc-folia-26.1.2-1.1.4+build.8.jar).
+          #     (e.g. linearmc-folia-26.3-1.3.0+build.8.jar).
           #     Horizon ships ONE jar for every supported MC line:
           #     linearmc-horizon-<mcrange>-<project>+build.<N>.jar
           #     (e.g. linearmc-horizon-26.1-26.3-1.1.4+build.74.jar).

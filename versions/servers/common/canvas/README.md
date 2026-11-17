@@ -46,7 +46,7 @@ with the same relative path, which SHADOWS the hub copy for that version
 The hub copy stays for the other legs. If NO leg can use the hub copy
 anymore, delete it here and drop its MANIFEST.txt line.
 
-Canonical source for copies: the 26.1.x working tree at promotion time.
+Canonical source for copies: the 26.1.x working tree at promotion time (26.1.x now archived in `versions/servers/removed/`; 26.3 is the live Folia line).
 Three hub files carry in-flight working-tree evolution vs the last commit,
 byte-identical on both legs at promotion (verified by cmp on all pairs):
 `paper-server/.../command/CommandLinear.java` (explicit any-to-any convert,

@@ -126,7 +126,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: ["26.1.x"]
+        version: ["26.3"]
     steps:
       # setup: checkout supplement to ./supplement + Java + gradle cache.
       # stage: clone the pinned Folia base into ./fork, then scripts/stage.sh

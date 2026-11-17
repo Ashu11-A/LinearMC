@@ -18,6 +18,11 @@
 #   --folia-dir  run applyAllPatches in this existing checkout instead of a
 #                fresh temp clone (checkout is left on <new-ref>).
 #   --dry-run    print the plan without creating, cloning or building anything.
+#   --no-apply   scaffold and pin only; skip the clone + applyAllPatches step
+#                (heavy Gradle run; do it later with scripts/stage.sh).
+#   If <new-dir> already exists with only a Canvas leg (canvasmc/,
+#   upstream.canvas.properties), the Folia leg is merged into it: folia/,
+#   common/ and upstream.properties are added, Canvas files are never touched.
 #
 # Next steps after this script (not done here): port each patch hunk to the
 # new base, run scripts/preflight.sh, build with scripts/build.sh --mc <new-dir>.
@@ -25,6 +30,7 @@ set -u
 
 SUPPLEMENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DRY_RUN=0
+NO_APPLY=0
 FOLIA_DIR=""
 MC_VERSION=""
 
@@ -37,6 +43,7 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)    DRY_RUN=1; shift ;;
+    --no-apply)   NO_APPLY=1; shift ;;
     --folia-dir)  FOLIA_DIR="${2:?--folia-dir needs a value}"; shift 2 ;;
     --mc-version) MC_VERSION="${2:?--mc-version needs a value}"; shift 2 ;;
     -h|--help)    usage; exit 0 ;;
@@ -54,8 +61,8 @@ case "$NEW_DIR" in
   */..*|*/*|.|..|"") echo "ABORT: bad <new-dir>: $NEW_DIR"; exit 2 ;;
 esac
 case "$NEW_DIR" in
-  [0-9]*.[0-9]*.x) ;;
-  *) echo "ABORT: <new-dir> should look like 26.2.x, got: $NEW_DIR"; exit 2 ;;
+  [0-9]*.[0-9]*.x|[0-9]*.[0-9]*) ;;
+  *) echo "ABORT: <new-dir> should look like 26.2.x or 26.3, got: $NEW_DIR"; exit 2 ;;
 esac
 
 # Copy source = newest line WITH leg content (scaffolds carry pins but no
@@ -70,15 +77,20 @@ if [ -z "${SRC_VER:-}" ]; then
 fi
 SRC="$SUPPLEMENT_DIR/versions/servers/$SRC_VER"
 DST="$SUPPLEMENT_DIR/versions/servers/$NEW_DIR"
+MERGE=0
 if [ -e "$DST" ]; then
-  echo "ABORT: $DST already exists"; exit 1
+  if [ -e "$DST/upstream.properties" ] || [ -e "$DST/common" ] \
+     || { [ -e "$DST/folia" ] && [ -n "$(ls -A "$DST/folia" 2>/dev/null)" ]; }; then
+    echo "ABORT: $DST already has a Folia leg (upstream.properties, common/ or non-empty folia/)"; exit 1
+  fi
+  MERGE=1  # Canvas-only line: add the Folia leg next to it, never touch Canvas files
 fi
 if [ ! -f "$SRC/upstream.properties" ]; then
   echo "ABORT: $SRC/upstream.properties missing"; exit 1
 fi
 
 if [ -z "$MC_VERSION" ]; then
-  MC_VERSION="${NEW_DIR%.x}.0"
+  case "$NEW_DIR" in *.x) MC_VERSION="${NEW_DIR%.x}.0" ;; *) MC_VERSION="$NEW_DIR" ;; esac
   echo "NOTE: --mc-version not given, defaulting to $MC_VERSION; fix it if wrong."
 fi
 FOLIA_REPO=$(grep '^FOLIA_REPO=' "$SRC/upstream.properties" | cut -d= -f2-)
@@ -90,10 +102,16 @@ echo "Plan: copy versions/servers/$SRC_VER -> versions/servers/$NEW_DIR"
 echo "      pin: $FOLIA_REPO $NEW_BRANCH @ $NEW_REF (mc $MC_VERSION)"
 echo "      then stage + applyAllPatches so rebase conflicts surface now."
 if [ "$DRY_RUN" = 1 ]; then
-  echo "DRY-RUN: cp -r $SRC $DST"
+  if [ "$MERGE" = 1 ]; then
+    echo "DRY-RUN: merge into existing $DST: cp -r $SRC/folia $SRC/common (Canvas files untouched)"
+  else
+    echo "DRY-RUN: cp -r $SRC $DST"
+  fi
   echo "DRY-RUN: write $DST/upstream.properties (FOLIA_REPO=$FOLIA_REPO FOLIA_BRANCH=$NEW_BRANCH FOLIA_REF=$NEW_REF MC_VERSION=$MC_VERSION)"
   echo "DRY-RUN: Canvas leg is not scaffolded; add $DST/canvasmc + upstream.canvas.properties by hand"
-  if [ -n "$FOLIA_DIR" ]; then
+  if [ "$NO_APPLY" = 1 ]; then
+    echo "DRY-RUN: --no-apply: skip clone + applyAllPatches"
+  elif [ -n "$FOLIA_DIR" ]; then
     echo "DRY-RUN: stage $DST into $FOLIA_DIR, checkout $NEW_REF, ./gradlew applyAllPatches"
   else
     echo "DRY-RUN: clone --branch $NEW_BRANCH $FOLIA_REPO <tmpdir>, checkout $NEW_REF, stage $DST, ./gradlew applyAllPatches"
@@ -102,7 +120,13 @@ if [ "$DRY_RUN" = 1 ]; then
   exit 0
 fi
 
-cp -r "$SRC" "$DST" || exit 1
+if [ "$MERGE" = 1 ]; then
+  rmdir "$DST/folia" 2>/dev/null || true  # drop an empty placeholder
+  cp -r "$SRC/folia" "$DST/folia" || exit 1
+  if [ -d "$SRC/common" ]; then cp -r "$SRC/common" "$DST/common" || exit 1; fi
+else
+  cp -r "$SRC" "$DST" || exit 1
+fi
 cat > "$DST/upstream.properties" <<EOF
 # Single source of truth for the upstream pin for this version line.
 # Copied from versions/servers/$SRC_VER on $(date -u +%F); re-pinned to $NEW_BRANCH.
@@ -114,6 +138,11 @@ MC_VERSION=$MC_VERSION
 EOF
 echo "wrote $DST/upstream.properties"
 echo "NOTE: Canvas leg is not scaffolded by this script; add versions/servers/$NEW_DIR/canvasmc + upstream.canvas.properties by hand."
+
+if [ "$NO_APPLY" = 1 ]; then
+  echo "--no-apply: skipped clone + applyAllPatches; stage with scripts/stage.sh when ready."
+  exit 0
+fi
 
 if [ -n "$FOLIA_DIR" ]; then
   WORK="$FOLIA_DIR"

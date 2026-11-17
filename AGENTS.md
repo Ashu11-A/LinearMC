@@ -10,7 +10,7 @@ the same capabilities through three **legs**:
 
 | Leg | Where | Shape |
 | --- | --- | --- |
-| Folia fork 26.1.2 | `versions/servers/26.1.x/folia/` (+ `26.1.x/common/`) | paperweight patches (`minecraft-*`, `paper-*`) + tests |
+| Folia fork 26.3 | `versions/servers/26.3/folia/` (+ `26.3/common/`) | paperweight patches (`minecraft-*`, `paper-*`) + tests |
 | CanvasMC fork 26.3 | `versions/servers/26.3/canvasmc/` (+ `versions/servers/common/canvas/`) | overlay patches + plain `paper-server` files |
 | Horizon plugin 1.0.0 | `versions/plugins/horizon/1.0.0/` | mixins (`src/main`) + Paper plugin (`src/plugin`); runs on Paper/Folia/Canvas 26.1–26.3 |
 
@@ -60,9 +60,13 @@ Fork builds need ~5 GB free RAM (the Vineflower decompile runs with -Xmx4G);
 run them one at a time (`validate-all.sh` does) and stop Gradle daemons after.
 
 Live checks on real servers (skill `linearmc-test`):
-`scripts/server-smoke.sh` (boot, load, flush) and `scripts/migration-smoke.sh`
+`scripts/server-smoke.sh` (boot, load, flush), `scripts/unload-smoke.sh` (unload flush on disk while running) and `scripts/migration-smoke.sh`
 (pre-existing `.mca` world → LINEAR, clean-stop durability; Paper, Folia and
-Canvas hosts plus both forks).
+Canvas hosts plus both forks). A test runs to completion: never kill a server as a
+test step (no crash simulation, no `timeout`); stop it with the `stop` console
+command. Only a server already hung after `stop` is killed, for cleanup (TERM,
+then -9), and the test is FAILED and says so. JVMs exit on OOM (code 3 = FAIL,
+heap dump path reported).
 
 ## Workflow
 

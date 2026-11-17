@@ -2,7 +2,7 @@ name: stage-overlay
 description: >
   Stage the Canvas Linear overlay onto a weaver-APPLIED tree (must run AFTER
   applyAllPatches generates canvas-server/build.gradle.kts and
-  paper-server/). Implements versions/servers/26.1.x/canvasmc/OVERLAY.md:
+  paper-server/). Implements versions/servers/26.3/canvasmc/OVERLAY.md:
   every patch family is --check-gated before application so upstream drift
   fails loudly instead of landing half-applied. Stable matrix id `canvas`
   maps to the `canvasmc/` leg dir. Never stage pre-apply: the generated
@@ -12,7 +12,7 @@ description: >
 
 inputs:
   version:
-    description: Server line folder under versions/servers/ (e.g. '26.1.x'). Comes from the discover matrix.
+    description: Server line folder under versions/servers/ (e.g. '26.3'). Comes from the discover matrix.
     required: true
   supplement-dir:
     description: Path to the already-checked-out supplement repo.

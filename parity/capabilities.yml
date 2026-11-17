@@ -11,8 +11,7 @@
 version: 2
 legs: [folia, canvas, horizon]
 aliases:
-  "@F/": versions/servers/26.1.x/folia/patches/
-  "@FC/": versions/servers/26.1.x/common/
+  "@F/": versions/servers/26.3/folia/patches/
   "@C/": versions/servers/26.3/canvasmc/
   "@CH/": versions/servers/common/canvas/
   "@CMD/": versions/servers/common/canvas/paper-server/src/main/java/io/papermc/paper/command/
@@ -39,14 +38,14 @@ capabilities:
   - id: read-existing-other-format
     title: An existing region in another format is found, never regenerated (incl. mid-conversion)
     core: ["@core/format/src/net/linear/probe/LinearStorageProbe.java#public static Path probeExisting"]
-    folia: {ev: ["@F/minecraft-0018-Linear-core-decoupling.patch#net.linear.probe.LinearStorageProbe.probeExisting("], test: LinearStorageProbeTest, test_gap: "live migration-smoke on the fork jar (PASS 2026-11-10, not in CI)"}
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#net.linear.probe.LinearStorageProbe.probeExisting("], test: LinearStorageProbeTest, test_gap: "live migration-smoke on the fork jar (PASS 2026-11-10, not in CI)"}
     canvas: {ev: ["@RFS#net.linear.probe.LinearStorageProbe.probeExisting("], test: LinearStorageProbeTest, test_gap: "live migration-smoke on the fork jar (PASS 2026-11-10, not in CI)"}
     horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#private String linear$existingFirstName"], test: LinearStorageProbeTest MixinDescriptorsTest}
 
   - id: no-split-regions
     title: A write to an existing region lands in that file (no new .linear beside an .mca)
     core: ["@core/format/src/net/linear/probe/LinearStorageProbe.java#public static String resolveFileName"]
-    folia: {ev: ["@F/minecraft-0014-Linear-default-format.patch#LinearStorageProbe.resolveFileName("], test: LinearStorageProbeTest}
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#LinearStorageProbe.resolveFileName("], test: LinearStorageProbeTest}
     canvas: {ev: ["@RFS#LinearStorageProbe.resolveFileName("], test: LinearStorageProbeTest}
     horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#LinearStorageProbe.resolveFileName("], test: LinearStorageProbeTest}
 
@@ -123,7 +122,7 @@ capabilities:
 
   - id: flush-unlock
     title: Region-cache eviction close runs outside the storage lock
-    folia: {ev: ["@FC/minecraft-0011-Linear-flush-unlock.patch#AbstractRegionFile evicted = null;"], test: LinearFlushUnlockTest}
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#AbstractRegionFile evicted = null;"], test: LinearFlushUnlockTest}
     canvas: {ev: ["@RFS#evicted = evictedOpt.get();"], test: LinearFlushUnlockTest}
     horizon: {ev: ["@HM/mixins/RegionFileStorageMixin.java#private void linear$deferEvictionClose", "@HM/DeferredRegionCloses.java#public static void awaitPending"], test: MixinDescriptorsTest, test_gap: "concurrency test: eviction close never under the monitor, reopen waits"}
 
@@ -139,6 +138,13 @@ capabilities:
     folia: {ev: ["@F/minecraft-0017-Linear-save-drain.patch#net.linear.LinearFlushCoordinator.linear$beginShutdown();"], test: LinearSaveDrainTest}
     canvas: {ev: ["@C/overlay/nms/io_papermc_paper_threadedregions_RegionShutdownThread.java.patch#linear$beginShutdown"], test: LinearSaveDrainTest}
     horizon: {ev: ["@HM/mixins/MinecraftServerMixin.java#private void linear$finalDrainBeforeExit", "@HM/LinearShutdownBarrier.java#FlushReports.FolderDrain.onServerStop();"], test: MixinDescriptorsTest, test_gap: "live clean stop (migration-smoke marker D) not in CI"}
+
+  - id: background-flush
+    title: Dirty Linear regions reach disk within flush-frequency + 1 s without save, unload or stop (core heartbeat)
+    core: ["@core/flush/src/net/linear/flush/FlushHeartbeat.java#public static final String THREAD_NAME", "@core/flush/src/net/linear/LinearFlushCoordinator.java#FlushHeartbeat.ensureStarted("]
+    folia: {ev: ["@F/minecraft-0009-Linear-region-format.patch#LinearFlushCoordinator.forFolder(this.folder).markDirty(file);"], test: FlushHeartbeatTest, test_gap: "live: scripts/server-smoke.sh unload check"}
+    canvas: {ev: ["@C/overlay/nms/net_minecraft_world_level_chunk_storage_RegionFileStorage.java.patch#LinearFlushCoordinator.forFolder(this.folder).markDirty(file);"], test: FlushHeartbeatTest, test_gap: "live: scripts/server-smoke.sh unload check"}
+    horizon: {ev: ["@HM/HorizonLinearRegionFile.java#FlushReports.markDirtyForFile(this.realPath.getParent(), this.delegate);"], test: FlushHeartbeatTest, test_gap: "live: scripts/server-smoke.sh unload check"}
 
   - id: startup-conversion
     title: Leftover .mca regions convert automatically at startup, before plugins/worlds load

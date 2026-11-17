@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 15:56:16 -0300
+Subject: [PATCH] Linear default format 6
+
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
+index e018040e1a8ed7de5d8a7f87814cbe0720f7cda8..079a32be319d154070e8dabdd34ae58788bd5513 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
+@@ -61,7 +61,7 @@ public final class EntityDataController extends MoonriseRegionFileIO.RegionDataC
+ 
+         public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
+                                        final boolean dsync) {
+-            this(regionStorageInfo, directory, dsync, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
++            this(regionStorageInfo, directory, dsync, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
+         }
+ 
+         // Linear - format-aware entry point. The outer EntityDataController
+diff --git a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+index a7e8d58653f4deb9e688cc13ab97f21f9ae390a4..0ddff2fd0c87c5fca2977740599e98f5b4e225a5 100644
+--- a/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
++++ b/net/minecraft/util/worldupdate/RegionStorageUpgrader.java
+@@ -219,7 +219,7 @@ public class RegionStorageUpgrader {
+ 
+                 // Linear - open in probed format via the factory; enumerate with
+                 // hasChunk (doesChunkExist is anvil-only and not in the shared contract).
+-                try (AbstractRegionFile regionSource = AbstractRegionFileFactory.get(regionFile.toPath(), info, regionFolder, true, 1)) {
++                try (AbstractRegionFile regionSource = AbstractRegionFileFactory.get(regionFile.toPath(), info, regionFolder, true, AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL)) {
+                     for (int x = 0; x < 32; x++) {
+                         for (int z = 0; z < 32; z++) {
+                             ChunkPos pos = new ChunkPos(x + xOffset, z + zOffset);
+diff --git a/net/minecraft/world/level/chunk/storage/IOWorker.java b/net/minecraft/world/level/chunk/storage/IOWorker.java
+index 418c1882e72a50a0b89afc642283a765318d38cd..0c9a80769c0143fd062fbdb07f6783a95a60c78d 100644
+--- a/net/minecraft/world/level/chunk/storage/IOWorker.java
++++ b/net/minecraft/world/level/chunk/storage/IOWorker.java
+@@ -37,7 +37,7 @@ public class IOWorker implements AutoCloseable, ChunkScanAccess {
+     private static final int REGION_CACHE_SIZE = 1024;
+ 
+     protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync) {
+-        this(info, dir, sync, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
++        this(info, dir, sync, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
+     }
+ 
+     // Linear - format-aware entry point (called by the SimpleRegionStorage overload).
+diff --git a/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
+index f84175c2526d998c6fff2d94a6bd5fbf87f85ba6..2d2e54e91edb7347a137ef7bd2d1994e1aa90f9d 100644
+--- a/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RecreatingSimpleRegionStorage.java
+@@ -23,13 +23,13 @@ public class RecreatingSimpleRegionStorage extends SimpleRegionStorage {
+         final boolean syncWrites,
+         final DataFixTypes dataFixType
+     ) {
+-        this(readInfo, readFolder, writeInfo, writeFolder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
++        this(readInfo, readFolder, writeInfo, writeFolder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
+     }
+ 
+     // Linear - format-aware entry point for --recreate. The write side
+     // (new_<folder>) inherits the world's configured format via ctor params
+     // (RegionStorageInfo/storage flow, never Bukkit lookups). LINEAR creates
+-    // r.X.Z.linear via AbstractRegionFileFactory; ANVIL (default) is unchanged.
++    // r.X.Z.linear via AbstractRegionFileFactory; explicit ANVIL still writes .mca unchanged.
+     public RecreatingSimpleRegionStorage(
+         final RegionStorageInfo readInfo,
+         final Path readFolder,
+diff --git a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
+index 12ca98b07a532f70ae271475c57c520f29dd5884..2061d38940f65ef9cb8b5f9da99dee7c87269287 100644
+--- a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
++++ b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
+@@ -34,7 +34,7 @@ public class SimpleRegionStorage implements ca.spottedleaf.moonrise.patches.chun
+     public SimpleRegionStorage(
+         final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType
+     ) {
+-        this(info, folder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
++        this(info, folder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
+     }
+ 
+     // Linear - format-aware entry point. ChunkMap/PoiManager thread the world

@@ -9,12 +9,12 @@
 # the patches into common/linear-core/src; core is now the source of truth,
 # so replaying from patches would resurrect stale duplicates.)
 #
-# Usage: scripts/stage-core.sh [--mc <ver>]  (default: 26.1.x)
+# Usage: scripts/stage-core.sh [--mc <ver>]  (default: 26.3)
 set -u
 SUPPLEMENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MC="${1:-}"
 if [ "${1:-}" = "--mc" ]; then MC="${2:?--mc needs a value}"; fi
-MC="${MC:-26.1.x}"
+MC="${MC:-26.3}"
 
 VD="$SUPPLEMENT_DIR/versions/servers/$MC"
 OFFENDERS="$(grep -rn '^+++.*net/linear/' "$VD/folia/patches" "$VD/common" "$VD/canvasmc/patches" "$VD/canvasmc/overlay" "$SUPPLEMENT_DIR/versions/servers/common/canvas/overlay" 2>/dev/null | grep -v 'src/test/' || true)"

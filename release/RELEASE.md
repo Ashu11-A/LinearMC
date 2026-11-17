@@ -29,17 +29,19 @@ Single source of truth: `versions/servers/<line>/upstream.properties` for
 Folia and `upstream.canvas.properties` for Canvas. Both carry a `<PREFIX>_BUILD`
 used by the release notes and asset suffix. The Horizon pin lives at
 `versions/plugins/horizon/upstream.horizon.properties` and carries
-`HORIZON_BUILD` plus `HORIZON_MC_RANGE`.
+`HORIZON_BUILD` (the Horizon Jenkins build of `HORIZON_REF`, not the Paper
+dev-bundle build) plus `HORIZON_MC_RANGE`.
 
-Supported matrix (v1.1.4-release.1):
+Supported matrix (v1.3.0-release.1):
 
 | Leg | Pin | Build |
 | --- | --- | --- |
-| Folia 26.1.2 | `ver/26.1.x` at `62dc0f257a4f5de1ef2eae8cf1627156a769c67f` | #8 |
-| CanvasMC 26.3 | `main` at `a636063ed9dd82cc184ddef32acc8b6569d621a7` | #1010 |
-| Horizon 1.0.0 | `31d1a1b7`; Paper `26.1.2.build.74-stable` | #74 |
+| Folia 26.3 | `ver/26.3.x` at `7337820366adea680981f164be721873090eb391` | #8 |
+| CanvasMC 26.3 | `main` at `31a7f9ac1bc46fc0dfe14c3376dad6f686cfb2ad` | #1016 |
+| Horizon 1.0.0 | `31d1a1b7` (Horizon stable #90); Paper `26.1.2.build.74-stable` | #90 |
 
-CanvasMC 26.1.2 and 26.2 are archived under `versions/servers/removed/` and
+Folia 26.1.x and CanvasMC 26.1.2/26.2 are archived under `versions/servers/removed/` (Folia 26.1.2 hosts are served by
+the Horizon plugin) and
 are not part of the active matrix.
 
 | Component | Pin |
@@ -129,13 +131,13 @@ usage: convert.py [-h] [-t THREADS] [-c COMPRESSION_LEVEL]
 ## 6. Per-version builds
 
 The supplement is version-scoped: each supported server line lives under
-`versions/servers/<line>/` with its own pin, patches and tests. Folia 26.1.2
+`versions/servers/<line>/` with its own pin, patches and tests. Folia 26.3
 is built locally with `scripts/build.sh`; CanvasMC 26.3 and Horizon need the
 post-apply overlay / standalone Gradle staging, so their paperclip jars are
 owned by `.github/workflows/build.yml` (or a manual dispatch of it).
 
 ```bash
-scripts/build.sh --mc 26.1.x   # Folia 26.1.2
+scripts/build.sh --mc 26.3     # Folia 26.3
 scripts/build.sh               # every Folia line (Canvas-only lines skip)
 ```
 
@@ -143,8 +145,8 @@ Each supported leg produces its own jar. New release tags use
 `vX.Y.Z-release.N`; `v1.1.4-release.1` is the first. One release attaches one
 jar per matrix leg: fork legs are named
 `linearmc-<server>-<mcversion>-<project>+build.<N>.jar` (so a
-`v1.1.4-release.1` release containing Folia 26.1.2 at build #8 ships
-`linearmc-folia-26.1.2-1.1.4+build.8.jar`), the Horizon plugin is
+`v1.3.0-release.1` release containing Folia 26.3 at build #8 ships
+`linearmc-folia-26.3-1.3.0+build.8.jar`), the Horizon plugin is
 `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar` (one generic jar for
 Paper/Folia/CanvasMC 26.1-26.3). Deploy the jar matching your server line.
 
@@ -152,7 +154,7 @@ To release only some folders (a fix that applies to one line), dispatch the
 workflow manually on the tag with the `versions` input:
 
 ```bash
-gh workflow run build.yml --ref v1.1.4-release.1 -f versions=26.1.x
+gh workflow run build.yml --ref v1.3.0-release.1 -f versions=26.3
 ```
 
 Pushed tags always release every version.

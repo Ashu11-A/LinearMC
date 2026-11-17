@@ -12,7 +12,7 @@ No. Players see the same blocks, items, and world behavior as before. There is n
 
 ## Which servers does it work with?
 
-Today it works with Folia 26.1.2 and CanvasMC 26.3. The Horizon plugin (version 1.0.0) brings the same storage savings to Paper, Folia and CanvasMC 26.1 through 26.3 without rebuilding the server. CanvasMC 26.1.2 and 26.2 are archived as of v1.1.4 and no longer built.
+Today it works with Folia 26.3 and CanvasMC 26.3 (Folia 26.1.2 hosts are covered by the Horizon plugin). The Horizon plugin (version 1.0.0) brings the same storage savings to Paper, Folia and CanvasMC 26.1 through 26.3 without rebuilding the server. CanvasMC 26.1.2 and 26.2 are archived as of v1.1.4 and no longer built.
 
 ## How much disk space will I save?
 

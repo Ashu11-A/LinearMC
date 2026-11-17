@@ -45,15 +45,23 @@ run_phase() { # $1 phase, $2 format, $3.. console commands ("@N" = sleep N)
   # shellcheck disable=SC2086
   server_start "phase-$phase.log" -Xms512M -Xmx1G "-Dlinearmc.format=$format" -jar "$LAUNCH" --nogui $SERVER_ARGS
   if ! server_wait "phase-$phase.log" 'Done (' 150; then
-    echo "phase $phase: SERVER_NOT_READY" >> "$REPORT"; kill -9 "$SERVER_PID" 2>/dev/null; server_stop 1
+    echo "phase $phase: SERVER_NOT_READY" >> "$REPORT"
+    server_stop 90 || echo "phase $phase: SERVER_STUCK pid=$SERVER_PID (hung; killed for cleanup, TEST FAILED)" >> "$REPORT"
     cat "$REPORT"; exit 1
   fi
   for c in "$@"; do
     case "$c" in @*) sleep "${c#@}" ;; *) server_send "$c"; sleep 1 ;; esac
   done
   server_stop 90
-  echo "phase $phase: java exit $SERVER_RC killed=$SERVER_KILLED" >> "$REPORT"
-  [ "$SERVER_KILLED" = 0 ] || FAIL=1
+  echo "phase $phase: java exit $SERVER_RC stuck=$SERVER_STUCK" >> "$REPORT"
+  if [ "$SERVER_OOM" = 1 ]; then
+    server_oom_report >> "$REPORT"
+    echo "RESULT: FAIL ($WORK)" >> "$REPORT"; cat "$REPORT"; exit 1
+  fi
+  if [ "$SERVER_STUCK" != 0 ]; then
+    echo "phase $phase: SERVER_STUCK pid=$SERVER_PID (hung; killed for cleanup, TEST FAILED); aborting" >> "$REPORT"
+    echo "RESULT: FAIL ($WORK)" >> "$REPORT"; cat "$REPORT"; exit 1
+  fi
 }
 
 count() { find world -path "*/$1/*" -name "*.$2" 2>/dev/null | wc -l; }

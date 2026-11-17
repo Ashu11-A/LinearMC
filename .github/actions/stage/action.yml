@@ -10,7 +10,7 @@ description: >
 
 inputs:
   version:
-    description: Version folder under versions/ (e.g. '26.1.x'). Comes from the discover matrix (matrix.version).
+    description: Version folder under versions/ (e.g. '26.3'). Comes from the discover matrix (matrix.version).
     required: true
   server:
     description: "Stable server id from the discover matrix (matrix.server): 'folia', 'canvas' (leg dir versions/servers/<line>/canvasmc/), 'horizon'. Patch staging prefers versions/servers/<line>/<legdir>/patches/ and falls back to the legacy versions/<line>/patches/ while legs migrate."

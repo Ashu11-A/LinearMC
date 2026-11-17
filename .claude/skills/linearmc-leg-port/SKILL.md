@@ -7,11 +7,11 @@ description: Land one change on all three LinearMC legs (Folia patches, CanvasMC
 
 Order: **core first** (skill `linearmc-core-dev`) → Folia → Canvas → Horizon → parity contract.
 
-## Folia fork (`versions/servers/26.1.x/`)
+## Folia fork (`versions/servers/26.3/folia/`)
 
 - `folia/patches/minecraft-NNNN-*.patch` → `folia-server/minecraft-patches/features/`; `paper-NNNN-*.patch` → `paper-patches/features/`. Same number per feature on every line.
 - Patches apply with `git am`: hunk counts must be exact (old = context + `-`, new = context + `+`), a blank context line is a single space, and context must come from the real target file. After a hand edit run `python3 scripts/patch-recount.py <patch>`; prefer editing the LAST patch that touches a line so no later patch's context changes. Validate with `scripts/stage.sh folia` (applyAllPatches) and `scripts/validate-all.sh`.
-- Shared fork patch: `26.1.x/common/minecraft-0011-Linear-flush-unlock.patch`.
+- Flush unlock (former shared 0011) is folded into `minecraft-0009` since Paper 26.3 rewrote `RegionFileStorage`.
 - Tests: `folia/tests/*.java` run through `LinearNmsTestSuite`, which uses `@SelectPackages` over `net.linear`, `net.minecraft.world.level.chunk.storage` and `net.minecraft.util.worldupdate`. A test outside those packages never runs.
 
 ## Canvas fork (`versions/servers/26.3/canvasmc/` + `versions/servers/common/canvas/`)

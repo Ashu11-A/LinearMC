@@ -5,7 +5,7 @@
 # CI. Reads the pin from each version's upstream.properties.
 #
 # Usage: scripts/build.sh [--mc <ver>|all] [--folia-dir DIR] [--dry-run]
-#   --mc        version folder under versions/servers/ (e.g. 26.1.x). Default: all.
+#   --mc        version folder under versions/servers/ (e.g. 26.3). Default: all.
 #   --folia-dir existing Folia checkout to build in. Only valid with a single
 #               --mc; otherwise a scratch dir /tmp/folia-linear/build-<ver>
 #               is used per version. The checkout is left on FOLIA_REF.

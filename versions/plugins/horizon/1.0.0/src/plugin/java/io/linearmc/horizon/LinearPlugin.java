@@ -156,37 +156,10 @@ public class LinearPlugin extends JavaPlugin {
             .ifPresent(getLogger()::info);
         LinearFileConfig.overrideLineIfNeeded(LinearPolicy.SYSPROP_LEVEL)
             .ifPresent(getLogger()::info);
-        // Durability heartbeat: the storage flush/close paths on this server
-        // line cannot be trusted to run (verified live: neither fires for
-        // region files), so durability must not depend on them. A repeating
-        // async drain persists age-gated files on the flush-frequency rhythm
-        // without ever blocking the tick, and the post-save stop barrier
-        // (MinecraftServerMixin -> LinearShutdownBarrier.finalDrain) forces
-        // everything out. Without this, live writes would sit in RAM until
-        // process death.
-        final int heartbeatSeconds = Math.max(1, getConfig().getInt("region-format.linear.flush-frequency", 10));
-        // One daemon thread for the whole server (never the Bukkit
-        // scheduler: region-threaded lines throw UnsupportedOperationException
-        // on async timers). Age-gated background drain only; the tick and
-        // explicit saves never block on it.
-        // Defensive: Bukkit guarantees onDisable between enables, but never
-        // leak a thread if this instance is ever re-enabled without one.
-        if (this.drainService != null) {
-            try {
-                this.drainService.shutdownNow();
-            } catch (RuntimeException ignored) {
-            }
-            this.drainService = null;
-        }
-        this.drainService = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread thread = new Thread(r, "linearmc-flush-heartbeat");
-            thread.setDaemon(true);
-            return thread;
-        });
-        this.drainService.scheduleWithFixedDelay(
-            () -> net.linear.flush.FlushReports.FolderDrain.onSave(false),
-            heartbeatSeconds, heartbeatSeconds, java.util.concurrent.TimeUnit.SECONDS);
-        getLogger().info("LinearMC: flush heartbeat every " + heartbeatSeconds + "s (async, age-gated)");
+        // Durability heartbeat lives in linear-core (FlushHeartbeat, shared by
+        // every leg): started by the first tracked Linear folder, age-gated by
+        // flush-frequency (supplier wired above), stopped by the stop barrier.
+        // Explicit-ANVIL worlds never track a folder, so it never starts.
         LinearCommand command = new LinearCommand(this);
         this.registerCommand("linear", "Linear region tools (stats, convert, queue)", command);
         this.registerCommand(
@@ -228,9 +201,6 @@ public class LinearPlugin extends JavaPlugin {
         }
     }
 
-    /** Heartbeat service for the flush drain (shut down on disable). */
-    private java.util.concurrent.ScheduledExecutorService drainService;
-
     @Override
     public void onDisable() {
         // Plugins are disabled BEFORE the host's final world save (Paper
@@ -238,13 +208,6 @@ public class LinearPlugin extends JavaPlugin {
         // pre-save drain: force what is dirty now and keep the flush pool
         // alive. The real stop barrier (shutdown mode, evict everything,
         // pool shutdown) runs after the final save from MinecraftServerMixin.
-        if (this.drainService != null) {
-            try {
-                this.drainService.shutdownNow();
-            } catch (RuntimeException ignored) {
-            }
-            this.drainService = null;
-        }
         LinearShutdownBarrier.pluginDisableDrain();
     }
 

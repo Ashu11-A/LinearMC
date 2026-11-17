@@ -65,7 +65,7 @@ One coordinator per storage folder, one shared pool for the whole server.
 - When the bound is exceeded, the oldest file drains in the background without blocking the game thread, keeping memory bounded while gameplay continues.
 - Background drains never block the caller. The caller continues immediately once the work is handed off.
 - Forced saves and shutdown behave differently: they flush everything regardless of age and wait for all work to finish, giving a zero-loss stop as long as the flushes finish inside the shutdown settle window (about 30 seconds). At unsafe compression levels they may not finish in time — see limitations.
-- Background work runs on a single shared worker pool for the whole server, so a multi-second file rewrite never stalls the game thread. The crash window is unchanged by this: up to one flush interval of edits can still be lost on a force-kill.
+- Background work runs on a single shared worker pool for the whole server, so a multi-second file rewrite never stalls the game thread. A core heartbeat (`linearmc-flush-heartbeat`, every second, on all legs) submits regions older than `flush-frequency`, so the crash window is bounded by `flush-frequency` + 1 second of edits, with or without saves or chunk unloads.
 - Unloading a world flushes whatever is still dirty for that folder and drops the coordinator registration, so worlds do not leak coordinators over time.
 
 ## Reading and coexistence
@@ -82,7 +82,7 @@ Server legs under `versions/servers` are thin patches over the game. They adapt 
 
 - There is a single mapping point from world configuration to storage format, shared by all call sites, so there is one place to look when formats disagree.
 - The game keeps its per-write flush behaviour for the old format. Only Linear defers durability to the coordinator.
-- Common hunks shared byte-for-byte across servers live once under `versions/servers/26.1.x/common`. Near-identical hunks with mapping drift stay per server as thin adapters.
+- Common hunks shared byte-for-byte across servers live once under `versions/servers/26.3/common` (currently empty: the old flush-unlock hunk is folded into Folia `minecraft-0009`). Near-identical hunks with mapping drift stay per server as thin adapters.
 - Direction of dependence is always inward: legs call the core, never the reverse. That is what keeps ports and rebases small.
 
 ## Concurrency rules

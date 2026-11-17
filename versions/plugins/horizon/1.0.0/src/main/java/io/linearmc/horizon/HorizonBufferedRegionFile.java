@@ -198,7 +198,8 @@ public class HorizonBufferedRegionFile extends RegionFile implements AbstractReg
         this.delegate.clearMarkedToSave();
     }
 
-    @Override
+    // No @Override: dropped from the region-file interface in later 26.3 bundles;
+    // kept so older bundles (26.1.2 build pin) still see the implementation.
     public int getRecalculateCount() {
         return 0;
     }

@@ -36,6 +36,7 @@ What this release does not cover. Read it before a rollout, not after.
 ## Settings and rollback
 
 - Most flush and compression settings are accepted and take effect. See the configuration reference for defaults.
+- A hard crash or force-kill can lose up to `flush-frequency` + 1 second of edits (about 11 seconds at the default). The background flush writes on that rhythm on every leg; saves, chunk unloads and a clean `stop` write everything at once.
 - The log-flush-batches setting is inert in this release and changes nothing.
 - Rollback rung B needs a stock server jar that you supply yourself. The script points at a placeholder path and stops with instructions until you point it somewhere real. Rung A needs no extra jar. (Rungs explained in the operator manual; terms in concepts.md.)
 - Every rollback rung needs a verified backup. It must contain a verification marker and at least one region folder, or the script will refuse to run.

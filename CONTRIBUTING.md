@@ -68,7 +68,7 @@ with its own upstream pins (`upstream.properties` for Folia,
 `upstream.canvas.properties` for Canvas), per-server legs (`folia/`,
 `canvasmc/`, each with `patches/` or `overlay/`, `tests/`, `build-hunk.py`),
 and shared byte-identical patches in `common/`. The active matrix is Folia
-26.1.2 + CanvasMC 26.3 + Horizon 1.0.0 (26.1-26.3); removed legs are archived
+26.3 + CanvasMC 26.3 + Horizon 1.0.0 (26.1-26.3); removed legs are archived
 under `versions/servers/removed/` and must not be re-added without porting.
 Start a new line with the script, never by hand-copying:
 
@@ -81,7 +81,7 @@ scripts/new-version.sh --help
 Porting checklist:
 
 - Same patch name and number per feature across folders. If a fix lands as
-  `minecraft-0013` in `versions/servers/26.1.x/folia/patches/`, the same
+  `minecraft-0013` in `versions/servers/26.3/folia/patches/`, the same
   feature keeps that number in every other supported
   `versions/servers/*/folia/patches/` folder, so diffs between lines stay
   reviewable. Renumbering one line orphans the mapping.
@@ -167,14 +167,14 @@ Tag scheme:
 4. `build.yml` attaches one jar per matrix leg:
    fork legs as
    `linearmc-<server>-<mcversion>-<project>+build.<N>.jar` (e.g.
-   `linearmc-folia-26.1.2-1.1.4+build.8.jar`), the Horizon plugin as
+   `linearmc-folia-26.3-1.3.0+build.8.jar`), the Horizon plugin as
    `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar` (one generic jar
    for Paper/Folia/CanvasMC 26.1-26.3). The `#N` form appears in the release
    body, because GitHub rewrites `#` in asset filenames.
 5. The `release-notes` job injects/refreshes the upstream build table in the
    release body, so every release names the exact server build it shipped.
 
-Supported matrix: Folia 26.1.2, CanvasMC 26.3, Horizon plugin for 26.1-26.3.
+Supported matrix: Folia 26.3, CanvasMC 26.3, Horizon plugin for 26.1-26.3.
 Unsupported server legs are archived under `versions/servers/removed/`; do
 not add them back to the build matrix without re-validating their patches.
 

@@ -17,12 +17,20 @@ case "$FORMAT" in LINEAR|B_LINEAR|ANVIL) FLAG="-Dlinearmc.format=$FORMAT" ;; CON
 cd "$DIR" || exit 2
 [ -f "$JAR" ] || { echo "missing $DIR/$JAR" >&2; exit 2; }
 FRESH=1; [ -d world ] && FRESH=0
+if [ "$MODE" = loadgen ]; then
+  # Refuse to start a loadgen run whose LoadGen config is missing or empty (half-copied template).
+  if [ ! -s plugins/LoadGen/config.yml ]; then
+    echo "REFUSED: loadgen mode needs a non-empty plugins/LoadGen/config.yml in $DIR (copy the template atomically: cp -a to <dir>.tmp, then mv)" >&2
+    exit 2
+  fi
+fi
 rm -f server.log result.txt
 # shellcheck disable=SC2086
 server_start server.log -Xms512M -Xmx1G ${EXTRA_JAVA_OPTS:-} $FLAG -jar "$JAR" --nogui
 if ! server_wait server.log 'Done (' 150; then
   { echo "SERVER_NOT_READY"; tail -n 80 server.log; } > result.txt
-  kill -9 "$SERVER_PID" 2>/dev/null; server_stop 1; cat result.txt; exit 1
+  server_stop 90 || echo "TEST FAILED: SERVER_STUCK pid=$SERVER_PID (hung; killed for cleanup)" >> result.txt
+  cat result.txt; exit 1
 fi
 IFS=';' read -r -a EXTRA <<< "${SMOKE_CMDS:-}"
 for c in "${EXTRA[@]}"; do server_send "$c"; sleep 1; done
@@ -37,13 +45,14 @@ server_stop 90
 cnt() { find . -path "*/$1/*" -name "*.$2" 2>/dev/null | wc -l; }
 MCA=$(cnt region mca)
 {
-  echo "dir=$DIR mode=$MODE format=$FORMAT duration=${DURATION}s exit=$SERVER_RC killed=$SERVER_KILLED fresh=$FRESH"
+  echo "dir=$DIR mode=$MODE format=$FORMAT duration=${DURATION}s exit=$SERVER_RC stuck=$SERVER_STUCK pid=$SERVER_PID fresh=$FRESH"
   for f in region entities poi; do echo "$f: linear=$(cnt "$f" linear) b_linear=$(cnt "$f" b_linear) mca=$(cnt "$f" mca)"; done
   echo "--- key log ---"
   grep -E 'Done \(|LinearMC:|LoadGen|\[region-format\]|Exception|ERROR|Mixin|host=' server.log | tail -n 50
 } > result.txt
 cat result.txt
-[ "$SERVER_KILLED" = 0 ] || exit 1
+[ "$SERVER_STUCK" = 0 ] || { echo "TEST FAILED: SERVER_STUCK pid=$SERVER_PID (hung after stop; killed for cleanup)"; exit 1; }
+if [ "$SERVER_OOM" = 1 ]; then server_oom_report; exit 1; fi
 if [ "$FRESH" = 1 ] && [ "$FORMAT" != ANVIL ] && [ "$FORMAT" != CONFIG ] && [ "$MCA" -gt 0 ]; then
   echo "FAIL: fresh $FORMAT world wrote $MCA .mca region file(s)"; exit 1
 fi

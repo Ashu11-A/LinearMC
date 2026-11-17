@@ -1,6 +1,6 @@
 # Canvas post-apply layer, line 26.3
 
-Upstream pin: Canvas `main` at `a636063e`, build **#1010** (de-facto stable 26.3:
+Upstream pin: Canvas `main` at `31a7f9ac`, build **#1016** (de-facto stable 26.3:
 `channel=STABLE`, `mcVersion=26.3`; no `ver/26.3` branch exists upstream).
 Pin source is `upstream.canvas.properties` next to this file.
 
@@ -10,7 +10,10 @@ check gate. The 18 shared patches, 9 paper-server files, and 20 tests come
 from `versions/servers/common/canvas/` (see the hub README); this leg keeps
 only seam adapters plus the three demoted shadows below.
 
-Build #1010 rebase (2026-11-05): `RegionFile.write(ChunkPos, ByteBuffer)`
+Build #1016 bump (2026-11-14, `31a7f9ac`): Paper upstream update only; the overlay
+is expected to apply unchanged (re-verify with `scripts/stage.sh canvas`).
+
+Historical: build #1010 rebase (2026-11-05): `RegionFile.write(ChunkPos, ByteBuffer)`
 became `protected`, so the hub patch keeps the public long-key bridge as the
 contract entry; `SimpleRegionStorage` dropped the `info.dfuType()[0]`
 assignment from its 5-arg constructor; and `RegionFileStorage` moved chunk

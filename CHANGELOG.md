@@ -5,10 +5,40 @@ as they were (no aliases, no moves). Releases from v1.1.4 onward use the
 `vX.Y.Z-release.N` form; `v1.1.4-release.1` is the first. Each release
 attaches one jar per matrix leg, named
 `linearmc-<server>-<mcversion>-<project>+build.<N>.jar`
-(e.g. `linearmc-folia-26.1.2-1.1.4+build.8.jar`). The Horizon plugin ships
+(e.g. `linearmc-folia-26.3-1.3.0+build.8.jar`). The Horizon plugin ships
 one universal jar for Paper/Folia/CanvasMC 26.1-26.3 as
 `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar`, built against the
 oldest bundle with `api-version: 26.1`.
+
+## v1.3.0-release.1
+
+Folia and CanvasMC now ship on the same Minecraft line, 26.3, in one release.
+
+### Matrix
+- **Folia fork 26.3** (`ver/26.3.x` at `73378203`, build #8) replaces the
+  Folia 26.1.2 fork. All Linear patches were rebased onto Paper `5184e9c0`
+  (the same Paper commit as Canvas #1016).
+- **CanvasMC 26.3** at build #1016 (`31a7f9ac`).
+- **Horizon 1.0.0**: the 26.3 dev bundle moved from `26.3.build.140-beta` to
+  `26.3.build.253-stable`. The universal jar still covers Paper/Folia/CanvasMC
+  26.1-26.3.
+
+### Fixed: Linear regions not on disk after chunk unload on the forks
+The Folia and CanvasMC forks wrote Linear regions only on save or eviction,
+so edits in unloaded chunks stayed in memory until the next save. The flush
+heartbeat moved from the Horizon plugin into `linear-core`
+(`FlushHeartbeat`, thread `linearmc-flush-heartbeat`): every leg now writes a
+dirty region within `flush-frequency` + 1 s. No new config keys. Parity
+capability `background-flush`.
+
+### Removed
+- The Folia 26.1.x fork leg is archived under `versions/servers/removed/26.1.x`.
+  Folia 26.1.2 servers keep full Linear support through the Horizon plugin.
+
+### Internal
+- The shared flush-unlock patch (`common/minecraft-0011`) is folded into Folia
+  `minecraft-0009`, because Paper 26.3 rewrote `RegionFileStorage`. The
+  behaviour is unchanged: eviction and close run outside the monitor.
 
 ## v1.2.0-release.1
 

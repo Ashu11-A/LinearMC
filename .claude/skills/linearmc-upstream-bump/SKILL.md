@@ -9,7 +9,7 @@ description: Track and adopt upstream changes - new CanvasMC Jenkins builds, Fol
 
 | Upstream | File | Keys |
 | --- | --- | --- |
-| Folia | `versions/servers/26.1.x/upstream.properties` | `FOLIA_REPO/BRANCH/REF/BUILD`, `MC_VERSION` |
+| Folia | `versions/servers/26.3/upstream.properties` | `FOLIA_REPO/BRANCH/REF/BUILD`, `MC_VERSION` |
 | Canvas | `versions/servers/26.3/upstream.canvas.properties` | `CANVAS_REPO/BRANCH/REF/BUILD`, `MC_VERSION` |
 | Horizon (build) | `versions/plugins/horizon/upstream.horizon.properties` | `HORIZON_REF`, `HORIZON_DEV_BUNDLE`, `HORIZON_BUILD`, `HORIZON_MC_RANGE` |
 | Horizon (tests) | `versions/plugins/horizon/upstream.horizon-<mc>.properties` | one dev bundle per supported MC |
@@ -24,7 +24,7 @@ grep -h mcVersion proof/refs/*/gradle.properties
 ```
 
 Compare the result with the pins. Known pressure (re-check, dated 2026-11-10):
-- Folia `ver/26.3.x` exists but is alpha. The leg is deferred until stable (decision).
+- Folia fork tracks `ver/26.3.x` (replaced 26.1.x in v1.3.0; 26.1.x archived, Horizon covers 26.1 hosts).
 - Horizon `MinecraftVersion` throws on unknown MC ids (`proof/refs/Horizon/core/.../MinecraftVersion.java`), so a new MC needs a Horizon release first.
 - Canvas patches the same `ChunkMap`/`ServerChunkCache` as the overlay.
 

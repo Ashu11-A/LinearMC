@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Augment Folia's build.gradle.kts.patch with the Linear build wiring.
+
+Two insertions, both byte-identical to the proven local build:
+1. Test source dir: lets the new net.linear/net.minecraft tests compile
+   (`srcDir("src/test/java")` alongside the paper-server test tree).
+2. dependency hunk (zstd + OpenHFT XXH64): paperweight-convention @@ header
+   stock git cannot parse, so it is spliced in (never git-applied).
+
+Fails loudly if anchors moved (upstream drift) or already applied (idempotent).
+"""
+import pathlib
+import sys
+
+ANCHOR = "@@ -179,14 +_,14 @@"
+ZSTD_MARKER = 'implementation("com.github.luben:zstd-jni:1.5.6-8")'
+OPENHFT_MARKER = 'implementation("net.openhft:zero-allocation-hashing:2026.0")'
+
+TEST_SRCDIR_OLD = 'java { srcDir("../paper-server/src/test/java") }'
+TEST_SRCDIR_NEW = 'java { srcDir("../paper-server/src/test/java"); srcDir("src/test/java") }'
+
+HUNK = """@@ -165,6 +_,14 @@ dependencies {
+     // Spark
+     implementation("me.lucko:spark-api:0.1-20240720.200737-2")
+     implementation("me.lucko:spark-paper:1.10.191")
++
++    // folia-linear A6 (codec/native owner): zstd chunk codec. Pinned to the proven
++    // Linear plugin classpath (packages/core uses 1.5.6-8); the fork pins no zstd
++    // version itself and lz4 arrives via vanilla, so no lz4 line is added here.
++    implementation("com.github.luben:zstd-jni:1.5.6-8")
++    // XXH64 for bucketed wire formats; OpenHFT is byte-compatible with the
++    // removed in-tree implementation and is embedded by the Horizon plugin too.
++    implementation("net.openhft:zero-allocation-hashing:2026.0")
+ }
+ 
+ tasks.jar {
+"""
+
+
+def main() -> int:
+    target = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else None
+    if target is None:
+        print("usage: apply-deps-hunk.py <folia-server/build.gradle.kts.patch>")
+        return 2
+    text = target.read_text()
+    has_zstd = ZSTD_MARKER in text
+    has_openhft = OPENHFT_MARKER in text
+    if has_zstd and has_openhft:
+        print("dependency hunk already applied")
+    elif has_zstd or has_openhft:
+        print("ABORT: partial dependency hunk (zstd=" + str(has_zstd)
+              + ", openhft=" + str(has_openhft) + "); recreate the fork tree")
+        return 1
+    else:
+        if text.count(ANCHOR) != 1:
+            print(f"ABORT: anchor {ANCHOR!r} found {text.count(ANCHOR)}x (expected 1x) -- "
+                  "upstream moved, update the hunk placement by hand")
+            return 1
+        text = text.replace(ANCHOR, HUNK.rstrip("\n") + "\n" + ANCHOR, 1)
+    if TEST_SRCDIR_NEW in text:
+        print("test srcDir already wired")
+    else:
+        if text.count(TEST_SRCDIR_OLD) != 1:
+            print(f"ABORT: test srcDir anchor found {text.count(TEST_SRCDIR_OLD)}x "
+                  "(expected 1x) -- upstream moved")
+            return 1
+        text = text.replace(TEST_SRCDIR_OLD, TEST_SRCDIR_NEW, 1)
+    target.write_text(text)
+    check = target.read_text()
+    assert check.count(ZSTD_MARKER) == 1, "post-insert zstd marker check failed"
+    assert check.count(OPENHFT_MARKER) == 1, "post-insert openhft marker check failed"
+    assert check.count(TEST_SRCDIR_NEW) == 1, "post-insert srcdir check failed"
+    print(f"patched {target}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

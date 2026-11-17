@@ -16,6 +16,7 @@ description: Choose and run the right LinearMC tests - core JUnit, fork Linear s
 | Mixin sites | `scripts/audit-mixin-sites.sh <server.jar>` | Every `new RegionFile` site in the real host class is redirected |
 | Live smoke | `scripts/server-smoke.sh <dir> <loadgen\|forceload\|idle> <sec> [horizon] [format]` | Boot, write path, flush, stop on real servers |
 | Live migration | `scripts/migration-smoke.sh <template-dir> <server.jar\|horizon.jar>` | Pre-existing `.mca` world → LINEAR without regeneration, new `.linear` region, clean stop without `save-all` (markers A–D), final stop drain, live `/linear convert` never deleting an open `.mca` (markers E–G, with a control region proving the job ran) |
+| Live unload flush | `scripts/unload-smoke.sh <template-dir> <server.jar\|horizon.jar>` | After `forceload remove` + flush-frequency wait, both region `.linear` files are on disk (fresh mtime, header+footer magic) while the server still runs; restart keeps markers U/V |
 
 ## Live matrix (max ~5 min per server)
 
@@ -40,6 +41,11 @@ Read-back without a server: write a small JUnit or `jshell` snippet using `net.l
 
 ## Rules
 
+- **A test runs to completion; never kill a server as a test step.** No SIGKILL/`kill` to simulate a crash and no `timeout` wrapper cutting a run short. Stop only with the `stop` console command and wait for exit (`scripts/lib/server.sh` `server_stop`). Killing is allowed only for cleanup when the server is already hung and cannot process `stop`: `server_stop` then sends TERM, then `-9`, marks the test FAILED (`SERVER_STUCK`) and the report must say so. `kill -0` liveness checks are fine.
+- Every JVM runs with `-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError` (dump in `<run dir>/oom` or `$OOM_DIR`); an OOM exits with code 3 and is reported as FAIL with the dump path. Delete large `.hprof` files once their histogram is recorded (disk is tight).
+- `server-smoke.sh ... loadgen` refuses to start without a non-empty `plugins/LoadGen/config.yml`; copy templates atomically (`cp -a` to a temp dir, then `mv`).
+- Max 2 servers at once.
+- Durability is proved while the server runs (unload flush) or after a clean `stop`, never by a crash/kill.
 - A test that passes on a fresh world proves nothing about migration paths.
 - Never skip a dev bundle. Mixin targets drift per MC version.
 - Report failures with their output. Never mark a parity entry `supported` on unit tests alone when the behaviour is a save, stop or migration path; note "live pending" in `test`.

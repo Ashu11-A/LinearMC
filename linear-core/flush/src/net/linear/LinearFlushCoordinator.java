@@ -102,6 +102,8 @@ public final class LinearFlushCoordinator {
     /** Stop-barrier hook: defer all hygiene drains to the final forced drain. */
     public static void linear$beginShutdown() {
         SHUTDOWN_MODE = true;
+        // The stop barrier is the only drainer from here on.
+        net.linear.flush.FlushHeartbeat.stop();
     }
 
     /**
@@ -154,6 +156,11 @@ public final class LinearFlushCoordinator {
         final LinearFlushCoordinator coordinator =
             BY_FOLDER.computeIfAbsent(key(folder), key -> new LinearFlushCoordinator(folder));
         BY_PATH.put(folder, coordinator);
+        // Background durability (crash/kill safety): first tracked Linear
+        // folder starts the shared heartbeat; idempotent and cheap after.
+        if (!SHUTDOWN_MODE) {
+            net.linear.flush.FlushHeartbeat.ensureStarted(LinearFlushCoordinator::linear$heartbeatTick);
+        }
         return coordinator;
     }
 
@@ -285,6 +292,7 @@ public final class LinearFlushCoordinator {
 
     /** Test-only: shuts the shared pool down and clears the overrides. */
     static void linear$resetFlushPoolForTests() {
+        net.linear.flush.FlushHeartbeat.resetForTests();
         ParallelFlushFanout.resetFlushPoolForTests();
         SHUTDOWN_MODE = false;
     }
@@ -295,6 +303,11 @@ public final class LinearFlushCoordinator {
 
     /** Test-only: forces flush-frequency seconds (null clears). */
     static void linear$setFlushFrequencyForTests(Long seconds) {
+        if (seconds != null) {
+            // A pinned test frequency means deterministic drain counts: the
+            // background heartbeat stays off unless a test re-enables it.
+            net.linear.flush.FlushHeartbeat.stop();
+        }
         ParallelFlushFanout.setFlushFrequencyForTests(seconds);
     }
 
@@ -341,15 +354,20 @@ public final class LinearFlushCoordinator {
             if (force) {
                 batch = new ArrayList<>(this.dirty.keySet());
             } else {
-                batch = new ArrayList<>();
+                // Lazy: an idle heartbeat tick allocates nothing.
+                List<AbstractRegionFile> eligible = null;
                 for (java.util.Map.Entry<AbstractRegionFile, Long> e : this.dirty.entrySet()) {
                     if (now - e.getValue() >= frequencyNanos) {
-                        batch.add(e.getKey());
+                        if (eligible == null) {
+                            eligible = new ArrayList<>();
+                        }
+                        eligible.add(e.getKey());
                     }
                 }
-                if (batch.isEmpty()) {
+                if (eligible == null) {
                     return null;
                 }
+                batch = eligible;
             }
             java.util.concurrent.FutureTask<?> tracked = linear$createFlushTask(batch);
             if (force) {
@@ -363,8 +381,22 @@ public final class LinearFlushCoordinator {
         }
     }
 
+    /** Test-only: re-arms and starts the heartbeat after a pinned frequency. */
+    static void linear$enableHeartbeatForTests() {
+        net.linear.flush.FlushHeartbeat.resetForTests();
+        net.linear.flush.FlushHeartbeat.ensureStarted(LinearFlushCoordinator::linear$heartbeatTick);
+    }
+
+    /** Heartbeat tick: age-gated fire-and-forget drain, skipped once stopping. */
+    static void linear$heartbeatTick() {
+        if (!SHUTDOWN_MODE && !BY_FOLDER.isEmpty()) {
+            flushDirtyAsync(false);
+        }
+    }
+
     /** Production pool shutdown for the stop path (async split, B-RC). */
     public static void shutdownFlushPool() {
+        net.linear.flush.FlushHeartbeat.stop();
         ParallelFlushFanout.shutdownFlushPool();
     }
 

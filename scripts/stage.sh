@@ -6,7 +6,7 @@
 #           (--no-apply: stop before applyAllPatches; CI applies itself)
 #   canvas: clone/reset the pin, applyAllPatches, then the overlay
 #           (--overlay-only: the tree is already applied; overlay only)
-#   --line : version folder under versions/servers (default 26.1.x folia, 26.3 canvas)
+#   --line : version folder under versions/servers (default 26.3 for both legs)
 #   workdir default: proof/fork-<leg> (git-ignored); must not be named "folia".
 # Editing a Folia patch: edit the applied tree (folia-server/src/minecraft/java
 # or paper-server), commit --fixup into its feature commit, autosquash, run
@@ -30,7 +30,7 @@ done
 [ "$(basename "$WORK")" != folia ] || { echo "workdir must not be named 'folia' (paperweight nested-build clash)" >&2; exit 2; }
 WORK="$(realpath -m "$WORK")"   # copy_tree cds; keep every path absolute
 case "$LEG" in
-  folia)  LINE="${LINE:-26.1.x}"; PROPS="$ROOT/versions/servers/$LINE/upstream.properties"; P=FOLIA ;;
+  folia)  LINE="${LINE:-26.3}"; PROPS="$ROOT/versions/servers/$LINE/upstream.properties"; P=FOLIA ;;
   canvas) LINE="${LINE:-26.3}";   PROPS="$ROOT/versions/servers/$LINE/upstream.canvas.properties"; P=CANVAS ;;
   *) echo "leg must be folia or canvas" >&2; exit 2 ;;
 esac

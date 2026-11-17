@@ -23,6 +23,6 @@ encodes it as `+build.N`.
 
 Examples:
 
-- `linearmc-folia-26.1.2-1.1.4+build.8.jar`
+- `linearmc-folia-26.3-1.3.0+build.8.jar`
 - `linearmc-canvas-26.3-1.1.4+build.1010.jar`
 - `linearmc-horizon-26.1-26.3-1.1.4+build.74.jar`

@@ -162,9 +162,14 @@ worlds:
     compression-level: 9
 ```
 
-On Horizon, durability does not depend on storage flush/close (verified
-live: neither fires on that line). A repeating async heartbeat persists
-age-gated files on the flush-frequency rhythm. Plugins are disabled before
+On every leg (Folia, CanvasMC, Horizon), durability does not depend on save,
+unload or stop. The core starts one daemon thread,
+`linearmc-flush-heartbeat`, when the first Linear folder is tracked. Every
+second it hands regions older than `flush-frequency` (age counted from the
+first unsaved write) to the shared flush pool, so a written region reaches
+disk within `flush-frequency` + 1 second plus write time (about 11 s at the
+default). ANVIL worlds never start it. On Horizon, storage flush/close never
+fire, so this heartbeat is the only background writer there. Plugins are disabled before
 the server's final world save, so disabling the plugin only drains what is
 dirty at that moment; the real stop barrier runs after the final save and
 region I/O flush (`MinecraftServerMixin`, right before `onServerExit()`),

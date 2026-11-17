@@ -27,7 +27,7 @@ enough. `MixinDescriptorsTest` checks, per dev bundle, that every selector,
 shadow and overwrite exists and that every required INVOKE/NEW/FIELD target
 is really called inside its host method (bytecode).
 
-Per-MC retrace (HORIZON_REF `31d1a1b7`; build pin in
+Per-MC retrace (HORIZON_REF `31d1a1b7` = Horizon stable build #90; build pin in
 `versions/plugins/horizon/upstream.horizon.properties`, per-bundle test pins
 in `upstream.horizon-<mc>.properties`):
 
@@ -62,3 +62,11 @@ Packaging notes proven in testing:
 - The paper half loads through the plugin flag, but the mixin jar must also sit in the plugins folder for discovery.
 
 For behavior and settings see docs/architecture.md and docs/configuration.md.
+
+## 26.3 stable bundle (26.3.build.253-stable)
+
+Test pin moved from 26.3.build.140-beta to 26.3.build.253-stable. All mixin
+selectors resolve (MixinDescriptorsTest green). `RegionFile`-family interface
+no longer declares `getRecalculateCount()`; the Horizon region-file
+implementations keep the method without `@Override` so the 26.1.2 build pin
+and 26.2 still compile and run.

@@ -38,7 +38,7 @@ on large survival worlds. Players, plugins, and Bedrock players all see the same
 
 ## 🧩 Compatibility
 
-* **Folia 26.1.2** — supported.
+* **Folia 26.3** — supported (Folia 26.1.2 servers: use the Horizon plugin; the 26.1.x fork is archived).
 * **CanvasMC 26.3** — supported.
 * **Horizon plugin 1.0.0** — supported on Paper, Folia and CanvasMC 26.1 through 26.3, no server rebuild needed. One jar; the plugin adapts to the host. [What is Horizon?](https://github.com/CraftCanvasMC/Horizon).
 
@@ -87,9 +87,9 @@ Four JVM flags, passed on the `java` command line before `-jar`. Each one beats 
 Examples:
 
 ```bash
-java -Xmx4G -Dlinearmc.format=LINEAR -jar linearmc-folia-26.1.2-<version>.jar --nogui
-java -Xmx4G -Dlinearmc.format=LINEAR -Dlinearmc.implementation=V2 -Dlinearmc.grid-size=8 -jar linearmc-folia-26.1.2-<version>.jar --nogui
-java -Xmx4G -Dlinearmc.format=B_LINEAR -jar linearmc-folia-26.1.2-<version>.jar --nogui
+java -Xmx4G -Dlinearmc.format=LINEAR -jar linearmc-folia-26.3-<version>.jar --nogui
+java -Xmx4G -Dlinearmc.format=LINEAR -Dlinearmc.implementation=V2 -Dlinearmc.grid-size=8 -jar linearmc-folia-26.3-<version>.jar --nogui
+java -Xmx4G -Dlinearmc.format=B_LINEAR -jar linearmc-folia-26.3-<version>.jar --nogui
 ```
 
 ## ⚙️ Settings

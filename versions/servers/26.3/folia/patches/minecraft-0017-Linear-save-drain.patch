@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-ci <30575805+Ashu11-A@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 22:39:37 -0300
+Subject: [PATCH] Linear save drain: async periodic, sync stop/explicit
+ barriers
+
+Wire deferred linear durability into the server save, autosave and shutdown paths (finding F fix). Vanilla RegionFileStorage instances are never flushed or closed by the Folia/Moonrise runtime, so the coordinator dirty set previously drained only via bound pressure: fresh worlds persisted nothing on clean stop. SPLIT: periodic drains (ChunkMap.processUnloads, ServerChunkCache.save autosave, ServerLevel autosave) are fire-and-forget via LinearFlushCoordinator.flushDirtyAsync(false) and never block the tick; hard barriers stay synchronous joining (RegionShutdownThread post-stopServer / saveAllChunks close / ServerLevel.close via evictAll, explicit save via flushAllDirty(true)), plus a production pool shutdown() after the stop drain so clean stops lose nothing. New LinearFlushCoordinator.flushAllDirty(force)/evictAll, per-folder failures logged never thrown. No behavior change for explicit-ANVIL worlds (no linear folders tracked).
+
+diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/papermc/paper/threadedregions/RegionShutdownThread.java
+index 68751f44518a9451e1bf87a441926ce61d8c04dd..80225e5985cd927f4cfef78dbf82139bd67fffa0 100644
+--- a/io/papermc/paper/threadedregions/RegionShutdownThread.java
++++ b/io/papermc/paper/threadedregions/RegionShutdownThread.java
+@@ -161,6 +161,21 @@ public final class RegionShutdownThread extends ca.spottedleaf.moonrise.common.u
+         }
+ 
+         MinecraftServer.getServer().stopServer(); // stop part 1: most logic, kicking players, plugins, etc
++        // Linear - stop drain (finding F fix, v4): force-drain every tracked linear
++        // folder NOW, while regions/coordinators are fully populated. The per-region
++        // saveRegionChunks path below observes zero regions post-halt (its loop body
++        // never runs), so it cannot be relied on. Idempotent, never throws.
++        // Shutdown mode first: post-halt saves re-dirty hundreds of files at
++        // once — per-mark victim batches would serialize multi-second
++        // rebuilds behind the saves. Track-only from here; the tail forced
++        // barriers (parallel floor) persist everything once.
++        net.linear.LinearFlushCoordinator.linear$beginShutdown();
++        net.linear.LinearFlushCoordinator.evictAll();
++        // Linear - production pool shutdown (async split): the joining stop drain
++        // above already forced every tracked folder, so clean stops lose nothing.
++        // shutdown() (never shutdownNow) lets an in-flight tmp-write complete its
++        // image rewrite; never throws. B-I1 0012 API, reconcile on landing.
++        net.linear.LinearFlushCoordinator.shutdownFlushPool();
+         // halt all chunk systems first so that any in-progress chunk generation stops
+         LOGGER.info("Halting chunk systems...");
+         for (final ServerLevel world : MinecraftServer.getServer().getAllLevels()) {
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index e21c43b5fce8273874b127f6dc1eb391e68245d6..2ab58476c4f5012e8901427fe589c7d27ffe7525 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -974,6 +974,14 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             level.save(null, flush, SharedConstants.DEBUG_DONT_SAVE_WORLD || level.noSave && !force, close); // Paper - add close param
+             result = true;
+         }
++        // Linear - stop drain (finding F fix): the close=true path skips
++        // chunkSource.save, and Folia/Moonrise never flush or close vanilla
++        // storages, so force-drain every tracked linear folder here. Runs on
++        // server stop (saveAllChunks(..., close=true)) and explicit close-saves.
++        // Idempotent, never throws.
++        if (close) {
++            net.linear.LinearFlushCoordinator.evictAll();
++        }
+ 
+         // Paper start - split out global level data
+         return result;
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index bc4e74b0f7d14d86f3b14da22a85263f63011552..e51650b3ed4b7a013ff3e4afbe511cfea8ee7631 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -431,6 +431,12 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+     private void processUnloads(final BooleanSupplier haveTime) {
+         ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.processUnloads(); // Paper - rewrite chunk system
+         ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.autoSave(); // Paper - rewrite chunk system
++        // Linear - periodic drain, fire-and-forget (async split): Moonrise
++        // unload/autosave marks linear files dirty but nothing flushes them
++        // (vanilla save paths are bypassed). Submit the age-gated batch without
++        // joining so the tick never blocks; cheap no-op when young/clean;
++        // per-folder failures logged, never thrown.
++        net.linear.LinearFlushCoordinator.flushDirtyAsync(false);
+     }
+ 
+     private void saveChunksEagerly(final BooleanSupplier haveTime) {
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+index 8ea354842a3084b818909aea1a7d04b476c98972..d73284adfca9312e18a0eefbfb97994f629c2621 100644
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -481,6 +481,14 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+     public void save(final boolean flushStorage) {
+         // Paper - rewrite chunk system
+         this.chunkMap.saveAllChunks(flushStorage);
++        // Linear - split drain (async split): explicit/stop saves (flushStorage)
++        // stay a synchronous joining forced drain; autosaves submit fire-and-forget
++        // so the tick never blocks. Per-folder failures logged, never thrown.
++        if (flushStorage) {
++            net.linear.LinearFlushCoordinator.flushAllDirty(true);
++        } else {
++            net.linear.LinearFlushCoordinator.flushDirtyAsync(false);
++        }
+     }
+ 
+     @Override
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index e5b8a0adbbb43978fb460a53089ed876441721b5..8fa2e2793f1777c54044c364aa381e6dc72a22b1 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -1596,6 +1596,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             this.saveLevelData(false);
+         }
+         // chunk autosave is already called by the ChunkSystem during unload processing (ChunkMap#processUnloads)
++        // Linear - periodic autosave drain, fire-and-forget (async split):
++        // Moonrise unload processing marks linear files dirty but nothing flushes
++        // them, so submit the age-gated batch every autosave cycle without
++        // joining. Cheap no-op when young/clean; per-folder failures logged,
++        // never thrown.
++        net.linear.LinearFlushCoordinator.flushDirtyAsync(false);
+     }
+     // Paper end - Incremental chunk and player saving
+ 
+@@ -3086,6 +3092,9 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     public void close() throws IOException {
+         super.close();
+         //this.entityManager.close(); // Paper - rewrite chunk system
++        // Linear - belt-and-braces stop drain (finding F fix): force-flush every
++        // tracked linear folder so a clean shutdown never loses young writes.
++        net.linear.LinearFlushCoordinator.evictAll();
+     }
+ 
+     @Override

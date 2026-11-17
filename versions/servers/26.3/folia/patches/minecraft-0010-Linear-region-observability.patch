@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Tue, 22 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Linear region observability
+
+Lock-free folder-wide timing and measurement counters for the Linear
+read/write/flush/load paths. No behaviour change on the ANVIL path;
+no hot-interface signature changes; no synchronized added on hot
+record paths (LongAdder/LongAccumulator only); no Bukkit lookups; no
+new threads; micros via System.nanoTime/1000.
+
+Timing groups (count/total/max/avg) for read, write, flush and load,
+plus markDirty, filesFlushed, failures, oversizeRejects, evicts,
+cacheHits/cacheMisses and dirtyDepth. Measurement fields add summed
+raw vs compressed flush bytes, bucketed flush p50/p99 latency
+estimates (10 buckets, 1ms..1s+, upper-bound estimates, clean-no-op
+flushes excluded like flush.count) and millis-since-last-successful-
+flush (-1 when never flushed). Counters live folder-wide on the
+coordinator with per-file views; RegionFileStorage delegates to the
+coordinator and holds zero new fields.
+
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+index eeeb5f237baa6fd253ee3830d3c81e559b2daa3c..e7279321ca50ed7a1b6b607caeff1a68fee60329 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+@@ -145,6 +145,10 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             // matters: throwing later in finishWrite sets failedWrite and retries
+             // forever via scheduleWriteCompress (MoonriseRegionFileIO.runWriteIO).
+             if (net.linear.io.LinearWritePath.oversized(linearStaged)) {
++                try {
++                    LinearFlushCoordinator.forFolder(this.folder).reportOversizeReject();
++                } catch (RuntimeException ignored) {
++                }
+                 final int maxSize = net.linear.LinearRegionFile.MAX_CHUNK_SIZE / (1024 * 1024);
+                 LOGGER.error("Chunk at (" + chunkX + "," + chunkZ + ") in regionfile '" + this.folder.resolve(getRegionFileName(chunkX, chunkZ, this.format)) + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
+                 return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData(
+@@ -439,9 +443,20 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+             final Optional<AbstractRegionFile> cached = this.regionCache.getAndMoveToFirst(key);
+             if (cached != null && cached.isPresent()) {
++                // Linear: cache hit (lock-free delegate, zero new fields).
++                try {
++                    LinearFlushCoordinator.forFolder(this.folder).reportCacheHit();
++                } catch (RuntimeException ignored) {
++                }
+                 return cached.get();
+             }
+-            if (cached != null && !create) {
++            if (cached == null) {
++                // Linear: cache miss (lock-free delegate, zero new fields).
++                try {
++                    LinearFlushCoordinator.forFolder(this.folder).reportCacheMiss();
++                } catch (RuntimeException ignored) {
++                }
++            } else if (!create) {
+                 return null;
+             }
+ 
+@@ -606,6 +621,10 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+                 // catch(RegionFileSizeException) arm). The slot clear persists on
+                 // the next flushDirty()/eviction (deferred linear durability).
+                 if (net.linear.io.LinearWritePath.oversized(linearStaged)) {
++                    try {
++                        LinearFlushCoordinator.forFolder(this.folder).reportOversizeReject();
++                    } catch (RuntimeException ignored) {
++                    }
+                     region.clear(net.linear.ChunkKey.of(pos.x(), pos.z()));
+                     final int maxSize = net.linear.LinearRegionFile.MAX_CHUNK_SIZE / (1024 * 1024);
+                     LOGGER.error("Chunk at (" + pos.x() + "," + pos.z() + ") in regionfile '" + this.folder.resolve(getRegionFileName(pos.x(), pos.z(), this.format)) + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
