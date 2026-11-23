@@ -36,8 +36,8 @@ Supported matrix (v1.3.0-release.1):
 
 | Leg | Pin | Build |
 | --- | --- | --- |
-| Folia 26.3 | `ver/26.3.x` at `7337820366adea680981f164be721873090eb391` | #8 |
-| CanvasMC 26.3 | `main` at `31a7f9ac1bc46fc0dfe14c3376dad6f686cfb2ad` | #1016 |
+| Folia 26.3 | `ver/26.3.x` at `eca40f918928e78c2c5f9c944cfb083d7d9851d4` | #26 |
+| CanvasMC 26.3 | `main` at `23ea235ddd934a81309d048c5e3261ac0eb5cd88` | #1046 |
 | Horizon 1.0.0 | `31d1a1b7` (Horizon stable #90); Paper `26.1.2.build.74-stable` | #90 |
 
 Folia 26.1.x and CanvasMC 26.1.2/26.2 are archived under `versions/servers/removed/` (Folia 26.1.2 hosts are served by

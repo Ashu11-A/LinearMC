@@ -1,6 +1,6 @@
 # Canvas post-apply layer, line 26.3
 
-Upstream pin: Canvas `main` at `31a7f9ac`, build **#1016** (de-facto stable 26.3:
+Upstream pin: Canvas `main` at `23ea235d`, build **#1046** (de-facto stable 26.3:
 `channel=STABLE`, `mcVersion=26.3`; no `ver/26.3` branch exists upstream).
 Pin source is `upstream.canvas.properties` next to this file.
 
