@@ -1,32 +1,29 @@
 # Configuration
 
-This page is the single source of truth for Linear settings: where each
-setting lives, its shipped default, and what happens with a bad value.
-Every default and fallback below was checked against
-`linear-core/config/src/net/linear/config/LinearPolicy.java` and the
-shipped template in `release/region-format.yml`.
+This page is the source of truth for Linear settings: where each one
+lives, its shipped default, and what a bad value does. The defaults and
+fallbacks match `linear-core/config/src/net/linear/config/LinearPolicy.java`
+and the shipped template in `release/region-format.yml`.
 
 ## How settings resolve
 
-Resolution order is system property, then file, then shipped default.
-A system property beats whatever is in the file, and the file beats the
-built-in default. There is no live reload. Restart the server after
-editing any file or changing any system property.
+A system property wins over the file, and the file wins over the shipped
+default. Nothing reloads live, so restart the server after editing a file
+or changing a system property.
 
 ## Where each setting lives
 
-World settings have a fallback and an override. The fallback lives in
-`paper-world-defaults.yml` and applies to every world that does not say
-otherwise. A single world overrides it in its own `paper-world.yml`.
-Leaving a per-world file without a `region-format` block means that
-world inherits the fallback.
+World settings have a fallback and an override. The fallback is in
+`paper-world-defaults.yml` and applies to every world that does not set
+its own value. A world overrides it in its own `paper-world.yml`; if that
+file has no `region-format` block, the world inherits the fallback.
 
-Server-wide settings live only in `paper-global.yml`. They cannot be
-set per world. Putting them in a world file has no effect.
+Server-wide settings live only in `paper-global.yml` and cannot be set
+per world. Putting them in a world file does nothing.
 
 ## Settings
 
-The first three settings are per-world. The rest are global-only.
+The first three settings are per world. The rest are global only.
 
 | Key | Where | Default | Bad value does what |
 | --- | --- | --- | --- |
@@ -41,7 +38,7 @@ The first three settings are per-world. The rest are global-only.
 | linear.implementation | paper-global.yml | V1 | Unknown value logs a warning and writes V1 |
 | linear.grid-size | paper-global.yml | 8 | Outside 1, 2, 4, 8, 16, 32 logs a warning and uses 8 |
 
-On the Canvas fork the same keys live in Canvas' own files: the per-world
+On the Canvas fork, the same keys live in Canvas' own files: the per-world
 ones in `config/canvas-worlds.yml` (and `<dimension>/canvas-patch.yml`)
 under `region-format`, the global ones in Canvas' global configuration
 under `linear` (camelCase: `flushFrequency`, `implementation`, `gridSize`,
@@ -52,37 +49,37 @@ The format setting chooses the file extension used for new writes:
 `.b_linear.swp` swap file that travels beside the master; never delete or
 move one without the other). Reads always probe every extension
 (`.mca`, then `.linear`, then `.b_linear`), so changing the format never
-hides existing data. Mixed worlds in one server are supported. Note the
-trap: the shipped default is LINEAR, but the bad-value fallback is ANVIL,
-so a misspelled format runs that world on Anvil, not on Linear.
+hides existing data. One server can run worlds in different formats.
+Watch out for one thing: the shipped default is LINEAR, but the fallback
+for a bad value is ANVIL, so a misspelled format runs that world on Anvil.
 
 The compression level is the zstd level used when a dirty region
-flushes. Existing files need no conversion; they are rewritten at the
-new level the next time they flush. The symlink setting is a data-loss
-guard: with the default true, a broken symlink under a linear-family
-path halts the server instead of letting the chunk system regenerate the
-region as if it were empty. Set it to false only to boot for forensics,
-then fix the path.
+flushes. Existing files need no conversion; the next flush rewrites them
+at the new level. The symlink setting guards against data loss. With the
+default `true`, a broken symlink under a linear-family path stops the
+server, so the chunk system cannot regenerate the region as if it were
+empty. Set it to `false` only to boot for forensics, then fix the path.
 
-The implementation selects the on-disk writer: `V1` (single compressed
-blob, the reference format), `V2`/`V3` (bucketed, DivineMC-compatible;
-readers accept all versions regardless, and V2/V3 files rewrite as V1
-only if the implementation is later set back). The grid size packs
-V2/V3 writes into a grid of buckets (default 8, DivineMC-compatible).
-Both are writers-only and global: existing files keep their layout until
-rewritten. Readers never need configuration to open any version.
+The implementation picks the on-disk writer: `V1` writes a single
+compressed blob (the reference format), and `V2`/`V3` write bucketed,
+DivineMC-compatible files. Readers accept every version, and V2/V3 files
+are rewritten as V1 only if the implementation is later set back. The
+grid size sets the bucket grid for V2/V3 writes (default 8, also
+DivineMC-compatible). Both settings are global and only affect writers:
+existing files keep their layout until they are rewritten, and readers
+need no configuration to open any version.
 
-Flush frequency is the age gate for the deferred flush: only files that
-have been dirty at least that many seconds flush on a save. It also sets
-the plugin flush-heartbeat rhythm: without it, lines whose storage
-flush/close paths never fire would hold writes in RAM indefinitely. Flush
-threads size the shared flush pool, with 1 meaning serial. Compression
-workers of 0 means single-threaded compression for that flush.
-Long-distance matching of 0 means it is off. The log-flush-batches flag
-stays inert for now.
+Flush frequency is the minimum age for the deferred flush: a save only
+flushes files that have been dirty for at least that many seconds. It
+also sets the interval of the flush heartbeat, which matters on lines
+whose storage flush/close paths never fire; without the heartbeat they
+would keep writes in RAM indefinitely. Flush threads size the shared
+flush pool, and 1 means serial. Compression workers set to 0 means
+single-threaded compression for that flush. Long-distance matching set
+to 0 means it is off. The log-flush-batches flag does nothing for now.
 
-File values for the format are matched exactly after trimming, so
-lowercase `linear` in a file is an unknown value.
+Format values in a file are matched exactly after trimming, so a
+lowercase `linear` in a file counts as an unknown value.
 
 ## Conversion
 
@@ -96,31 +93,31 @@ mca|v1|v2|v3|blinear|pumpkin|linear`) plus an optional bucket grid
 (`--grid 1|2|4|8|16|32`). `--to linear` means `v1`; `--from linear`
 matches any `.linear` layout.
 
-Pumpkin shares the `.linear` extension but migrates explicit-only:
-only `/linear convert <world> --from pumpkin --to <target> --execute`
-copies Pumpkin files, and startup auto-conversion never rewrites them.
-A Pumpkin target ignores `--level` (fixed at 1) and defaults the grid
-to 2; `v2`/`v3` targets default the grid to 8. There are no settings
-for any of this: conversion takes the world's configured level and the
-per-job flags above, and a convert without `--execute` only reports
-what it would do.
+Pumpkin shares the `.linear` extension, but its files only migrate on
+explicit request: `/linear convert <world> --from pumpkin --to <target> --execute`
+is the only way to copy them, and startup auto-conversion never rewrites
+them. A Pumpkin target ignores `--level` (it is fixed at 1) and uses a
+default grid of 2; `v2`/`v3` targets default to a grid of 8. None of this
+has a setting. Conversion uses the world's configured level plus the
+per-job flags above, and a convert without `--execute` only reports what
+it would do.
 
 ## Command-line overrides
 
-Four settings can be overridden from the JVM command line. The system
+Four settings can be set from the JVM command line, and the system
 property wins over both the file and the default. An invalid or blank
-property value is ignored and the file value stays in effect.
+value is ignored, and the file value stays in effect.
 
 The properties are `-Dlinearmc.format` for the world format,
 `-Dlinearmc.compression-level` for the zstd level,
 `-Dlinearmc.implementation` for the writer (`V1`, `V2`, `V3`), and
-`-Dlinearmc.grid-size` for the bucket grid. There are currently
-no system properties for the other keys.
+`-Dlinearmc.grid-size` for the bucket grid. The other keys have no
+system property.
 
 ## Bad-value log lines
 
-Each line below is quoted exactly as it appears in the code. The final
-number or word in each line is the offending value that was supplied.
+These lines are quoted exactly as they appear in the code. `<value>` is
+the bad value that was supplied.
 
 > [region-format] Unknown region format, expected ANVIL, LINEAR or B_LINEAR. Falling back to ANVIL.
 >
@@ -136,23 +133,23 @@ number or word in each line is the offending value that was supplied.
 >
 > [region-format] linear.grid-size must be one of 1, 2, 4, 8, 16, 32, got `<value>`. Falling back to 8.
 
-A boot with none of these lines is the healthy case. The first line
-means the world is running on Anvil despite the intent, so fix the
-spelling. The others mean the server is running on the stated fallback
-while the file still holds the bad value.
+A healthy boot prints none of them. The first line means the world is
+running on Anvil even though you asked for something else, so fix the
+spelling. The others mean the server is using the stated fallback while
+the file still holds the bad value.
 
 ## Horizon plugin difference
 
 The Horizon plugin does not read `paper-world-defaults.yml`,
 `paper-world.yml`, or `paper-global.yml`. It uses `plugins/LinearMC/config.yml`
 with the same keys (shipped default `format: LINEAR`, like the forks), plus
-the same system properties above, set on the server JVM. The file is read in
-the plugin bootstrap, before the server initializes, so the startup
-conversion and the first world storages already use it.
+the same system properties, set on the server JVM. The plugin reads the
+file during bootstrap, before the server initializes, so startup conversion
+and the first world storages already use it.
 
 Per-world values go in a `worlds:` section keyed by dimension id (quote the
-key because of the ':'); only `format` and `compression-level` can be
-overridden per world, and system properties still win:
+key, since it contains ':'). Only `format` and `compression-level` can be
+set per world, and system properties still win:
 
 ```yaml
 worlds:
@@ -162,25 +159,27 @@ worlds:
     compression-level: 9
 ```
 
-On every leg (Folia, CanvasMC, Horizon), durability does not depend on save,
-unload or stop. The core starts one daemon thread,
-`linearmc-flush-heartbeat`, when the first Linear folder is tracked. Every
-second it hands regions older than `flush-frequency` (age counted from the
-first unsaved write) to the shared flush pool, so a written region reaches
-disk within `flush-frequency` + 1 second plus write time (about 11 s at the
-default). ANVIL worlds never start it. On Horizon, storage flush/close never
-fire, so this heartbeat is the only background writer there. Plugins are disabled before
-the server's final world save, so disabling the plugin only drains what is
-dirty at that moment; the real stop barrier runs after the final save and
-region I/O flush (`MinecraftServerMixin`, right before `onServerExit()`),
-and the boot log says `stop barrier armed`. A clean stop without
-`save-all` loses nothing (`scripts/migration-smoke.sh`, marker D).
+On every leg (Folia, CanvasMC, Horizon), durability does not depend on a
+save, an unload or a stop. The core starts one daemon thread,
+`linearmc-flush-heartbeat`, when it starts tracking the first Linear folder.
+Every second, the thread hands regions older than `flush-frequency` (counted
+from the first unsaved write) to the shared flush pool, so a written region
+reaches disk within `flush-frequency` + 1 second plus the write time, about
+11 s at the default. ANVIL worlds never start it. On Horizon, storage
+flush/close never fire, so the heartbeat is the only background writer.
+
+Plugins are disabled before the server's final world save, so disabling the
+plugin only drains what is dirty at that moment. The real stop barrier runs
+after the final save and region I/O flush (`MinecraftServerMixin`, right
+before `onServerExit()`), and the boot log prints `stop barrier armed`. A
+clean stop without `save-all` loses nothing (`scripts/migration-smoke.sh`,
+marker D).
 
 ## Example
 
-One `region-format` block, as it appears at the top level of each file.
-The first three keys go in the world files; the rest go only in
-`paper-global.yml`. Copy each group into its target file.
+This is one `region-format` block as it appears at the top level of a
+file. The first three keys belong in the world files and the rest only in
+`paper-global.yml`, so copy each group into its own file.
 
 ```yaml
 region-format:

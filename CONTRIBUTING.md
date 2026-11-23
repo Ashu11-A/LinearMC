@@ -1,13 +1,13 @@
 # Contributing
 
-This repository is a patch supplement, not a full fork checkout. Changes here
-are patch files, test sources and tooling that get staged into a pinned Folia
-clone at build time.
+This repository holds a patch supplement and the shared core, not a full fork
+checkout. Changes here are patch files, overlay files, test sources and tooling
+that get staged into a pinned upstream clone at build time.
 
 ## Run preflight before pushing
 
-A CI build takes about ten minutes. Most failures so far were staging mistakes
-that a local check catches in seconds.
+A CI build takes about ten minutes, and most past failures were staging
+mistakes that a local check catches in seconds.
 
 ```bash
 scripts/preflight.sh            # inventory, hunk determinism, patch parsing, workflow checks
@@ -20,8 +20,8 @@ scripts/preflight.sh --tests    # the above, plus the Linear suites
   Pass your own with `scripts/preflight.sh --folia-dir /path/to/folia`.
 - `--compile` and `--tests` run Gradle in that directory and need network
   access. The plain run does not.
-- Exit code 0 means push-ready. Anything else means fix it locally first.
-- The CI `static` job runs the same checks; `unit` and `config-check` only
+- Exit code 0 means you can push. Any other code means fix it locally first.
+- The CI `static` job runs the same checks, and `unit` and `config-check` only
   run after it passes.
 
 ## Patch conventions
@@ -39,10 +39,10 @@ scripts/preflight.sh --tests    # the above, plus the Linear suites
   space plus minus lines, `new` is space plus plus lines, and a blank context
   line must be a single space, not an empty line. Two CI failures came from
   exactly this.
-- Context has to be real context from the target file, not assumed context.
-  Several patch headers carry `BASE-TREE ASSUMPTIONS` notes from when the base
-  checkout was unavailable; if you touch one of those hunks, verify against the
-  actual file.
+- Context lines must be copied from the target file. Several patch headers
+  carry `BASE-TREE ASSUMPTIONS` notes from a time when the base checkout was
+  unavailable; if you touch one of those hunks, check it against the actual
+  file.
 - Keep the Anvil path byte-identical unless the change is specifically about
   Anvil. Behaviour changes belong behind the `LINEAR` format flag.
 
@@ -56,10 +56,11 @@ post-apply `canvas-server/build.gradle.kts`; the Horizon plugin JiJ-embeds
 them from its own build file.
 
 - That file uses the paperweight hunk convention, which plain `git apply` cannot
-  parse, so the wiring is done by script rather than by a patch.
-- The script is deterministic. Preflight proves it by running it against a
-  pristine `HEAD` copy and diffing the result against the working file.
-- It aborts on upstream drift rather than producing a plausible but wrong file.
+  parse, so a script does the wiring instead of a patch.
+- The script is deterministic. Preflight runs it against a pristine `HEAD` copy
+  and diffs the result against the working file.
+- If upstream has drifted, it aborts instead of producing a file that looks
+  right but isn't.
 
 ## Porting to a new MC version
 
@@ -70,7 +71,7 @@ with its own upstream pins (`upstream.properties` for Folia,
 and shared byte-identical patches in `common/`. The active matrix is Folia
 26.3 + CanvasMC 26.3 + Horizon 1.0.0 (26.1-26.3); removed legs are archived
 under `versions/servers/removed/` and must not be re-added without porting.
-Start a new line with the script, never by hand-copying:
+Start a new line with the script; never copy folders by hand:
 
 ```bash
 scripts/new-version.sh 26.4.x ver/26.4.x <ref>   # copies newest Folia folder, re-pins, runs applyAllPatches
@@ -84,7 +85,7 @@ Porting checklist:
   `minecraft-0013` in `versions/servers/26.3/folia/patches/`, the same
   feature keeps that number in every other supported
   `versions/servers/*/folia/patches/` folder, so diffs between lines stay
-  reviewable. Renumbering one line orphans the mapping.
+  reviewable. Renumbering in one line breaks that mapping.
 - `minecraft-*.patch` goes to `minecraft-patches/features/`, `paper-*.patch`
   to `paper-patches/features/`; the `<area>-<NNNN>-<Subject>.patch` naming and
   hunk-count rules from Patch conventions apply verbatim in every folder.
@@ -92,24 +93,24 @@ Porting checklist:
   `FOLIA_BUILD`, `MC_VERSION`; `upstream.canvas.properties` carries the
   `CANVAS_*` equivalents plus `CANVAS_BUILD`. They are the single source of
   truth; the workflow pins and `release/RELEASE.md` section 2 mirror them.
-- `new-version.sh` already ran `applyAllPatches` against the new pin, so
-  rebase conflicts surfaced at copy time. Port each rejected hunk to the new
-  base, keeping behaviour identical unless the new base forces a change.
+- `new-version.sh` has already run `applyAllPatches` against the new pin, so
+  rebase conflicts show up at copy time. Port each rejected hunk to the new
+  base and keep behaviour identical unless the new base forces a change.
 - Run `scripts/preflight.sh` (it checks every `versions/servers/*/` line:
   inventory, property/build-number completeness, hunk determinism, patch
   parsing, and the three inherited-bug grep gates), then build the new Folia
   line explicitly: `scripts/build.sh --mc 26.4.x`. Plain `scripts/build.sh`
   builds all Folia lines and skips Canvas-only lines.
 
-## Leg parity (move together)
+## Leg parity
 
-Every surface change moves together: a new or changed player-facing surface
+A new or changed player-facing surface
 (command grammar, flags, permissions, config keys with defaults, `linear$`
 seams) must land on the Folia patches, the Canvas overlay, and the Horizon
 plugin in the same change. The machine-readable contract is
-`parity/capabilities.yml` (one entry per capability and leg, with evidence
-and tests); `scripts/parity-check.sh` validates it on every push and
-`--release` (no `gap` allowed) gates the release upload. Data-path changes
+`parity/capabilities.yml`, with one entry per capability and leg plus
+evidence and tests. `scripts/parity-check.sh` validates it on every push, and
+its `--release` mode (no `gap` allowed) must pass before the release upload. Data-path changes
 (open, save, stop, convert) also need a live `scripts/migration-smoke.sh`
 PASS on the affected hosts. The Horizon `plugins/LinearMC/config.yml` template
 (`versions/plugins/horizon/1.0.0/src/plugin/resources/config.yml`) must stay
@@ -127,14 +128,14 @@ Test sources in `versions/<line>/folia/tests/` are copied into
 - `LinearNmsTestSuite.java` is the suite wiring. The fork's Gradle task only
   runs classes matching `**TestSuite`, so a test not reachable from the suite
   never executes.
-- New Linear tests need to be added to the suite, not just dropped in the
-  directory.
+- Add every new Linear test to the suite; a file dropped in the directory
+  alone never runs.
 - CI runs `./gradlew :folia-server:test --tests "net.linear.LinearNmsTestSuite"`
   as a separate gate after the full build.
 
 ## CI
 
-Two workflows. `test.yml` runs on every push/PR: `static` (YAML/shell validity,
+There are two workflows. `test.yml` runs on every push and PR: `static` (YAML/shell validity,
 no-compile preflight gates), `unit` (staging, `applyAllPatches`, fork compile,
 `LinearNmsTestSuite`), `config-check`. `build.yml` runs on `v*` tags,
 published releases and manual dispatch: `discover` (version matrix), `build`
@@ -142,11 +143,11 @@ published releases and manual dispatch: `discover` (version matrix), `build`
 ANVIL + LINEAR boot smokes), `release` (jars attached to the GitHub
 release on tags).
 
-Two self-checks exist because of past breakage and are enforced in both the
-workflow and `preflight.sh`:
+Two checks exist because of past breakage, and both the workflow and
+`preflight.sh` enforce them:
 
-- No over-specific jar globs. Use `folia-paperclip-*.jar`; the suffix has
-  changed before.
+- No over-specific jar globs. Use `folia-paperclip-*.jar`, because the suffix
+  has changed before.
 - Every `gh release` invocation carries `--repo`.
 
 ## Cutting a release
@@ -179,15 +180,15 @@ Unsupported server legs are archived under `versions/servers/removed/`; do
 not add them back to the build matrix without re-validating their patches.
 
 Update `CHANGELOG.md` in the same change that introduces the behaviour, not
-at tag time.
+when you tag.
 
 ## Documentation
 
-- `README.md` is the entry point and should stay usable end to end without
-  opening anything else.
+- `README.md` is the entry point, and a reader should be able to install and
+  run LinearMC from it alone.
 - `docs/` holds the detail: concepts, architecture, configuration, commands,
   observability, performance, limitations, FAQ.
 - `release/` holds operator-facing material and ships with the release package.
-- Claims need a source in the repository: a patch, a test, a script, a log
-  string or a measurement. If something has not been measured, say so rather
-  than estimating.
+- Every claim needs a source in the repository: a patch, a test, a script, a
+  log string or a measurement. If something has not been measured, say so
+  instead of estimating.

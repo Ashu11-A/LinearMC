@@ -1,15 +1,17 @@
 # Shared hunks, line 26.3
 
-Home for byte-identical hunks shared across server legs.
-
-Each server leg references these at stage time instead of carrying its own copy.
-Near-identical hunks with mapping drift stay per server as thin adapters that delegate to linear-core.
+This folder holds hunks that are byte-identical across server legs. Each leg
+pulls them in at stage time instead of carrying its own copy. Hunks that are
+nearly identical but differ in mappings stay with each server as thin adapters
+that delegate to `linear-core`.
 
 Rules:
 
-- Every shared hunk must pass full patch apply plus the storage test suite on each leg that uses it.
-- Never share at the cost of changing the Anvil path.
-- Currently empty: the former flush-unlock hunk (0011) is folded into Folia minecraft-0009, because Paper 26.3 rewrote RegionFileStorage.
+- A shared hunk must pass the full patch apply and the storage test suite on every leg that uses it.
+- Never share a hunk if doing so changes the Anvil path.
 
-For what the shared code does see docs/architecture.md.
-For settings see docs/configuration.md.
+The folder is empty for now. The former flush-unlock hunk (0011) was folded into
+Folia `minecraft-0009`, because Paper 26.3 rewrote `RegionFileStorage`.
+
+`docs/architecture.md` explains what the shared code does, and
+`docs/configuration.md` covers the settings.

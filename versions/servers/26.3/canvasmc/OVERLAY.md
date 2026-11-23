@@ -4,11 +4,12 @@ Upstream pin: Canvas `main` at `31a7f9ac`, build **#1016** (de-facto stable 26.3
 `channel=STABLE`, `mcVersion=26.3`; no `ver/26.3` branch exists upstream).
 Pin source is `upstream.canvas.properties` next to this file.
 
-Same model as the former 26.1/26.2 Canvas legs: zero files in the upstream
-source patch directory, every Linear hunk applies after upstream apply with a
-check gate. The 18 shared patches, 9 paper-server files, and 20 tests come
-from `versions/servers/common/canvas/` (see the hub README); this leg keeps
-only seam adapters plus the three demoted shadows below.
+This leg follows the model of the former 26.1/26.2 Canvas legs. It adds no
+files to the upstream source patch directory, and every Linear hunk is applied
+after the upstream apply, behind a check. The 18 shared patches, 9
+paper-server files and 20 tests come from `versions/servers/common/canvas/`
+(see the hub README). This leg keeps only seam adapters, plus the three demoted
+shadows below.
 
 Build #1016 bump (2026-11-14, `31a7f9ac`): Paper upstream update only; the overlay
 is expected to apply unchanged (re-verify with `scripts/stage.sh canvas`).
@@ -61,4 +62,4 @@ Proven on the pinned tree: full `LinearNmsTestSuite` green, ANVIL boot
 LINEAR boot, plus a 5-minute B_LINEAR load run (297/297 `.b_linear`,
 82k chunks, 0 errors, 35 s shutdown drain).
 
-For behavior and settings see docs/architecture.md and docs/configuration.md.
+For behavior and settings, see `docs/architecture.md` and `docs/configuration.md`.

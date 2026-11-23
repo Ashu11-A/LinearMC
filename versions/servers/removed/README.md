@@ -1,19 +1,18 @@
 # Removed server legs (archive only)
 
-As of **v1.1.4**, LinearMC supports only:
+These legs are no longer built. Their patches and pins are kept here
+**unchanged** so the history is not lost:
 
-- **Folia 26.1.2**
-- **CanvasMC 26.3**
-- **Horizon plugin 1.0.0** on Paper/Folia/CanvasMC 26.1 through 26.3
+- `26.1.x/`: the Folia 26.1.x fork leg (archived in v1.3.0; Folia 26.1.2 hosts
+  now use the Horizon plugin), plus the CanvasMC 26.1.2 leg and
+  `26.1.x/upstream.canvas.properties` (archived in v1.1.4).
+- `26.2/`: the whole 26.2 line, with Canvas and Folia pins, although only the
+  Canvas leg had patch content (archived in v1.1.4).
 
-CanvasMC 26.1.2 and 26.2 are removed from the active build matrix. Their
-legs and pins are kept here **unchanged** so the history is not lost:
+The active matrix is Folia 26.3, CanvasMC 26.3, and the Horizon plugin 1.0.0
+on Paper, Folia and CanvasMC 26.1 through 26.3.
 
-- `26.1.x/canvasmc/` and `26.1.x/upstream.canvas.properties`
-- `26.2/` (whole line: Canvas and Folia pins, although only the Canvas leg
-  had patch content)
-
-Nothing in this directory is staged, built or tested. Do not add it back to
-the matrix without porting and re-validating the patches against a current
-upstream build. The last release that shipped these legs was **v1.1.3**;
-those assets remain on GitHub.
+Nothing in this directory is staged, built or tested. Don't add a leg back to
+the matrix without porting its patches and validating them again against a
+current upstream build. The last release that shipped the CanvasMC 26.1.2 and
+26.2 legs was **v1.1.3**, and its assets are still on GitHub.
