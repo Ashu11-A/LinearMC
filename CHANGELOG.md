@@ -10,6 +10,25 @@ one universal jar for Paper/Folia/CanvasMC 26.1-26.3 as
 `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar`, built against the
 oldest bundle with `api-version: 26.1`.
 
+## v1.3.0-release.2
+
+A companion build of the same patch set on newer upstream builds. No
+LinearMC code changed; the patches apply unchanged on both forks.
+
+### Matrix
+- **Folia fork 26.3** moves to `ver/26.3.x` at `eca40f91`, build #26. That
+  pulls in 20 upstream Folia fixes, among them region threading fixes, ender
+  pearl teleport fixes, player and map autosave fixes, and thread-safe random
+  sources.
+- **CanvasMC 26.3** moves to build #1046 (`23ea235d`), a Paper upstream update.
+- **Horizon 1.0.0** is unchanged and still covers Paper/Folia/CanvasMC 26.1-26.3.
+
+### Docs
+- The README and the docs were rewritten to read more plainly. No settings,
+  commands or defaults changed.
+- `LICENSE` now holds only the GPL-3.0 text, so GitHub detects the license. The
+  copyright notice moved to `NOTICE`.
+
 ## v1.3.0-release.1
 
 Folia and CanvasMC now ship on the same Minecraft line, 26.3, in one release.
