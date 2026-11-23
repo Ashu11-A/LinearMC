@@ -1,32 +1,31 @@
-# Core Concepts
+# Core concepts
 
-This page explains the words used across these docs in plain language.
-If you are setting up a server you only need this page and the setup guide
-(release/OPERATOR-NOTES.md).
-No programming knowledge is needed to follow along.
+This page defines the terms used across these docs in plain language. To set up
+a server you only need this page and the operator manual
+(`release/OPERATOR-NOTES.md`). You don't need any programming knowledge.
 
 ## Glossary
 
-- **Chunk** – A chunk is one small square piece of the game world. The game loads and saves the world one chunk at a time. Everything players build lives inside some chunk.
-- **Region** – A region is a group of 32 by 32 chunks stored together as one file on disk. Its file name records its position, in the form r.X.Z. Grouping chunks this way keeps thousands of tiny pieces from becoming thousands of separate files.
-- **ANVIL** – ANVIL is the normal, default way the game stores region files. Those files end in .mca. It is well tested and read by almost every world tool.
-- **LINEAR** – LINEAR is the compact alternative offered by this project, with files ending in .linear. It squeezes each region file more tightly so the world takes up less disk space. The game itself plays exactly the same either way.
-- **B_LINEAR** – B_LINEAR is the buffered alternative, with files ending in .b_linear plus a `.b_linear.swp` swap file beside each master. Single-chunk writes land in the swap immediately; the master is rebuilt at flush time. The two files travel together: never move, copy, or delete one without the other.
-- **Bucket and grid** – V2/V3 files divide the 32 by 32 region into a grid of buckets (default 8 by 8), each compressed independently with its own integrity hash. Smaller rewrites, same chunks.
-- **Flush heartbeat** – A repeating background drain that persists waiting changes on the flush-frequency rhythm, so durability never depends on a single save call. A clean stop flushes everything regardless of age.
-- **Compression and compression level** – Compression means packing saved world data smaller so it uses less disk space. The level runs from 1 to 22, where higher numbers mean smaller files but slower saving. Level 6 is the default and recommended choice, while levels 12 and above are unsafe because saving can take too long and recent work can be lost.
-- **Flush and flush window** – Saving happens in two steps: first the game holds changes in memory, then it writes them to disk. That writing step is called a flush. The flush window is the short period when waiting changes are being written out together.
-- **Dirty file** – A dirty file is a saved file that still has newer changes waiting in memory. It is not damaged, it is just behind until the next flush finishes. A clean shutdown leaves no dirty files.
-- **Superblock** – A superblock is a small fingerprint at the start of a LINEAR file. It records what kind of file this is and how it was packed. The server checks it on startup so it never confuses one format for another.
-- **Region folders** – Worlds keep their saved data in three matching folders: region, poi, and entities. The region folder holds the land itself, poi holds points of interest like village details, and entities holds creatures and other moving things. All three can use the compact format.
-- **Dry-run** – A dry-run is a practice run that looks and reports but changes nothing. It is used to preview what a conversion or cleanup would do. Nothing on disk is added, removed, or rewritten during a dry-run.
-- **Server file** – The single ready-to-run server file you start. It already contains everything the server needs packed inside (this kind of file is called a paperclip jar). You build it once, then launch it to play.
-- **Server variant** – The same compact saving taught to different server programs. Folia is the main supported server, built to spread work across many processors. Canvas is a community variant of Folia. Horizon is an add-on that brings the same saving to Paper-style servers without replacing them.
-- **Disk-writer lane** – The server writes to disk through a single lane, so one slow save used to pause everything behind it. Background saving fixed that pause.
-- **Crash-safe vs crash-proof** – Crash-safe means a normal stop or restart keeps saved work intact. Crash-proof would mean no sudden failure could ever lose anything, which this project does not promise. If the machine is force-killed in the middle of a save, very recent changes can still be lost, so keep backups.
-- **Save cycle** – The server's regular rhythm of writing waiting changes to disk. Linear files update on this rhythm, not on every edit.
-- **Rollback option** – One of three ways back, from lightest to heaviest: just flip worlds to the old format; additionally convert files back and swap in a normal server file; or re-apply Linear. See the operator manual.
-- **Sidecar file** – A helper file some tools write next to a region file for chunks too big to fit inside. Linear never creates these when it saves; carry any you have alongside manual copies.
-- **Backup marker** – A small proof file written into a backup snapshot with the date. Never start a revert without it, as proof the backup is real.
-- **Zero-byte file** – A region file with nothing in it, usually left by a crashed save. The converter skips these loudly instead of converting them; delete or restore them before converting.
-- **Cold archiver** – A tool that would move old, untouched world data to cheaper storage. This release has none.
+- **Chunk**: one small square piece of the game world. The game loads and saves the world one chunk at a time, and everything players build lives inside some chunk.
+- **Region**: a group of 32 by 32 chunks stored together in one file. The file name records its position as `r.X.Z`. Grouping chunks this way avoids thousands of tiny separate files.
+- **ANVIL**: the game's normal region format, with files ending in `.mca`. It is well tested and almost every world tool can read it.
+- **LINEAR**: the compact format this project adds, with files ending in `.linear`. Each region is compressed more tightly, so the world takes less disk space. The game plays exactly the same either way.
+- **B_LINEAR**: the buffered format. Each `.b_linear` master file has a `.b_linear.swp` swap file beside it. Single-chunk writes go to the swap straight away, and the master is rebuilt at flush time. The two files belong together: never move, copy or delete one without the other.
+- **Bucket and grid**: V2 and V3 files split the 32 by 32 region into a grid of buckets (8 by 8 by default). Each bucket is compressed on its own and has its own integrity hash, so a rewrite touches less data while the chunks stay the same.
+- **Flush heartbeat**: a repeating background task that writes out waiting changes on the flush-frequency schedule, so durability never depends on one save call. A clean stop flushes everything, however recent.
+- **Compression and compression level**: compression packs saved world data so it uses less disk. The level runs from 1 to 22; higher levels give smaller files but slower saves. Level 6 is the default and the recommended value. Levels 12 and above are unsafe, because saves can take so long that recent work is lost.
+- **Flush and flush window**: saving happens in two steps. The game first holds changes in memory, then writes them to disk. The write is the flush, and the flush window is the short period in which the waiting changes are written out together.
+- **Dirty file**: a saved file that still has newer changes waiting in memory. It is not damaged, only behind until the next flush finishes. A clean shutdown leaves no dirty files.
+- **Superblock**: a small header at the start of a LINEAR file that records what kind of file it is and how it was packed. The server checks it on open so it never mistakes one format for another.
+- **Region folders**: each world keeps saved data in three matching folders. `region` holds the terrain, `poi` holds points of interest such as village data, and `entities` holds mobs and other moving things. All three can use the compact format.
+- **Dry-run**: a practice run that inspects and reports but changes nothing on disk. Use it to preview a conversion or cleanup.
+- **Server file**: the single ready-to-run file you start (a paperclip jar), which already contains everything the server needs. You build it once and then launch it.
+- **Server variant**: the same compact saving added to different server programs. Folia is the main supported server and spreads work across many processor cores. Canvas is a community variant of Folia. Horizon is an add-on that brings the same saving to Paper-style servers without replacing them.
+- **Disk-writer lane**: the server writes to disk through a single lane, so one slow save used to hold up everything behind it. Background saving removed that stall.
+- **Crash-safe vs crash-proof**: crash-safe means a normal stop or restart keeps saved work intact. Crash-proof would mean no sudden failure could ever lose anything, and this project does not promise that. If the machine is killed in the middle of a save, very recent changes can be lost, so keep backups.
+- **Save cycle**: the server's regular schedule for writing waiting changes to disk. Linear files are updated on this schedule, not on every edit.
+- **Rollback option**: one of three ways back, from lightest to heaviest: switch worlds to the old format; also convert the files back and swap in a normal server file; or re-apply Linear. The operator manual has the details.
+- **Sidecar file**: a helper file some tools write next to a region file for chunks too big to fit inside it. Linear never creates these when it saves, but if you have any, copy them along with the region files when you move data by hand.
+- **Backup marker**: a small dated file written into a backup snapshot. It is the proof that the backup is real; never start a revert without it.
+- **Zero-byte file**: an empty region file, usually left behind by a crashed save. The converter skips these and logs them instead of converting them. Delete or restore them before converting.
+- **Cold archiver**: a tool that would move old, untouched world data to cheaper storage. This release does not include one.

@@ -1,19 +1,19 @@
 # Release package
 
-Ship posture: Linear default, Anvil opt-out per world. New worlds write
+Linear is the default, and each world can opt out to Anvil. New worlds write
 `.linear` unless an operator pins a world back with
-`region-format.format: ANVIL` in that world's `paper-world.yml`.
-Dual-read is active from the first boot, so `.mca` and `.linear` coexist.
+`region-format.format: ANVIL` in that world's `paper-world.yml`. Dual-read is
+on from the first boot, so `.mca` and `.linear` files coexist.
 
-The server jar is not copied into this directory. It is referenced by path and
-sha256 below; verify the checksum before deploying it.
+The server jar is not copied into this directory. This file gives its path and
+sha256; verify the checksum before you deploy it.
 
 ## 1. Contents
 
 | Path | What |
 | --- | --- |
 | `RELEASE.md` | This file: pins, install, dry-run results |
-| `OPERATOR-NOTES.md` | Posture, opt-out procedure, monitoring, limitations |
+| `OPERATOR-NOTES.md` | Defaults, opt-out procedure, monitoring, limitations |
 | `region-format.yml` | Comment-free snippet covering all blocks: ship default `LINEAR` at level `6` with symlink guard on, per-world `ANVIL` opt-out override, and the global flush keys |
 
 Referenced but not included:
@@ -111,8 +111,8 @@ Full reference: [../docs/configuration.md](../docs/configuration.md).
 
 ## 5. Dry-run results
 
-Executed against the live files. The server itself was not booted by
-this runbook.
+These checks ran against the live files. This runbook did not boot the
+server.
 
 - **Config template renders.** Each block of the single snippet parses with
   `yaml.safe_load`: pass. All keys present with ship defaults.

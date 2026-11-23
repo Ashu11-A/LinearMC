@@ -1,31 +1,30 @@
 # Commands
 
-Every command Linear adds, what it does, and who may run it. The two stats
-commands are described field by field in observability.md; this page covers
-the full set plus permissions.
+This page lists every command Linear adds, what it does and who may run it.
+`observability.md` explains each field of the two stats commands.
 
 ## Permissions
 
-Operators hold these by default. Anyone else needs the exact node;
-`linear.command.linear` is the family-wide fallback that also grants
-convert, queue, and stats. The rule is one core function
-(`LinearPermissions.allows`) on every leg: `/linear` itself needs any of
-the four nodes, so a holder of only `linear.command.convert` or
-`linear.command.queue` reaches their subcommand.
+Operators have all of these by default. Everyone else needs the exact node.
+`linear.command.linear` is the fallback for the whole family and also grants
+convert, queue and stats. Every leg applies the same rule through one core
+function, `LinearPermissions.allows`: `/linear` itself needs any one of the
+four nodes, so someone who holds only `linear.command.convert` or
+`linear.command.queue` can still reach that subcommand.
 
 | Node | Grants |
 | --- | --- |
-| `linear.command.linearstats` | `/linearstats` and `/linear stats` — nothing else grants `/linearstats` |
+| `linear.command.linearstats` | `/linearstats` and `/linear stats`; nothing else grants `/linearstats` |
 | `linear.command.linear` | The whole `/linear` family plus `/linear stats` |
 | `linear.command.convert` | `/linear convert` |
 | `linear.command.queue` | `/linear queue ...` |
 
 ## Stats
 
-- `/linearstats [filter]` — every tracked folder, optionally filtered to paths containing the filter word.
-- `/linear stats [world]` — same panel, optionally filtered to one world.
+- `/linearstats [filter]` shows every tracked folder, or only paths that contain the filter word.
+- `/linear stats [world]` shows the same panel, optionally for one world.
 
-Both are read-only. See observability.md for every field and the health thresholds.
+Both are read-only. `observability.md` covers every field and the health thresholds.
 
 ## Convert
 
@@ -33,26 +32,26 @@ Both are read-only. See observability.md for every field and the health threshol
 
 `/linear convert <world> --from mca|v1|v2|v3|blinear|pumpkin|linear|auto --to mca|v1|v2|v3|blinear|pumpkin|linear [--grid 1|2|4|8|16|32] [--level 1..22] [--threads N] [--execute|--dry-run]`
 
-Queues a conversion job for one world. Direction defaults to old-format-to-new, level defaults to 6, threads default to 1. **Dry-run is the default**: without `--execute` the job only reports what it would do and changes nothing. Pass `--execute` to really convert. The explicit form copies any layout to any layout; `--to linear` means `v1` and `--from linear` matches every `.linear` layout. Pumpkin files only migrate through the explicit form, and startup conversion never rewrites them (see configuration.md).
+This queues a conversion job for one world. By default it converts from the old format to the new one, at level 6, on 1 thread. **Dry-run is the default**: without `--execute` the job only reports what it would do. Pass `--execute` to convert for real. The explicit form converts any layout to any other; `--to linear` means `v1`, and `--from linear` matches every `.linear` layout. Pumpkin files migrate only through the explicit form, and startup conversion never rewrites them (see `configuration.md`).
 
-Converting rewrites live world data, so treat it like a rollout: quiesced backup with the verification marker first (see the operator manual), one world at a time, then a save cycle and a restart to confirm. Each file converts, is checked, and only then replaces the original; a file that fails validation stops the job with the live world untouched.
+Converting rewrites live world data, so treat it like a rollout. Take a quiesced backup with the verification marker first (see the operator manual), convert one world at a time, then run a save cycle and restart to confirm. Each file is converted and checked before it replaces the original. If a file fails validation, the job stops and the live world is left untouched.
 
-Only one convert may run per storage folder at a time, on every leg. A second `--execute` on an in-flight folder is rejected with `conversion already running for <folder>` and blocks nothing. Folia additionally runs passes for different worlds one after another on its single convert worker; Canvas and Horizon run them in parallel.
+On every leg, only one conversion can run per storage folder at a time. A second `--execute` on a folder that is already converting is rejected with `conversion already running for <folder>` and blocks nothing. Folia also runs passes for different worlds one after another on its single convert worker, while Canvas and Horizon run them in parallel.
 
-Progress totals and dry-run candidate lists are estimates only. They count union-per-target files matching `r.X.Z.(mca|linear|b_linear)` (toward LINEAR: `.mca + .b_linear`; toward B_LINEAR: `.mca + .linear`; toward ANVIL: `.linear + .b_linear`), honoring `--from` at extension level for explicit jobs. Ambiguous same-coordinate groups and source-beside-target shadows are excluded (the real collection escalates those to FAILED with nothing queued; only file-IO validation could requeue an invalid-shadow orphan). Pumpkin layout detection and folder-dirty skips need file/detector IO and can only shrink the real queue further, so when in doubt the estimate undercounts. Folia legacy and explicit dry-runs both echo candidates on the same path.
+Progress totals and dry-run candidate lists are estimates. They count union-per-target files matching `r.X.Z.(mca|linear|b_linear)` (toward LINEAR: `.mca + .b_linear`; toward B_LINEAR: `.mca + .linear`; toward ANVIL: `.linear + .b_linear`), honoring `--from` at extension level for explicit jobs. Ambiguous same-coordinate groups and source-beside-target shadows are excluded (the real collection escalates those to FAILED with nothing queued; only file-IO validation could requeue an invalid-shadow orphan). Pumpkin layout detection and folder-dirty skips need file/detector IO and can only shrink the real queue further, so if anything the estimate undercounts. On Folia, legacy and explicit dry-runs both print their candidates through the same path.
 
-Every leg converts all three storage folders of the world (`region/`, `entities/`, `poi/`), so a full revert to `.mca` leaves nothing behind. Online conversion of `entities/` and `poi/` touches files the server reopens often; prefer a quiet server (or run it right after a restart) and keep the backup rule above.
+Every leg converts all three storage folders of the world (`region/`, `entities/`, `poi/`), so a full revert to `.mca` leaves nothing behind. Converting `entities/` and `poi/` while the server runs touches files the server reopens often, so prefer a quiet server (or convert right after a restart), and follow the backup rule above.
 
 ## Queue
 
-Conversion jobs run in the background and are managed by job id (the first 8 characters are enough to name one):
+Conversion jobs run in the background. You manage them by job id, and the first 8 characters are enough to name one.
 
-- `/linear queue list` — all known jobs.
-- `/linear queue status <jobId>` — detail for one job.
-- `/linear queue pause <jobId>` / `/linear queue resume <jobId>` — hold or restart a job.
-- `/linear queue cancel <jobId>` — stop a job.
-- `/linear queue clear` — forget finished jobs.
+- `/linear queue list` lists all known jobs.
+- `/linear queue status <jobId>` shows the details of one job.
+- `/linear queue pause <jobId>` and `/linear queue resume <jobId>` hold a job and start it again.
+- `/linear queue cancel <jobId>` stops a job.
+- `/linear queue clear` forgets finished jobs.
 
 ## Help
 
-`/linear help` prints a plain-words summary of the above in game.
+`/linear help` prints a short plain-language summary of these commands in game.

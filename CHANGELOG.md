@@ -1,8 +1,8 @@
 # Changelog
 
-Tags are release tags. Historical `v1.0.0` through `v1.1.3` remain exactly
-as they were (no aliases, no moves). Releases from v1.1.4 onward use the
-`vX.Y.Z-release.N` form; `v1.1.4-release.1` is the first. Each release
+Headings are release tags. The older tags `v1.0.0` through `v1.1.3` stay
+exactly as they were, with no aliases and no moves. From v1.1.4 on, releases use
+the `vX.Y.Z-release.N` form, starting with `v1.1.4-release.1`. Each release
 attaches one jar per matrix leg, named
 `linearmc-<server>-<mcversion>-<project>+build.<N>.jar`
 (e.g. `linearmc-folia-26.3-1.3.0+build.8.jar`). The Horizon plugin ships
@@ -159,7 +159,7 @@ write allocated fresh direct buffers with no deterministic free point, so
 allocation outran GC-triggered Cleaner runs until the direct cap
 (`MaxDirectMemorySize`, default = Xmx) and all chunk I/O threw
 `OutOfMemoryError: Cannot reserve direct buffer memory` (TPS 9–17 at 28%
-CPU — an I/O-memory stall, not worldgen math). One core fix heals all legs
+CPU: an I/O-memory stall, not worldgen math). One core fix heals all legs
 (Canvas/Folia vendor core sources at stage time, Horizon embeds via JiJ).
 
 - **Read:** the returned stream now frees its direct buffer on `close()`
@@ -167,7 +167,7 @@ CPU — an I/O-memory stall, not worldgen math). One core fix heals all legs
   fallback); reads after close fail instead of touching freed memory.
 - **Write:** the staging copy moved to the heap (LZ4 compresses heap source
   into a direct destination); only the retained per-slot packed image stays
-  off-heap — one direct buffer per slot instead of two.
+  off-heap: one direct buffer per slot instead of two.
 - **V1 flush:** streams slots into the zstd frame through per-slot heap
   scratch instead of assembling the whole region image in one multi-MB
   direct buffer. V2/V3/Pumpkin flush was already heap-only; all versions
@@ -177,7 +177,7 @@ CPU — an I/O-memory stall, not worldgen math). One core fix heals all legs
   alongside shared views because the Cleaner API rejects slices).
 - **Proof:** new `DirectMemoryTest` (5 tests: close-frees, use-after-close
   guard, single retained buffer, close-frees-retained, 1200-cycle soak for
-  V1/V2/V3) — all 5 fail pre-fix, all pass post-fix; suite 363 green.
+  V1/V2/V3); all 5 fail pre-fix, all pass post-fix; suite 363 green.
 
 ## v1.1.2
 
@@ -200,7 +200,7 @@ under `v1.1.x` tags. This release closes the gap and proves every MC line.
   (tag builds; local builds keep `1.0.0-SNAPSHOT`).
 - **One jar for all MC lines:** the shipped jar builds against the oldest
   bundle (`26.1.2.build.74-stable`, `api-version: 26.1`) and loads on
-  26.1–26.3 — the six NMS contact points are identical across those
+  26.1–26.3, because the six NMS contact points are identical across those
   bundles (verified by `javap`), and the plugin only uses API present in
   the oldest one. No per-MC assets.
 - **Per-bundle proof:** `test.yml` runs the full plugin build + unit suite
@@ -267,7 +267,7 @@ Pumpkin files. Proven against the real Pumpkin reader/writer, both
 directions, chunk-for-chunk on real server bytes.
 
 - **DivineMC-style per-version structure:** new `net.linear.versions`
-  package — `Version` (`implementation()`/`version()`/`parse()`/`flush()`,
+  package: `Version` (`implementation()`/`version()`/`parse()`/`flush()`,
   stateless shared codecs; IO/locks/coordinator stay in the facade),
   `V1Linear`, `V2Linear`/`V3Linear` over abstract `V2LinearBase`, plus
   `LinearBase.getShared(byte)` as the single wire→implementation map
@@ -358,7 +358,7 @@ directions, chunk-for-chunk on real server bytes.
 - **Horizon durability (the live finding):** async Bukkit timers throw
   `UnsupportedOperationException` on region-threaded lines, so the plugin
   runs its flush heartbeat on one daemon thread and force-drains plus
-  shuts the shared pool on disable — clean stops lose nothing even though
+  shuts the shared pool on disable, so clean stops lose nothing even though
   storage `flush()`/`close()` never fire there. Wrapper stream closes
   now normalize payloads (matching direct writes) and self-report;
   family-switch opens probe the other sibling instead of forking a new
@@ -378,7 +378,7 @@ directions, chunk-for-chunk on real server bytes.
   pinned to Canvas `main@cc4e7611`, legs keep only seam adapters with
   hub-shadow staging).
   each version leg keeps only its seam adapters (a drifted version shadows
-  the hub copy with a loud staging note — see the hub README). Verified
+  the hub copy with a loud staging note; see the hub README). Verified
   locally against Canvas main (`cc4e7611`, MC 26.3): full overlay stages,
   `compileJava`/`compileTestJava` clean, `LinearNmsTestSuite` 140/140, ANVIL
   boot → convert reboot (`Startup conversion done`, 12 `.linear` / 0 `.mca`)

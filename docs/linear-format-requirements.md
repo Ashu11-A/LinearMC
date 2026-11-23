@@ -10,7 +10,7 @@ repeats the header magic on every format.
 
 ## 1. On-disk layouts (normative)
 
-### 1.1 V1 — single zstd blob. Header 32 B, wires 1 and 2 (alias)
+### 1.1 V1: single zstd blob. Header 32 B, wires 1 and 2 (alias)
 
 | off | size | field |
 |---|---|---|
@@ -30,7 +30,7 @@ bytes). Hash: none (zstd checksum only). DivineMC `parse` does NOT
 validate the footer value and resets timestamps to now; we preserve
 stored timestamps (documented divergence) and validate the footer.
 
-### 1.2 V2 — bucketed, wire 3. Header 155 B + features
+### 1.2 V2: bucketed, wire 3. Header 155 B + features
 
 `8 magic + 1 ver(3) + 8 timestamp + 1 grid + 4 regionX + 4 regionZ +
 128 bitmap + features`, where features = repeats of
@@ -45,23 +45,23 @@ Table: `grid x grid` entries of 13 B: `int bucketSize` (0 = absent) +
 Bucket body: one zstd frame per bucket; decompressed stream is a
 sequence over the bucket's slots: present =
 `int (len+8)` + `long timestamp` + `len` NBT bytes; absent =
-`int 0` + `long timestamp` (12 B slot header — the reader must consume
+`int 0` + `long timestamp` (12 B slot header; the reader must consume
 the timestamp even for absent slots).
 
 Footer 8 B `SUPERBLOCK`, validated. Hash mismatch aborts (fail high).
 
-### 1.3 V3 — bucketed, wire 4. Header 10 B
+### 1.3 V3: bucketed, wire 4. Header 10 B
 
 `8 magic + 1 ver(4) + 1 grid`. No timestamp, coords, bitmap, or
 features. Table: `grid x grid` entries of 12 B: `int bucketSize` +
 `long bucketHash` (same XXH64). Bucket bodies and footer identical to
 V2. The level is a write-time choice only and is not stored.
 
-### 1.4 PUMPKIN — bucketed, wire 2, `.linear` extension
+### 1.4 PUMPKIN: bucketed, wire 2, `.linear` extension
 
 Superblock 26 B: `8 magic + 1 ver(2) + 8 newest-timestamp +
 1 grid + 4 regionX + 4 regionZ`. Then 128 B bitmap (**LSB-first**:
-`bit = i % 8` — opposite of V2), features in the same
+`bit = i % 8`, the opposite of V2), features in the same
 `[u8 len][key][u32 val] 0x00`-terminated encoding, table
 `grid x grid` of 13 B (`u32 size` + `i8 level`, always 1, ignored on
 read + `u64 xxhash` seed 0), one `ruzstd Fastest` frame per bucket,
@@ -75,7 +75,7 @@ continues upstream; we fail high instead (documented divergence).
 Staging writes `tmp + rename` with no fsync; we use `tmp + fsync +
 atomic move`.
 
-### 1.5 B_LINEAR — buffered tier (unchanged, separate from V1/V2/V3)
+### 1.5 B_LINEAR: buffered tier (unchanged, separate from V1/V2/V3)
 
 `.b_linear` master (own magic, 18 B header, single checksummed zstd
 frame of 1024 inner envelopes) + `.b_linear.swp` swap while open/dirty
@@ -113,7 +113,7 @@ sector, torn slots fall back to the master). See
 
 ## 3. Non-functional requirements
 
-- NFR1 (perf): the V1 hot path stays allocation-identical —
+- NFR1 (perf): the V1 hot path stays allocation-identical:
   detect-once at open, then direct dispatch to the `Version`
   implementation. No adapter boxing on read/write.
 - NFR2 (safety): bomb guards (`MAX_IMAGE`, 500 MB chunk, 1 GiB file),
@@ -130,7 +130,7 @@ sector, torn slots fall back to the master). See
 ## 4. Detection algorithm (normative)
 
 For a `.linear` file, candidates are validated **fully** (not
-header-sniffed — byte 17 alone cannot discriminate: V1 level 1..22
+header-sniffed, because byte 17 alone cannot discriminate: V1 level 1..22
 overlaps Pumpkin/V2 grid 1/2/4/8/16/32):
 
 1. V1: magic + wire 1/2 + 32 B header sane + `chunkCount <= 1024` +
@@ -149,8 +149,8 @@ may fall through into another format's reader.
 
 ## 5. Standardization rules (mandatory)
 
-- R1: one file per version — `V1Linear`, `V2Linear`, `V3Linear`,
-  `PumpkinLinear` — plus abstract `V2LinearBase` shared by the three
+- R1: one file per version: `V1Linear`, `V2Linear`, `V3Linear`,
+  `PumpkinLinear`, plus abstract `V2LinearBase` shared by the three
   bucketed readers. No version reaches into another version's
   internals; shared code lives in `*Base` or helpers only.
 - R2: every version implements `Version`:

@@ -1,7 +1,6 @@
-# Documentation Requirements
+# Documentation requirements
 
-This document defines what the LinearMC documentation suite must satisfy.
-Every document listed in `docs/README.md` is written against these requirements.
+Every document listed in `docs/README.md` must meet these requirements.
 
 ## 1. Functional requirements
 

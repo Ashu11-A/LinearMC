@@ -1,28 +1,28 @@
 # Observability
 
-Two commands show the same save counters. Use either one.
+Two commands show the same save counters.
 
-- `/linearstats [filter]` shows every tracked folder, optionally filtered to paths containing "filter". It takes no other arguments.
-- `/linear stats [world]` shows the same panel, optionally filtered to folders whose path contains "world". Omit the filter to see everything.
+- `/linearstats [filter]` shows every tracked folder, or only the paths that contain "filter". It takes no other arguments.
+- `/linear stats [world]` shows the same panel, or only the folders whose path contains "world". Leave out the filter to see everything.
 
-Both commands are read-only. They never trigger a save and never change data. They read the current counters at the moment you run them. The `/linear convert`, `/linear queue`, and `/linear help` commands are documented separately in commands.md.
+Both commands are read-only: they read the counters at the moment you run them, never trigger a save and never change data. `commands.md` covers `/linear convert`, `/linear queue` and `/linear help`.
 
 ## Empty and denied output
 
-- Before any Linear input/output on this boot, both commands print "linearstats: no Linear folders tracked (no linear I/O yet)."
-- On a server that only uses Anvil, that same line is the healthy result, not an error.
-- Rows appear only after real Linear input/output, normally after a save cycle.
-- Without permission, the sender gets "You do not have permission to use linearstats." and no rows.
+- Until this boot has done any Linear I/O, both commands print "linearstats: no Linear folders tracked (no linear I/O yet)."
+- On a server that only uses Anvil, that line is the expected, healthy result.
+- Rows appear only after real Linear I/O, normally after a save cycle.
+- A sender without permission gets "You do not have permission to use linearstats." and no rows.
 
-Permissions (operators hold them by default):
+Permissions (operators have them by default):
 
-- `/linearstats` needs `linear.command.linearstats` and nothing else grants it.
+- `/linearstats` needs `linear.command.linearstats`; no other node grants it.
 - `/linear stats` accepts `linear.command.linearstats` or `linear.command.linear`.
-- Convert and queue commands need `linear.command.convert` / `linear.command.queue` (or `linear.command.linear`); see commands.md.
+- The convert and queue commands need `linear.command.convert` or `linear.command.queue` respectively (or `linear.command.linear`); see `commands.md`.
 
 ## Field glossary
 
-Each world prints one header line naming the world and its most recent flush, then one block per folder type, then a server-wide TOTALS line.
+For each world, the output has a header line with the world name and its most recent flush, then one block per folder type. A server-wide TOTALS line comes last.
 
 | Field | Meaning |
 | --- | --- |
@@ -43,30 +43,30 @@ Each world prints one header line naming the world and its most recent flush, th
 
 ## Health thresholds
 
-The compact view colours each metric by these fixed limits.
+The compact view colours each metric using these fixed limits.
 
 | Metric | OK | Warn | Critical |
-| --- | --- | --- |
+| --- | --- | --- | --- |
 | dirty | 50 or fewer waiting | 51 to 256 waiting | More than 256 waiting |
 | fail | 0 | 1 | 2 or more |
 | p99 flush latency | Below 100ms | 100ms to 500ms | Above 500ms |
 
-A dirty count near the 512 maximum means flushes are falling behind writes. Any nonzero fail count deserves a look at disk space and permissions. A high p99 with a normal p50 means occasional slow flushes rather than a constantly slow disk.
+A dirty count close to the 512 maximum means flushes are falling behind writes. If the fail count is above zero, check disk space and permissions. A high p99 with a normal p50 points to occasional slow flushes, not a disk that is always slow.
 
-## Boot lines proving effective format and level
+## Boot lines that show the effective format and level
 
-When a startup property overrides the file config, the server logs which value won. The scope in brackets tells you whether the winning value applies to one world or the whole server.
+When a startup property overrides the file config, the server logs which value won. The scope in brackets says whether that value applies to one world or the whole server.
 
 - "[region-format] sysprop linearmc.format=LINEAR overrides file ANVIL -> effective LINEAR (world)"
 - "[region-format] sysprop linearmc.compression-level=9 overrides file 6 -> effective 9 (world)"
 - "[region-format] Ignoring invalid sysprop linearmc.format=BOGUS, using file value."
 
-The same family of lines reports bad file values and their fallbacks:
+Lines of the same kind report bad file values and their fallbacks:
 
 - "[region-format] Unknown region format, expected ANVIL, LINEAR or B_LINEAR. Falling back to ANVIL."
 - "[region-format] linear.compression-level must be 1-22, got 99. Falling back to 6."
 
-The absence of any "[region-format]" line at boot is the healthy case: file values were valid and no startup override was set.
+A boot with no "[region-format]" line at all is healthy: the file values were valid and no startup override was set.
 
 ## Warning and action lines
 
@@ -81,9 +81,9 @@ The absence of any "[region-format]" line at boot is the healthy case: file valu
 
 ## Troubleshooting
 
-- Anvil-only server shows no rows. This is healthy. The line "linearstats: no Linear folders tracked (no linear I/O yet)." means no Linear folders have been touched. Switch a world to Linear and run a save cycle to see rows.
-- Linear files exist but there are still no rows. Counters fill only on actual input/output, not on file presence. Trigger a save, wait for the flush gate, then run the command again.
-- Rows never update. Flushes run on an age gate, so young dirty files wait for the next save. Check the last-flush age column before assuming a stall.
-- Permission denied. The sender gets "You do not have permission to use linearstats." Grant "linear.command.linearstats" for `/linearstats`, or "linear.command.linear" for the `/linear` family, or operator status.
-- Fail counter keeps climbing. Check disk space, inodes, and write permission on that world folder. If every save fails, stop and roll back rather than letting the dirty queue grow.
-- Chunk was regenerated. Find the "regenerating chunk" line, note the coordinates, and restore that region file from backup if the chunk matters.
+- **An Anvil-only server shows no rows.** That is healthy. "linearstats: no Linear folders tracked (no linear I/O yet)." means no Linear folder has been touched. Switch a world to Linear and run a save cycle to see rows.
+- **Linear files exist but there are still no rows.** Counters only fill on actual I/O; files sitting on disk do not count. Trigger a save, wait for the flush age gate, then run the command again.
+- **Rows never update.** Flushes are age-gated, so recently dirtied files wait for the next save. Check the last-flush age column before assuming something is stuck.
+- **Permission denied.** The sender gets "You do not have permission to use linearstats." Grant "linear.command.linearstats" for `/linearstats`, "linear.command.linear" for the `/linear` family, or operator status.
+- **The fail counter keeps climbing.** Check disk space, inodes and write permission on that world folder. If every save fails, stop the server and roll back instead of letting the dirty queue grow.
+- **A chunk was regenerated.** Find the "regenerating chunk" line, note the coordinates, and restore that region file from backup if the chunk matters.

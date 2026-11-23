@@ -1,12 +1,12 @@
 # Shared Canvas hub (version-agnostic)
 
-Single implementation for the active CanvasMC 26.3 leg.
-Each file here is check-gated on the 26.3 pin and applies green on that
-upstream ref. The leg keeps only seam adapters (see below) plus OVERLAY.md /
-README.md pin strings. Canvas 26.1.2/26.2 hubs are archived under
-`versions/servers/removed/` and are no longer staged.
+This hub is the single implementation for the active CanvasMC 26.3 leg. Every
+file here is checked against the 26.3 pin and applies cleanly on that upstream
+ref. The leg itself keeps only seam adapters (listed below) and the pin strings
+in its `OVERLAY.md` and `README.md`. The Canvas 26.1.2/26.2 hubs are archived
+under `versions/servers/removed/` and are no longer staged.
 
-Layout mirrors a canvasmc leg so staging reuses the same loops:
+The layout mirrors a canvasmc leg, so staging reuses the same loops:
 `overlay/{nms,paper,config}/*.patch`, `paper-server/**`, `tests/**`.
 Staging order per family: hub first (check-all, apply-all), then the leg.
 Shadow rule (demotion across versions): a leg file with the SAME relative
