@@ -3,7 +3,7 @@
 These legs are no longer built. Their patches and pins are kept here
 **unchanged** so the history is not lost:
 
-- `26.1.x/`: the Folia 26.1.x fork leg (archived in v1.3.0; Folia 26.1.2 hosts
+- `26.1.x/`: the Folia 26.1.x fork leg and its `common/` hunk (archived in v1.3.0; Folia 26.1.2 hosts
   now use the Horizon plugin), plus the CanvasMC 26.1.2 leg and
   `26.1.x/upstream.canvas.properties` (archived in v1.1.4).
 - `26.2/`: the whole 26.2 line, with Canvas and Folia pins, although only the

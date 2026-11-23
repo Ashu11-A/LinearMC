@@ -104,10 +104,9 @@ Porting checklist:
 
 ## Leg parity
 
-A new or changed player-facing surface
-(command grammar, flags, permissions, config keys with defaults, `linear$`
-seams) must land on the Folia patches, the Canvas overlay, and the Horizon
-plugin in the same change. The machine-readable contract is
+A new or changed player-facing surface (command grammar, flags,
+permissions, config keys with defaults, `linear$` seams) must land on the
+Folia patches, the Canvas overlay and the Horizon plugin in the same change. The machine-readable contract is
 `parity/capabilities.yml`, with one entry per capability and leg plus
 evidence and tests. `scripts/parity-check.sh` validates it on every push, and
 its `--release` mode (no `gap` allowed) must pass before the release upload. Data-path changes
