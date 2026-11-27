@@ -6,6 +6,8 @@ Subject: [PATCH] LinearMC: ca/spottedleaf/moonrise/patches/chunk_system/io/Moonr
 Ported from the Folia feature stack (minecraft-0009-Linear-region-format.patch).
 Hunks kept in stack-apply order. Reconcile against Canvas base
 patches touching this file before staging (see PORT-PLAN.md).
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
+Coupled save fences (2026-11-26): FAILED for a failed write even after the chunk system replaced its task, so a barrier re-lists the I/O instead of reading the replacement as done.
 ---
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
@@ -19,11 +21,47 @@ diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileI
  import net.minecraft.world.level.chunk.storage.RegionFileStorage;
  import org.slf4j.Logger;
  import org.slf4j.LoggerFactory;
-@@ -1273,9 +1273,16 @@ public final class MoonriseRegionFileIO {
+@@ -153,6 +153,32 @@ public final class MoonriseRegionFileIO {
+         }
+     }
+ 
++    // Linear start - coupled save: chunk I/O fences (net.linear.save.CoupledSave)
++    /** Adds every chunk I/O task of {@code world} in flight right now (reads and writes, every storage type). Any thread. */
++    public static void linear$snapshotInFlight(final ServerLevel world, final java.util.List<Object> out) {
++        for (final RegionFileType type : CACHED_REGIONFILE_TYPES) {
++            for (final java.util.Iterator<ChunkIOTask> iterator = getControllerFor(world, type).chunkTasks.valueIterator(); iterator.hasNext();) {
++                out.add(iterator.next());
++            }
++        }
++    }
++
++    /**
++     * Fence state of a task listed by {@link #linear$snapshotInFlight}: FAILED when its write failed (kept for a
++     * retry, or already replaced by a newer task the caller must list again), DONE once it left the task map after
++     * a successful write (its data reached the region file), PENDING otherwise.
++     */
++    public static int linear$fenceState(final Object fence) {
++        final ChunkIOTask task = (ChunkIOTask)fence;
++        // map read first: it orders the read of failedWrite after the compute that set it
++        final boolean inMap = task.regionDataController.chunkTasks.get(CoordinateUtils.getChunkKey(task.chunkX, task.chunkZ)) == task;
++        if (task.failedWrite) {
++            return net.linear.save.CoupledSave.FAILED;
++        }
++        return inMap ? net.linear.save.CoupledSave.PENDING : net.linear.save.CoupledSave.DONE;
++    }
++    // Linear end - coupled save
++
+     public static void flushRegionStorages(final ServerLevel world) throws IOException {
+         for (final RegionFileType type : CACHED_REGIONFILE_TYPES) {
+             flushRegionStorages(world, type);
+@@ -1311,10 +1337,17 @@ public final class MoonriseRegionFileIO {
                  this.regionDataController.finishWrite(this.chunkX, this.chunkZ, writeData);
                  // Paper start - flush regionfiles on save
                  if (this.world.paperConfig().chunks.flushRegionsOnSave) {
 -                    final RegionFile regionFile = this.regionDataController.getCache().moonrise$getRegionFileIfLoaded(this.chunkX, this.chunkZ);
+-                    if (regionFile != null) {
+-                        regionFile.flush();
+-                    } // else: evicted from cache, which should have called flush
 +                    final AbstractRegionFile regionFile = this.regionDataController.getCache().moonrise$getRegionFileIfLoaded(this.chunkX, this.chunkZ); // Linear - widened (flush() is on the interface)
 +                    // Linear - coordinator-aware batching. Anvil keeps the
 +                    // per-write flush() (byte-identical). Linear skips it: the write
@@ -35,12 +73,10 @@ diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileI
 +                        anvilFile.flush();
 +                    } // else if Linear: deferred to LinearFlushCoordinator
 +                    // else (null): evicted from cache, which should have called flush
--                    if (regionFile != null) {
--                        regionFile.flush();
--                    } // else: evicted from cache, which should have called flush
                  }
                  // Paper end - flush regionfiles on save
-@@ -1496,7 +1496,7 @@ public final class MoonriseRegionFileIO {
+             } catch (final Throwable thr) {
+@@ -1564,7 +1597,7 @@ public final class MoonriseRegionFileIO {
  
          public static interface IORunnable {
  

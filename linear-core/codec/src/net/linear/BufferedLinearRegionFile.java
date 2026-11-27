@@ -269,6 +269,17 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
         this.doFlush();
     }
 
+    /**
+     * Joins a flush running on another thread (see
+     * {@link AbstractRegionFile#awaitDurable()}): a flush holds
+     * {@code flushGuard} through the master rename and directory fsync.
+     */
+    @Override
+    public void awaitDurable() {
+        this.flushGuard.lock();
+        this.flushGuard.unlock();
+    }
+
     @Override
     public boolean isMarkedToSave() {
         return this.dirty;
@@ -476,6 +487,9 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
             } catch (final AtomicMoveNotSupportedException fallback) {
                 Files.move(tmp, this.file, StandardCopyOption.REPLACE_EXISTING);
             }
+            // Same as LinearRegionFile: the rename is durable only once the
+            // directory is synced (never fails the flush).
+            net.linear.io.DirectoryFsync.syncQuietly(this.parentDir);
             try {
                 if (this.parentDir != null) {
                     LinearFlushCoordinator.forFolder(this.parentDir).recordFlushBytes(0L, packedBytes);
@@ -665,6 +679,11 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
                     StandardOpenOption.READ, StandardOpenOption.WRITE);
                 writeSwapHeadersLocked(false);
             }
+            if (Files.isRegularFile(this.file) && Files.size(this.file) == 0L) {
+                // Same as LINEAR: an empty master is moved aside (never
+                // deleted), logged at ERROR and counted, not read as absent.
+                LinearRegionFile.quarantineEmptyFile(this.file, this.parentDir);
+            }
             boolean masterExisted = Files.isRegularFile(this.file) && Files.size(this.file) > 0L;
             boolean masterCorrupt = false;
             if (masterExisted) {
@@ -676,6 +695,9 @@ public final class BufferedLinearRegionFile implements AbstractRegionFile {
                     // the master on the next flush.
                     LOGGER.warn("Ignoring unreadable master file: {} ({})", this.file,
                         String.valueOf(badMaster.getMessage()));
+                    // The heal rewrites the master: keep the unreadable bytes
+                    // first (same conflicts folder as LINEAR).
+                    LinearRegionFile.preserveConflictCopyOf(this.file, this.parentDir, badMaster);
                     masterEnvelopes = null;
                     masterCorrupt = true;
                 }

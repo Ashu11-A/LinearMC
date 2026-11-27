@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 12:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/stats/ServerStatsCounter.java
+
+durable-player-data: stats replaced atomically (core PlayerFileDurability.newWriter).
+Same hunk as Folia minecraft-0019.
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
+---
+diff --git a/net/minecraft/stats/ServerStatsCounter.java b/net/minecraft/stats/ServerStatsCounter.java
+--- a/net/minecraft/stats/ServerStatsCounter.java
++++ b/net/minecraft/stats/ServerStatsCounter.java
+@@ -65,8 +65,8 @@ public class ServerStatsCounter extends StatsCounter {
+ 
+     public ServerStatsCounter(final MinecraftServer server, final Path file) {
+         this.file = file;
+-        if (Files.isRegularFile(file)) {
+-            try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
++        if (net.linear.io.PlayerFileDurability.isReadable(file)) { // Linear - coupled save: a staged save is newer than the file
++            try (Reader reader = net.linear.io.PlayerFileDurability.newReader(file, StandardCharsets.UTF_8)) { // Linear - coupled save
+                 JsonElement element = StrictJsonParser.parse(reader);
+                 this.parse(server.getFixerUpper(), element);
+             } catch (IOException e) {
+@@ -93,7 +93,7 @@ public class ServerStatsCounter extends StatsCounter {
+         try {
+             FileUtil.createDirectoriesSafe(this.file.getParent());
+ 
+-            try (Writer writer = Files.newBufferedWriter(this.file, StandardCharsets.UTF_8)) {
++            try (Writer writer = net.linear.io.PlayerFileDurability.newWriter(this.file, StandardCharsets.UTF_8)) { // Linear - durable-player-data: atomic replace
+                 GSON.toJson(this.toJson(), GSON.newJsonWriter(writer));
+             }
+         } catch (IOException | JsonIOException e) {

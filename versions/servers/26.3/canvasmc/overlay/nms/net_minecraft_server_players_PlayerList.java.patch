@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 12:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/players/PlayerList.java
+
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
+---
+diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -557,7 +557,7 @@ public abstract class PlayerList {
+             player.drop(carried, false, net.minecraft.util.Prediction.PREDICTED);
+         }
+         // Paper end - Drop carried item when player has disconnected
+-        this.save(player);
++        io.papermc.paper.linear.LinearCoupledSave.save(this.server, player, () -> this.save(player)); // Linear - coupled save: the logout save follows the region's chunks
+         if (player.isPassenger()) {
+             Entity vehicle = player.getRootVehicle();
+             if (vehicle.hasExactlyOnePlayerPassenger()) {

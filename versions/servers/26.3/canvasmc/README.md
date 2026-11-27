@@ -1,9 +1,9 @@
 # Canvas server leg, line 26.3
 
 Supported release leg (ships under v1.3.0-release.1 as
-`linearmc-canvas-26.3-1.3.0+build.1046.jar`).
+`linearmc-canvas-26.3-1.4.0+build.1047.jar`).
 
-Upstream pin: Canvas `main` at `23ea235d`, game version 26.3, build **#1046**.
+Upstream pin: Canvas `main` at `59357cb7`, game version 26.3, build **#1047**.
 Pin source: upstream.canvas.properties in the parent folder.
 The Folia leg for this line is in `../folia/`.
 

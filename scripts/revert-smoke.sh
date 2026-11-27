@@ -27,7 +27,8 @@ TEMPLATE="$(cd "$1" && pwd)"; LAUNCH="$2"
 [ -f "$TEMPLATE/$LAUNCH" ] || { echo "launch jar not found: $TEMPLATE/$LAUNCH" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${3:-$ROOT/proof/revert}/$(basename "$TEMPLATE")-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$WORK"
+mkdir -p "$WORK" || exit 2
+WORK="$(cd "$WORK" && pwd)" || exit 2  # absolute: the script cds into it; a relative [work-root] broke every later path
 ( cd "$TEMPLATE" && tar --exclude=./world --exclude=./world_nether --exclude=./world_the_end \
     --exclude=./logs --exclude=./server.log --exclude=./result.txt --exclude=./cmd.pipe -cf - . ) | ( cd "$WORK" && tar -xf - )
 cd "$WORK" || exit 2
@@ -131,4 +132,6 @@ ST=$(grep -c 'Linear stats (' phase-E.log); echo "phase E: console stats panels=
   echo "RESULT: $([ "$FAIL" = 0 ] && echo PASS || echo FAIL) ($WORK)"
 } >> "$REPORT"
 cat "$REPORT"
+# No report (or no RESULT line) is a failure, never a silent exit 0.
+grep -q '^RESULT: PASS' "$REPORT" 2>/dev/null || { grep -q '^RESULT:' "$REPORT" 2>/dev/null || echo "FAIL: no report produced at $REPORT" >&2; exit 1; }
 [ "$FAIL" = 0 ]

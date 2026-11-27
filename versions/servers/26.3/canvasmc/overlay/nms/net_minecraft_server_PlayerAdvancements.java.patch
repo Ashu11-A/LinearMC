@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 12:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/PlayerAdvancements.java
+
+durable-player-data: advancements replaced atomically (core PlayerFileDurability.newWriter).
+Same hunk as Folia minecraft-0019.
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
+---
+diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -111,8 +111,8 @@ public class PlayerAdvancements {
+     }
+ 
+     private void load(final ServerAdvancementManager manager) {
+-        if (Files.isRegularFile(this.playerSavePath)) {
+-            try (Reader reader = Files.newBufferedReader(this.playerSavePath, StandardCharsets.UTF_8)) {
++        if (net.linear.io.PlayerFileDurability.isReadable(this.playerSavePath)) { // Linear - coupled save: a staged save is newer than the file
++            try (Reader reader = net.linear.io.PlayerFileDurability.newReader(this.playerSavePath, StandardCharsets.UTF_8)) { // Linear - coupled save
+                 JsonElement json = StrictJsonParser.parse(reader);
+                 PlayerAdvancements.Data data = this.codec.parse(JsonOps.INSTANCE, json).getOrThrow(JsonParseException::new);
+                 this.applyFrom(manager, data);
+@@ -134,7 +134,7 @@ public class PlayerAdvancements {
+         try {
+             FileUtil.createDirectoriesSafe(this.playerSavePath.getParent());
+ 
+-            try (Writer outputWriter = Files.newBufferedWriter(this.playerSavePath, StandardCharsets.UTF_8)) {
++            try (Writer outputWriter = net.linear.io.PlayerFileDurability.newWriter(this.playerSavePath, StandardCharsets.UTF_8)) { // Linear - durable-player-data: atomic replace
+                 GSON.toJson(json, GSON.newJsonWriter(outputWriter));
+             }
+         } catch (IOException | JsonIOException e) {

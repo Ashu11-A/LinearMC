@@ -252,6 +252,14 @@ public final class ParallelFlushFanout {
         }
     }
 
+    /**
+     * Flushes every file of an already-detached snapshot and returns only
+     * when all are done (durability barrier). The barrier semantics for
+     * files that look clean live in {@code flushOne}: the coordinator passes
+     * a forced action for {@code forceBarrier} that joins a flush already
+     * running on another thread ({@code AbstractRegionFile#awaitDurable})
+     * before returning, so "clean" never means "rename still pending".
+     */
     public static void flushSnapshot(
             List<AbstractRegionFile> snapshot, boolean forceBarrier,
             java.util.function.Consumer<AbstractRegionFile> flushOne) {

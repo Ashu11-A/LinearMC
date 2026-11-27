@@ -1,6 +1,6 @@
 # Canvas post-apply layer, line 26.3
 
-Upstream pin: Canvas `main` at `23ea235d`, build **#1046** (de-facto stable 26.3:
+Upstream pin: Canvas `main` at `59357cb7`, build **#1047** (de-facto stable 26.3:
 `channel=STABLE`, `mcVersion=26.3`; no `ver/26.3` branch exists upstream).
 Pin source is `upstream.canvas.properties` next to this file.
 
@@ -62,4 +62,43 @@ Proven on the pinned tree: full `LinearNmsTestSuite` green, ANVIL boot
 LINEAR boot, plus a 5-minute B_LINEAR load run (297/297 `.b_linear`,
 82k chunks, 0 errors, 35 s shutdown drain).
 
+Save barrier (2026-11-25, same behaviour as Folia `minecraft-0019` / `paper-0012`):
+
+- `SaveAllCommand` (new leg overlay): the region part of Canvas' `saveAllAsync`
+  is replaced by one tick task per owned region section and a sealed core
+  ticket (`net.linear.save.SaveAllBarrier`); the global-data part is kept.
+  Canvas' `SaveAllTicket` was consumed as "done" when a region was destroyed
+  by a merge or split, so the old path could report success for a region it
+  never saved; tick tasks follow their section instead.
+- `MinecraftServer`: `!region.world.noSave` on the periodic player save, and
+  the save-off lease hook in `setAutoSave`.
+- `RegionFileStorage`: the first `flushDirty` of `flush()` is forced (joins
+  flushes already running).
+- `PlayerDataStorage`, `ServerStatsCounter`, `PlayerAdvancements` (new leg
+  overlays): `durable-player-data`.
+- `GlobalConfiguration`: `linear.saveOffMaxDuration` (120) and
+  `linear.durablePlayerData` (true), published to the core after validation.
+- Leg test: `tests/net/linear/LinearSaveBarrierLegTest.java` (staged beside
+  the hub tests).
+
 For behavior and settings, see `docs/architecture.md` and `docs/configuration.md`.
+
+Coupled save (2026-11-26, same behaviour as Folia `minecraft-0020` / `paper-0013`):
+
+- Hub `MoonriseRegionFileIO` gains the chunk I/O fences
+  (`linear$snapshotInFlight`, `linear$fenceState`); MANIFEST hash updated.
+- New leg file `paper-server/.../io/papermc/paper/linear/LinearCoupledSave.java`
+  (byte-identical to the Folia `paper-0013` file): the region adapter for
+  `net.linear.save.CoupledSave`.
+- `MinecraftServer`: region captures replace the periodic player save while
+  `linear.coupledSave.enabled` is on. `PlayerList` (new leg overlay): the
+  logout save runs as a capture. `CraftPlayer` (new paper overlay):
+  `saveData` too, after Canvas's own `ensureTickThread`.
+- `PlayerDataStorage`, `ServerStatsCounter`, `PlayerAdvancements`: stage
+  inside a capture, read a staged save before the file.
+- `SaveAllCommand`: with coupled save on, the region task runs a capture
+  instead of the blocking flush save; the ticket's barrier waits for it.
+- `RegionShutdownThread`: `CoupledSave.beginShutdown()` before the stop
+  drain, `finishShutdown` after the final player save.
+- `GlobalConfiguration`: `linear.coupledSave.enabled` (false) and
+  `linear.coupledSave.interval` (20), published to the core after validation.

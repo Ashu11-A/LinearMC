@@ -79,6 +79,19 @@ public final class LinearConfigLoader {
                 ? root.getBoolean("region-format.linear.crash-on-broken-symlink")
                 : null);
         LinearFileConfig.setWorldValues(worldValues(root.getConfigurationSection("worlds")));
+        // Save barrier keys (fork parity: paper-0012 / Canvas global config).
+        // Pushed here, before the server initializes, so the player data
+        // folder sweep at PlayerDataStorage construction sees the flag.
+        net.linear.save.SaveOffLease.setMaxDurationSeconds(net.linear.save.SaveOffLease.resolveMaxDurationSeconds(
+            root.getLong("region-format.linear.save-off-max-duration", net.linear.save.SaveOffLease.DEFAULT_MAX_SECONDS),
+            log::error));
+        net.linear.io.PlayerFileDurability.setEnabled(root.getBoolean("region-format.linear.durable-player-data", true));
+        // Coupled save keys (fork parity: paper-0013 / Canvas global config).
+        HorizonCoupledSave.configure(
+            root.getBoolean("region-format.linear.coupled-save.enabled", true),
+            net.linear.save.CoupledSave.resolveIntervalSeconds(
+                root.getLong("region-format.linear.coupled-save.interval", net.linear.save.CoupledSave.DEFAULT_INTERVAL_SECONDS),
+                log::error));
         pushed = true;
     }
 

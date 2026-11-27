@@ -1,0 +1,251 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-ci <30575805+Ashu11-A@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 12:00:00 -0300
+Subject: [PATCH] Linear coupled save: player data never durable before its
+ region's chunks
+
+Behind region-format.linear.coupled-save.enabled (default true), every
+coupled-save.interval seconds (default 20) each region saves every chunk
+holder it owns (no per-tick limit) and saves its players inside a
+net.linear.save.CoupledSave capture: .dat, stats and advancements are
+staged in memory, not written. The coupled-save thread waits for every
+chunk I/O task in flight at capture time (MoonriseRegionFileIO fences),
+runs the forced storage flush (rank 2 barrier), and only then writes the
+staged files atomically. A failed barrier withholds them and retries.
+The periodic player autosave is skipped while the flag is on; logout,
+Player#saveData and save-all use the same capture; logins read a staged
+save before the file. A player who leaves a region (cross-region
+teleport, portal, respawn) triggers a departure capture on the source
+region thread first. A save-all flush ticket fences every chunk write
+still queued before its forced barrier and marker. A failed chunk write
+stays FAILED for the fences even after the chunk system replaced its
+task. The stop path ends captures first and writes what is left after
+the final chunk save. A player file is never newer than its region's
+chunks (place-loss becomes at worst a dupe); this is not an atomic
+cross-region transaction.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
+index 41c5fef92c6dbc6a1cac65b2469f01dae3988588..11a273a924c74932e99210289df6168e4412d05f 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/MoonriseRegionFileIO.java
+@@ -153,6 +153,32 @@ public final class MoonriseRegionFileIO {
+         }
+     }
+ 
++    // Linear start - coupled save: chunk I/O fences (net.linear.save.CoupledSave)
++    /** Adds every chunk I/O task of {@code world} in flight right now (reads and writes, every storage type). Any thread. */
++    public static void linear$snapshotInFlight(final ServerLevel world, final java.util.List<Object> out) {
++        for (final RegionFileType type : CACHED_REGIONFILE_TYPES) {
++            for (final java.util.Iterator<ChunkIOTask> iterator = getControllerFor(world, type).chunkTasks.valueIterator(); iterator.hasNext();) {
++                out.add(iterator.next());
++            }
++        }
++    }
++
++    /**
++     * Fence state of a task listed by {@link #linear$snapshotInFlight}: FAILED when its write failed (kept for a
++     * retry, or already replaced by a newer task the caller must list again), DONE once it left the task map after
++     * a successful write (its data reached the region file), PENDING otherwise.
++     */
++    public static int linear$fenceState(final Object fence) {
++        final ChunkIOTask task = (ChunkIOTask)fence;
++        // map read first: it orders the read of failedWrite after the compute that set it
++        final boolean inMap = task.regionDataController.chunkTasks.get(CoordinateUtils.getChunkKey(task.chunkX, task.chunkZ)) == task;
++        if (task.failedWrite) {
++            return net.linear.save.CoupledSave.FAILED;
++        }
++        return inMap ? net.linear.save.CoupledSave.PENDING : net.linear.save.CoupledSave.DONE;
++    }
++    // Linear end - coupled save
++
+     public static void flushRegionStorages(final ServerLevel world) throws IOException {
+         for (final RegionFileType type : CACHED_REGIONFILE_TYPES) {
+             flushRegionStorages(world, type);
+diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/papermc/paper/threadedregions/RegionShutdownThread.java
+index 80225e5985cd927f4cfef78dbf82139bd67fffa0..ce0bf5dd0e80f531b5a7d0e5eedfbfc38bbbeb87 100644
+--- a/io/papermc/paper/threadedregions/RegionShutdownThread.java
++++ b/io/papermc/paper/threadedregions/RegionShutdownThread.java
+@@ -169,6 +169,7 @@ public final class RegionShutdownThread extends ca.spottedleaf.moonrise.common.u
+         // once — per-mark victim batches would serialize multi-second
+         // rebuilds behind the saves. Track-only from here; the tail forced
+         // barriers (parallel floor) persist everything once.
++        net.linear.save.CoupledSave.beginShutdown(); // Linear - coupled save: no new captures, saves from here on are direct
+         net.linear.LinearFlushCoordinator.linear$beginShutdown();
+         net.linear.LinearFlushCoordinator.evictAll();
+         // Linear - production pool shutdown (async split): the joining stop drain
+@@ -237,6 +238,7 @@ public final class RegionShutdownThread extends ca.spottedleaf.moonrise.common.u
+         LOGGER.info("Saving all player data...");
+         MinecraftServer.getServer().getPlayerList().saveAll();
+         LOGGER.info("Saved all player data");
++        net.linear.save.CoupledSave.finishShutdown(10_000L); // Linear - coupled save: staged saves of players who left land after the chunk save
+ 
+         MinecraftServer.getServer().stopPart2(); // stop part 2: close other resources (io thread, etc)
+         // done, part 2 should call exit()
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index eded772c8d3ef7583782da3fc2d64b0fc1a99561..0d9cc37327da0b1ed3b662ed88177bf9c2ae7645 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1751,7 +1751,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         try {
+             this.isSaving = true;
+             if (playerSaveInterval > 0 && (region == null || !region.world.noSave)) { // Linear - save-off pauses periodic player saves too
++                if (!io.papermc.paper.linear.LinearCoupledSave.periodic(this)) { // Linear - coupled save: region captures replace the periodic player save
+                 this.playerList.saveAll(playerSaveInterval);
++                } // Linear - coupled save
+             }
+             if (region == null && fullSave) { // Folia - region threading - don't auto save level data
+                 this.saveGlobalData(false);
+diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
+index add1fb74ea47c1ea158d7b338c3fa6632fa7467a..f5af29fc21246202708890e01762ce2b37fa75ed 100644
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -111,8 +111,8 @@ public class PlayerAdvancements {
+     }
+ 
+     private void load(final ServerAdvancementManager manager) {
+-        if (Files.isRegularFile(this.playerSavePath)) {
+-            try (Reader reader = Files.newBufferedReader(this.playerSavePath, StandardCharsets.UTF_8)) {
++        if (net.linear.io.PlayerFileDurability.isReadable(this.playerSavePath)) { // Linear - coupled save: a staged save is newer than the file
++            try (Reader reader = net.linear.io.PlayerFileDurability.newReader(this.playerSavePath, StandardCharsets.UTF_8)) { // Linear - coupled save
+                 JsonElement json = StrictJsonParser.parse(reader);
+                 PlayerAdvancements.Data data = this.codec.parse(JsonOps.INSTANCE, json).getOrThrow(JsonParseException::new);
+                 this.applyFrom(manager, data);
+diff --git a/net/minecraft/server/commands/SaveAllCommand.java b/net/minecraft/server/commands/SaveAllCommand.java
+index 6d857edb2e7c02c457f6f109e7a4b69d37b0f30f..0144aca3c363bdbba87c5af345b9ee3261df8dc5 100644
+--- a/net/minecraft/server/commands/SaveAllCommand.java
++++ b/net/minecraft/server/commands/SaveAllCommand.java
+@@ -43,7 +43,9 @@ public class SaveAllCommand {
+      */
+     private static void linear$saveAllRegionised(final CommandSourceStack source, final MinecraftServer server, final boolean flush) {
+         final net.linear.save.SaveAllBarrier.Ticket ticket = net.linear.save.SaveAllBarrier.begin(
+-            server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT), flush);
++            server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT), flush,
++            io.papermc.paper.linear.LinearCoupledSave.fences(server), net.linear.save.SaveAllBarrier.DEFAULT_WAIT_MILLIS); // Linear - coupled save: the barrier fences chunk writes still queued
++        int queued = 0; // Linear - same progress message as Canvas
+         for (final net.minecraft.server.level.ServerLevel level : server.getAllLevels()) {
+             final java.util.List<io.papermc.paper.threadedregions.ThreadedRegionizer.ThreadedRegion<io.papermc.paper.threadedregions.TickRegions.TickRegionData, io.papermc.paper.threadedregions.TickRegions.TickRegionSectionData>> regions = new java.util.ArrayList<>();
+             level.regioniser.computeForAllRegions(regions::add);
+@@ -53,6 +55,7 @@ public class SaveAllCommand {
+                 for (int i = 0, len = sections.size(); i < len; ++i) {
+                     final long section = sections.getLong(i);
+                     ticket.taskQueued();
++                    ++queued;
+                     final ca.spottedleaf.concurrentutil.executor.PrioritisedExecutor.PrioritisedTask task = io.papermc.paper.threadedregions.RegionizedServer.getInstance().taskQueue.createTickTaskQueue(
+                         level,
+                         ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkX(section) << shift,
+@@ -67,6 +70,12 @@ public class SaveAllCommand {
+                 }
+             }
+         }
++        final int queuedSections = queued;
++        if (queuedSections == 0) {
++            source.sendSuccess(() -> Component.literal("No regions to save"), true);
++        } else {
++            source.sendSuccess(() -> Component.literal("Saving regions (" + queuedSections + " region sections)"), true);
++        }
+         ticket.seal(result -> {
+             if (result.failed() > 0 || (result.flush() && !result.markerWritten())) {
+                 source.sendFailure(Component.literal(ERROR_FAILED.create().getMessage() + " (" + result.summary() + ")"));
+@@ -80,10 +89,16 @@ public class SaveAllCommand {
+                                                  final net.linear.save.SaveAllBarrier.Ticket ticket, final boolean flush) {
+         try {
+             if (ticket.claimRegion(io.papermc.paper.threadedregions.TickRegionScheduler.getCurrentRegion())) {
++                if (net.linear.save.CoupledSave.active()) {
++                    // Linear - coupled save: chunks saved and players staged here, never blocking this thread on I/O;
++                    // the ticket's barrier waits for the staged players (each behind its region barrier) before the marker
++                    io.papermc.paper.linear.LinearCoupledSave.capture(server, () -> server.getPlayerList().saveAll());
++                } else {
+                 ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)level).moonrise$getChunkTaskScheduler().chunkHolderManager.saveAllChunksRegionised(
+                     flush, false, false, false, false, true, false
+                 );
+                 server.getPlayerList().saveAll(); // only players owned by this region thread
++                }
+             }
+         } catch (final Throwable thrown) {
+             ticket.regionFailed();
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index feb1a72f3d2765dacb354f34723ababec458a27e..190e7a8b7d3d208ddf5c67c6df45d4c39d9973db 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -1755,6 +1755,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+ 
+         EntityTreeNode passengerTree = this.makePassengerTree();
+ 
++        io.papermc.paper.linear.LinearCoupledSave.departure(this); // Linear - coupled save: save this region's chunks and the player before the respawn moves the player
+         this.isChangingDimension = true;
+         origin.removePlayerImmediately(this, RemovalReason.CHANGED_DIMENSION);
+         // reset player if needed, only after removal from world
+@@ -1885,6 +1886,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+ 
+     @Override
+     public void preChangeDimension() {
++        io.papermc.paper.linear.LinearCoupledSave.departure(this); // Linear - coupled save: save this region's chunks and the player before the player leaves it
+         super.preChangeDimension();
+         this.stopUsingItem();
+     }
+diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
+index 8bc6dd5163861d2e10380acf07e6b3ed097f79b3..96353bcb9e1ce857131d7b56fb4b083a1742de31 100644
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -535,7 +535,7 @@ public abstract class PlayerList {
+             player.drop(carried, false, net.minecraft.util.Prediction.PREDICTED);
+         }
+         // Paper end - Drop carried item when player has disconnected
+-        this.save(player);
++        io.papermc.paper.linear.LinearCoupledSave.save(this.server, player, () -> this.save(player)); // Linear - coupled save: the logout save follows the region's chunks
+         if (player.isPassenger()) {
+             Entity vehicle = player.getRootVehicle();
+             if (vehicle.hasExactlyOnePlayerPassenger()) {
+diff --git a/net/minecraft/stats/ServerStatsCounter.java b/net/minecraft/stats/ServerStatsCounter.java
+index 2906a0c441550d0b9149200771db6c328d71ebc9..d9317ccf9d8ab736d4734966baf8d00a0eceae3d 100644
+--- a/net/minecraft/stats/ServerStatsCounter.java
++++ b/net/minecraft/stats/ServerStatsCounter.java
+@@ -65,8 +65,8 @@ public class ServerStatsCounter extends StatsCounter {
+ 
+     public ServerStatsCounter(final MinecraftServer server, final Path file) {
+         this.file = file;
+-        if (Files.isRegularFile(file)) {
+-            try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
++        if (net.linear.io.PlayerFileDurability.isReadable(file)) { // Linear - coupled save: a staged save is newer than the file
++            try (Reader reader = net.linear.io.PlayerFileDurability.newReader(file, StandardCharsets.UTF_8)) { // Linear - coupled save
+                 JsonElement element = StrictJsonParser.parse(reader);
+                 this.parse(server.getFixerUpper(), element);
+             } catch (IOException e) {
+diff --git a/net/minecraft/world/level/storage/PlayerDataStorage.java b/net/minecraft/world/level/storage/PlayerDataStorage.java
+index 8065425bac66a3475afb701f8fe70aa0480e35d4..0289d08fa029808d30e020a15c0d467dc317813f 100644
+--- a/net/minecraft/world/level/storage/PlayerDataStorage.java
++++ b/net/minecraft/world/level/storage/PlayerDataStorage.java
+@@ -37,6 +37,14 @@ public class PlayerDataStorage {
+             TagValueOutput output = TagValueOutput.createWithContext(reporter, player.registryAccess());
+             player.saveWithoutId(output);
+             Path playerDirPath = this.playerDir.toPath();
++            // Linear start - coupled save: staged in memory, written by the coupled-save thread after the region's chunks are durable
++            if (net.linear.save.CoupledSave.capturing()) {
++                final java.io.ByteArrayOutputStream staged = new java.io.ByteArrayOutputStream(8192);
++                NbtIo.writeCompressed(output.buildResult(), staged);
++                net.linear.save.CoupledSave.stageDat(playerDirPath.resolve(player.getStringUUID() + ".dat"), playerDirPath.resolve(player.getStringUUID() + ".dat_old"), staged.toByteArray());
++                return;
++            }
++            // Linear end - coupled save
+             Path tmpFile = Files.createTempFile(playerDirPath, player.getStringUUID() + "-", ".dat");
+             CompoundTag dataToStore = output.buildResult();
+             NbtIo.writeCompressed(dataToStore, tmpFile);
+@@ -69,6 +77,18 @@ public class PlayerDataStorage {
+     }
+ 
+     private Optional<CompoundTag> load(final NameAndId nameAndId, final String suffix) {
++        // Linear start - coupled save: a staged save of this player is newer than the file
++        if (".dat".equals(suffix)) {
++            final byte[] staged = net.linear.save.CoupledSave.stagedBytes(new File(this.playerDir, nameAndId.id() + suffix).toPath());
++            if (staged != null) {
++                try {
++                    return Optional.of(NbtIo.readCompressed(new java.io.ByteArrayInputStream(staged), NbtAccounter.unlimitedHeap()));
++                } catch (final java.io.IOException e) {
++                    LOGGER.warn("Failed to read the staged player data of {}, reading the file", nameAndId.name(), e);
++                }
++            }
++        }
++        // Linear end - coupled save
+         File realFile = new File(this.playerDir, nameAndId.id() + suffix);
+         // Spigot start
+         boolean usingWrongFile = false;

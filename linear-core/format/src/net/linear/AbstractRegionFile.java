@@ -20,7 +20,10 @@ import java.nio.ByteBuffer;
  * {@code default} method, {@link #clear(long)}, used by the DELETE paths
  * in {@code RegionFileStorage}. If the Linear file provides {@code clear(long)}
  * it overrides this default; otherwise the default applies
- * write-empty semantics (zero uncompressed bytes read back as absent).</p>
+ * write-empty semantics (zero uncompressed bytes read back as absent).
+ * A second {@code default}, {@link #awaitDurable()}, lets forced flush
+ * barriers join a flush already running on another thread; it is a no-op
+ * for synchronous (anvil) implementations.</p>
  *
  * <p>Chunk coordinates cross this boundary as opaque {@link ChunkKey} longs;
  * adapters convert at the edge ({@code ChunkKey.of(pos.getX(), pos.getZ())}).</p>
@@ -58,6 +61,20 @@ public interface AbstractRegionFile extends AutoCloseable {
 
     /** Resets the dirty flag set by {@link #write}. */
     void clearMarkedToSave();
+
+    /**
+     * Waits for a flush of this file that is already running on another
+     * thread (its dirty flag is already cleared, its rename not yet done) and
+     * returns once that flush has renamed the file and synced its directory,
+     * or failed. Returns at once when no flush is running. Never starts a
+     * flush itself: forced barriers call this for files that look clean, so
+     * "clean" can never mean "still being written".
+     *
+     * <p>Default: no-op, for implementations that write synchronously
+     * (anvil) and so never have a flush in flight.</p>
+     */
+    default void awaitDurable() {
+    }
 
     /**
      * Deletes the payload for {@code pos} and marks the file dirty.

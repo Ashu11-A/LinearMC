@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 12:00:00 -0300
+Subject: [PATCH] LinearMC: src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
+---
+diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+@@ -1391,7 +1391,7 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
+     @Override
+     public void saveData() {
+         ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.entity, "Cannot save data async"); // Canvas - region guards
+-        this.server.getHandle().playerIo.save(this.getHandle());
++        io.papermc.paper.linear.LinearCoupledSave.save(this.server.getServer(), this.getHandle(), () -> this.server.getHandle().playerIo.save(this.getHandle())); // Linear - coupled save: follows the region's chunks
+     }
+ 
+     @Deprecated

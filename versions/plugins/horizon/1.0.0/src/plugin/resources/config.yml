@@ -23,6 +23,27 @@ region-format:
     compression-workers: 0
     long-distance-matching: 0
     log-flush-batches: false
+    # Seconds a save-off may last before saving turns itself back on, with a
+    # WARN and an ops broadcast. 0 disables the lease. Default 120.
+    save-off-max-duration: 120
+    # Player .dat, stats and advancements: one atomic rename, .dat_old kept
+    # as the previous save, orphan temp files quarantined at boot. No fsync on
+    # the tick thread (coupled-save writes are synced off-thread). Same bytes
+    # as vanilla. Default true.
+    durable-player-data: true
+    # Coupled save order: a player file is never written before the chunks
+    # of its region are on disk. Off by default. On: every interval each
+    # region (the whole server on Paper) saves all its chunks and stages its
+    # players' .dat, stats and advancements in memory; they are written
+    # (atomically) only after those chunks are durable. Logout,
+    # Player#saveData and save-all follow the same order, a player leaving a
+    # region (Folia/Canvas hosts) saves the region being left first, and the
+    # separate periodic player autosave is skipped. An item placed just before a crash
+    # may then be duplicated, never lost (see docs/limitations.md).
+    coupled-save:
+      enabled: true
+      # Seconds between captures of one region (minimum 1). Default 20.
+      interval: 20
 
 # Per-world overrides (optional). Keys are dimension ids, quoted because of
 # the ':' (minecraft:overworld, minecraft:the_nether, minecraft:the_end, or a

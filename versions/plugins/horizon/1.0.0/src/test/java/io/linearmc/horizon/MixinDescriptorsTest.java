@@ -50,11 +50,14 @@ public class MixinDescriptorsTest {
             }
             // Strip Mixin target-quantity suffixes like " [0]" if ever used.
             final String ref = part.replaceAll("\\s*\\[.*\\]$", "");
+            // A constructor with a descriptor ("<init>(...)V") parses like a method named init.
+            final String member = ref.startsWith("<init>(") ? "init" + ref.substring("<init>".length()) : ref;
             // Bare method names (no descriptor) are legal: they match any overload.
-            if (ref.matches("^[\\w$]+$")) {
+            // A bare "<init>" targets the constructor(s) the same way.
+            if (ref.matches("^[\\w$]+$") || ref.equals("<init>")) {
                 continue;
             }
-            if (!MEMBER_REF.matcher(ref).matches()) {
+            if (!MEMBER_REF.matcher(member).matches()) {
                 return false;
             }
         }
@@ -434,6 +437,13 @@ public class MixinDescriptorsTest {
     private static void checkMethodSelector(final Class<?> target, final String selector,
         final List<String> problems) {
         final int open = selector.indexOf('(');
+        if (selector.equals("<init>")) {
+            // Constructor injects (RETURN): the class must declare one.
+            if (target.getDeclaredConstructors().length == 0) {
+                problems.add("inject host missing in this bundle: <init>");
+            }
+            return;
+        }
         if (open < 0) {
             // Bare name (HEAD/TAIL injects): any overload satisfies Mixin.
             if (target.getDeclaredMethods() != null) {
@@ -461,6 +471,14 @@ public class MixinDescriptorsTest {
             wantReturn = parseType(new StringReader(returnDesc));
         } catch (final IllegalArgumentException bad) {
             problems.add("unparseable selector (syntax gate should have caught it): " + selector);
+            return;
+        }
+        if (name.equals("<init>")) {
+            try {
+                target.getDeclaredConstructor(wantParams);
+            } catch (final NoSuchMethodException missing) {
+                problems.add("host constructor missing in this bundle: " + selector);
+            }
             return;
         }
         try {

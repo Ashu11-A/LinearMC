@@ -69,6 +69,11 @@ public final class LinearRegionTimings {
      * {@code cacheHits}/{@code cacheMisses} are exposed so operators can
      * separate "never invoked" (all zero, no snapshot entry) from "empty set"
      * (entry present but counts zero) -- empty-set visibility fix.
+     * {@code quarantines} counts zero-length region files moved aside as
+     * {@code .corrupt-<ms>} (their chunks regenerate: data loss unless
+     * restored from a backup); {@code conflicts} counts region files that
+     * failed to open whose bytes were copied to the conflicts folder (the
+     * original stays in place).
      */
     public record LinearFolderSnapshot(
         LinearTimings read,
@@ -87,12 +92,25 @@ public final class LinearRegionTimings {
         long compressedBytes,
         long flushP50Micros,
         long flushP99Micros,
-        long millisSinceLastFlush
+        long millisSinceLastFlush,
+        long quarantines,
+        long conflicts
     ) {
 
         public static final LinearFolderSnapshot EMPTY = new LinearFolderSnapshot(
             LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY,
             0L, 0L, 0L, 0L, 0L, 0L, 0L, 0,
-            0L, 0L, 0L, 0L, -1L);
+            0L, 0L, 0L, 0L, -1L, 0L, 0L);
+
+        /** Pre-quarantine shape (no quarantines yet), kept for callers built against it. */
+        public LinearFolderSnapshot(
+            LinearTimings read, LinearTimings write, LinearTimings flush, LinearTimings load,
+            long markDirty, long filesFlushed, long failures, long oversizeRejects, long evicts,
+            long cacheHits, long cacheMisses, int dirtyDepth, long rawBytes, long compressedBytes,
+            long flushP50Micros, long flushP99Micros, long millisSinceLastFlush) {
+            this(read, write, flush, load, markDirty, filesFlushed, failures, oversizeRejects, evicts,
+                cacheHits, cacheMisses, dirtyDepth, rawBytes, compressedBytes, flushP50Micros,
+                flushP99Micros, millisSinceLastFlush, 0L, 0L);
+        }
     }
 }

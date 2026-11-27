@@ -189,6 +189,7 @@ public abstract class RegionFileStorageMixin {
 
     @Inject(method = "flush", at = @At("HEAD"))
     private void linear$flushDirtyFirst(final CallbackInfo ci) {
-        LinearFlushCoordinator.forFolder(this.folder).flushDirty();
+        // Forced: joins flushes already running (save barrier, fork minecraft-0009 parity).
+        LinearFlushCoordinator.forFolder(this.folder).flushDirty(true);
     }
 }

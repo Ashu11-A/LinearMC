@@ -1,0 +1,171 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 12:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/commands/SaveAllCommand.java
+
+Region-scheduled save-all with a durability barrier: one tick task per owned
+region section (tasks survive merges and splits), a sealed core ticket
+(net.linear.save.SaveAllBarrier) so completion waits for every region, and
+a flush save-all that runs the forced Linear barrier off-thread and writes
+<level>/linear-checkpoint/save-all.done before reporting success. Same
+shape as the Folia leg (minecraft-0019-Linear-save-barrier.patch); the
+Canvas global-data part is kept as is.
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
+Fences (2026-11-26): the ticket gets LinearCoupledSave.fences(server), so a flush save-all waits for chunk writes still queued (coupled captures only queue them) before the forced barrier and the marker.
+---
+diff --git a/net/minecraft/server/commands/SaveAllCommand.java b/net/minecraft/server/commands/SaveAllCommand.java
+--- a/net/minecraft/server/commands/SaveAllCommand.java
++++ b/net/minecraft/server/commands/SaveAllCommand.java
+@@ -58,75 +58,92 @@ public class SaveAllCommand {
+             source.sendSuccess(() -> Component.literal("Saved global data"), true);
+ 
+             // regions next
+-            final java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger(0);
+-            final java.util.concurrent.atomic.AtomicInteger total = new java.util.concurrent.atomic.AtomicInteger(0);
+-
+-            final org.apache.commons.lang3.mutable.MutableLong lastLogTime = new org.apache.commons.lang3.mutable.MutableLong(System.nanoTime());
+-            final long startTime = System.nanoTime();
+-
+-            final Runnable callback = () -> {
+-                synchronized (count) {
+-                    final double currentPercentage = (double) (total.get() - count.decrementAndGet()) / total.get();
+-                    final long now = System.nanoTime();
+-
+-                    if (currentPercentage < 1 && lastLogTime.longValue() + 1e+9 <= now) {
+-                        MinecraftServer.LOGGER.info("Saving all regions ({}/{}, {}%)", total.get() - count.get(), total.get(), String.format("%.2f", currentPercentage * 100));
+-                        lastLogTime.setValue(now);
+-                    }
+-                    else if (currentPercentage == 1) {
+-                        // finished, send completion
+-                        MinecraftServer.LOGGER.info("Saved {} regions in {}s", total.get(), String.format("%.2f", (now - startTime) / 1.0E9));
++            // Linear start - region-scheduled save-all with a durability barrier: one tick task per
++            // owned region section instead of a per-region ticket. Tasks follow their section through
++            // merges and splits (a ticket on a destroyed region completed without saving it); the first
++            // task that runs in a region saves its chunks (flush: storages go through the forced Linear
++            // barrier) and then only that region's players. A sealed ticket counts the tasks, so the save
++            // can never complete while regions are still being scheduled. A flush save-all then runs the
++            // forced coordinator barrier off-thread and writes <level>/linear-checkpoint/save-all.done
++            // before success is reported.
++            final net.linear.save.SaveAllBarrier.Ticket ticket = net.linear.save.SaveAllBarrier.begin(
++                server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT), flush,
++                io.papermc.paper.linear.LinearCoupledSave.fences(server), net.linear.save.SaveAllBarrier.DEFAULT_WAIT_MILLIS); // Linear - coupled save: the barrier fences chunk writes still queued
++            int queued = 0;
++            for (final net.minecraft.server.level.ServerLevel level : server.getAllLevels()) {
++                final java.util.List<io.papermc.paper.threadedregions.ThreadedRegionizer.ThreadedRegion<io.papermc.paper.threadedregions.TickRegions.TickRegionData, io.papermc.paper.threadedregions.TickRegions.TickRegionSectionData>> regions = new java.util.ArrayList<>();
++                level.regioniser.computeForAllRegions(regions::add);
++                final int shift = level.regioniser.sectionChunkShift;
++                for (final io.papermc.paper.threadedregions.ThreadedRegionizer.ThreadedRegion<io.papermc.paper.threadedregions.TickRegions.TickRegionData, io.papermc.paper.threadedregions.TickRegions.TickRegionSectionData> region : regions) {
++                    if (region.hasNoAliveSections() || region.isDead()) {
++                        continue;
+                     }
+-
+-                    if (count.get() <= 0) {
+-
+-                        // copied from MinecraftServer#warnOnLowDiskSpace, this is run after saving is done
+-                        if (server.storageSource.checkForLowDiskSpace()) {
+-                            server.sendLowDiskSpaceWarning();
++                    final it.unimi.dsi.fastutil.longs.LongArrayList sections = region.getOwnedSections();
++                    for (int i = 0, len = sections.size(); i < len; ++i) {
++                        final long section = sections.getLong(i);
++                        ticket.taskQueued();
++                        ++queued;
++                        final ca.spottedleaf.concurrentutil.executor.PrioritisedExecutor.PrioritisedTask task = regionizedServer.taskQueue.createTickTaskQueue(
++                            level,
++                            ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkX(section) << shift,
++                            ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkZ(section) << shift,
++                            () -> linear$saveCurrentRegion(server, level, ticket, flush),
++                            ca.spottedleaf.concurrentutil.util.Priority.NORMAL
++                        );
++                        if (!task.queue()) {
++                            ticket.regionFailed(); // cancelled before it could run: never report this save-all as clean
++                            ticket.taskDone();
+                         }
+-
+-                        // now we have warned, so we can send success
+-                        source.sendSuccess(() -> Component.translatable("commands.save.success"), true);
+                     }
+                 }
+-            };
+-
+-            for (final net.minecraft.server.level.ServerLevel level : server.getAllLevels()) {
+-                level.regioniser.computeForAllRegions((region) -> {
+-
+-                    // if has no alive sections, this region is basically dead
+-                    // so we have no reason to actually save this
+-
+-                    // note: we are holding the read lock in this, so technically
+-                    //       we can assume the region data is safe and won't change
+-                    //       while we are iterating over regions in this world
+-
+-                    if (region.hasNoAliveSections() || region.isDead()) {
+-                        return;
+-                    }
+-
+-                    // increment counts
+-                    count.incrementAndGet();
+-                    total.incrementAndGet();
+-
+-                    // propagate the ticket
+-                    region.getData().canvas$saveAllTicket.propagate(
+-                        new io.canvasmc.canvas.threadedregions.ticket.SaveAllTicket(callback, (Throwable thrown) -> {
+-                            source.sendFailure(Component.literal(ERROR_FAILED.create().getMessage()));
+-                            MinecraftServer.LOGGER.error(ERROR_FAILED.create().getMessage(), thrown);
+-                        }, flush)
+-                    );
+-                });
+             }
+ 
+-            if (total.get() == 0) {
++            final int queuedSections = queued;
++            if (queuedSections == 0) {
+                 source.sendSuccess(() -> Component.literal("No regions to save"), true);
+-                callback.run();
+-            }
+-            else {
+-                source.sendSuccess(() -> Component.literal("Saving " + total.get() + " regions"), true);
++            } else {
++                source.sendSuccess(() -> Component.literal("Saving regions (" + queuedSections + " region sections)"), true);
+             }
++            final long startTime = System.nanoTime();
++            ticket.seal(result -> {
++                MinecraftServer.LOGGER.info("Saved {} regions in {}s", result.regions(), String.format("%.2f", (System.nanoTime() - startTime) / 1.0E9));
++                // copied from MinecraftServer#warnOnLowDiskSpace, this is run after saving is done
++                if (server.storageSource.checkForLowDiskSpace()) {
++                    server.sendLowDiskSpaceWarning();
++                }
++                if (result.failed() > 0 || (result.flush() && !result.markerWritten())) {
++                    source.sendFailure(Component.literal(ERROR_FAILED.create().getMessage() + " (" + result.summary() + ")"));
++                } else {
++                    source.sendSuccess(() -> Component.translatable("commands.save.success"), true);
++                }
++            });
++            // Linear end - region-scheduled save-all with a durability barrier
+         });
+     }
+     // Canvas end - region threading
++
++    // Linear start - region-scheduled save-all with a durability barrier
++    private static void linear$saveCurrentRegion(final MinecraftServer server, final net.minecraft.server.level.ServerLevel level,
++                                                 final net.linear.save.SaveAllBarrier.Ticket ticket, final boolean flush) {
++        try {
++            if (ticket.claimRegion(io.papermc.paper.threadedregions.TickRegionScheduler.getCurrentRegion())) {
++                if (net.linear.save.CoupledSave.active()) {
++                    // Linear - coupled save: chunks saved and players staged here, never blocking this thread on I/O;
++                    // the ticket's barrier waits for the staged players (each behind its region barrier) before the marker
++                    io.papermc.paper.linear.LinearCoupledSave.capture(server, () -> server.getPlayerList().saveAll());
++                } else {
++                ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)level).moonrise$getChunkTaskScheduler().chunkHolderManager.saveAllChunksRegionised(
++                    flush, false, false, false, false, true, false
++                );
++                server.getPlayerList().saveAll(); // only players owned by this region thread
++                }
++            }
++        } catch (final Throwable thrown) {
++            ticket.regionFailed();
++            MinecraftServer.LOGGER.error("save-all {}: region save failed in world '{}'", ticket.id(), level.getWorld().getName(), thrown);
++        } finally {
++            ticket.taskDone();
++        }
++    }
++    // Linear end - region-scheduled save-all with a durability barrier
+ }

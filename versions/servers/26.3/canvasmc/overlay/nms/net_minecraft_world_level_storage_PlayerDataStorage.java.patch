@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 12:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/world/level/storage/PlayerDataStorage.java
+
+durable-player-data: atomic replace, .dat_old hard link, one ATOMIC_MOVE;
+no fsync on the tick thread (coupled-save writes are forced and
+directory-synced); orphan temp files quarantined at construction; a WARN
+on every .dat_old fallback. Same hunks as Folia minecraft-0019.
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
+---
+diff --git a/net/minecraft/world/level/storage/PlayerDataStorage.java b/net/minecraft/world/level/storage/PlayerDataStorage.java
+--- a/net/minecraft/world/level/storage/PlayerDataStorage.java
++++ b/net/minecraft/world/level/storage/PlayerDataStorage.java
+@@ -28,6 +28,7 @@ public class PlayerDataStorage {
+         this.fixerUpper = fixerUpper;
+         this.playerDir = levelAccess.getLevelPath(LevelResource.PLAYER_DATA_DIR).toFile();
+         this.playerDir.mkdirs();
++        net.linear.io.PlayerFileDurability.quarantineOrphans(this.playerDir.toPath()); // Linear - temp files of an interrupted save move aside at boot
+     }
+ 
+     public void save(final Player player) {
+@@ -36,12 +37,26 @@ public class PlayerDataStorage {
+             TagValueOutput output = TagValueOutput.createWithContext(reporter, player.registryAccess());
+             player.saveWithoutId(output);
+             Path playerDirPath = this.playerDir.toPath();
++            // Linear start - coupled save: staged in memory, written by the coupled-save thread after the region's chunks are durable
++            if (net.linear.save.CoupledSave.capturing()) {
++                final java.io.ByteArrayOutputStream staged = new java.io.ByteArrayOutputStream(8192);
++                NbtIo.writeCompressed(output.buildResult(), staged);
++                net.linear.save.CoupledSave.stageDat(playerDirPath.resolve(player.getStringUUID() + ".dat"), playerDirPath.resolve(player.getStringUUID() + ".dat_old"), staged.toByteArray());
++                return;
++            }
++            // Linear end - coupled save
+             Path tmpFile = Files.createTempFile(playerDirPath, player.getStringUUID() + "-", ".dat");
+             CompoundTag dataToStore = output.buildResult();
+             NbtIo.writeCompressed(dataToStore, tmpFile);
+             Path realFile = playerDirPath.resolve(player.getStringUUID() + ".dat");
+             Path oldFile = playerDirPath.resolve(player.getStringUUID() + ".dat_old");
++            // Linear start - durable-player-data: atomic replace, .dat_old hard link, one ATOMIC_MOVE; no fsync on the tick thread (coupled-save writes are forced and directory-synced)
++            if (net.linear.io.PlayerFileDurability.enabled()) {
++                net.linear.io.PlayerFileDurability.replace(realFile, tmpFile, oldFile);
++            } else {
+             Util.safeReplaceFile(realFile, tmpFile, oldFile);
++            }
++            // Linear end - durable-player-data
+         } catch (Exception ignored) {
+             LOGGER.warn("Failed to save player data for {}", player.getPlainTextName(), ignored); // Paper - Print exception
+         }
+@@ -62,6 +77,18 @@ public class PlayerDataStorage {
+     }
+ 
+     private Optional<CompoundTag> load(final NameAndId nameAndId, final String suffix) {
++        // Linear start - coupled save: a staged save of this player is newer than the file
++        if (".dat".equals(suffix)) {
++            final byte[] staged = net.linear.save.CoupledSave.stagedBytes(new File(this.playerDir, nameAndId.id() + suffix).toPath());
++            if (staged != null) {
++                try {
++                    return Optional.of(NbtIo.readCompressed(new java.io.ByteArrayInputStream(staged), NbtAccounter.unlimitedHeap()));
++                } catch (final java.io.IOException e) {
++                    LOGGER.warn("Failed to read the staged player data of {}, reading the file", nameAndId.name(), e);
++                }
++            }
++        }
++        // Linear end - coupled save
+         File realFile = new File(this.playerDir, nameAndId.id() + suffix);
+         // Spigot start
+         boolean usingWrongFile = false;
+@@ -96,7 +123,15 @@ public class PlayerDataStorage {
+             this.backup(nameAndId, ".dat");
+         }
+ 
+-        return optTag.or(() -> this.load(nameAndId, ".dat_old")).map(tag -> {
++        return optTag.or(() -> {
++            // Linear start - say so when a player resumes from the previous save
++            final Optional<CompoundTag> old = this.load(nameAndId, ".dat_old");
++            if (old.isPresent()) {
++                net.linear.io.PlayerFileDurability.warnDatOldFallback(nameAndId.name(), nameAndId.id());
++            }
++            return old;
++            // Linear end
++        }).map(tag -> {
+             int version = NbtUtils.getDataVersion(tag);
+             return ca.spottedleaf.dataconverter.minecraft.MCDataConverter.convertTag(ca.spottedleaf.dataconverter.minecraft.datatypes.MCTypeRegistry.PLAYER, DataFixTypes.PLAYER, tag, version, ca.spottedleaf.dataconverter.minecraft.util.Version.getCurrentVersion());
+         });

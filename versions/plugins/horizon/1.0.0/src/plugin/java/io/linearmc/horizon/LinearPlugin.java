@@ -77,6 +77,11 @@ public class LinearPlugin extends JavaPlugin {
             "io.linearmc.horizon.LinearCommand",
             "io.linearmc.horizon.LinearStatsCommand",
             "io.linearmc.horizon.LinearFormatPolicy",
+            "io.linearmc.horizon.HorizonSaveBarrier",
+            "net.linear.io.AtomicFiles",
+            "net.linear.io.PlayerFileDurability",
+            "net.linear.save.SaveAllBarrier",
+            "net.linear.save.SaveOffLease",
             "net.minecraft.world.level.chunk.storage.RegionFileStorage",
             "net.minecraft.world.level.chunk.storage.RegionFile");
         final boolean natives = net.linear.compression.ZstdChunkCodec.warmup();
@@ -131,6 +136,9 @@ public class LinearPlugin extends JavaPlugin {
         // conversion, which may have registered them already; idempotent).
         HorizonSeams.registerOpeners();
         LinearFlushCoordinator.linear$setFlushListener(this::fireFlushEvent);
+        // Save-off lease release runs on the global region (Folia/Canvas) or
+        // main (Paper) thread, like save-on itself.
+        HorizonSaveBarrier.setGlobalExecutor(task -> getServer().getGlobalRegionScheduler().execute(this, task));
         LinearRegionConverter.linear$setReverseSkipPredicate(LinearPlugin::reverseSkipDirty);
         // Soak parity (d-load, Oct 2026): forward defers loaded files with
         // the same folder-dirty check as reverse.
@@ -208,6 +216,7 @@ public class LinearPlugin extends JavaPlugin {
         // pre-save drain: force what is dirty now and keep the flush pool
         // alive. The real stop barrier (shutdown mode, evict everything,
         // pool shutdown) runs after the final save from MinecraftServerMixin.
+        HorizonSaveBarrier.setGlobalExecutor(null);
         LinearShutdownBarrier.pluginDisableDrain();
     }
 

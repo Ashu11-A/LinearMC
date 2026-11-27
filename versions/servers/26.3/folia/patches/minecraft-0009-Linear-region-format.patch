@@ -1299,7 +1299,7 @@ index 7e815fee19ab2c283bf1fdc3d6a530d4101de3de..eeeb5f237baa6fd253ee3830d3c81e55
 +        // negative cache (re-verified in applied tree: coordinator dirty set
 +        // only), so run the batch outside the monitor. Snapshot keeps the
 +        // regionCache iteration safe without blocking concurrent opens.
-+        LinearFlushCoordinator.forFolder(this.folder).flushDirty(); // Linear - persist deferred Linear writes first (driven by Moonrise save path, no extra threads)
++        LinearFlushCoordinator.forFolder(this.folder).flushDirty(true); // Linear - persist deferred Linear writes first (driven by Moonrise save path, no extra threads); forced: joins flushes already running (save barrier)
 +        final java.util.List<AbstractRegionFile> snapshot;
          synchronized (this) {
 -            final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();

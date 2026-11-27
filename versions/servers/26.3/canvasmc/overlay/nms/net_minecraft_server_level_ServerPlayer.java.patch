@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LinearMC <linearmc@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 12:00:00 -0300
+Subject: [PATCH] LinearMC: net/minecraft/server/level/ServerPlayer.java
+
+Coupled save departure (2026-11-26, same hunks as Folia minecraft-0020): LinearCoupledSave.departure(this) at the head of preChangeDimension (cross-region teleport, portal) and before the respawn removes the player from its old level, so the source region saves its chunks and stages the player while it still owns both.
+---
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -1858,6 +1858,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+ 
+         final EntityTreeNode passengerTree = this.makePassengerTree();
+ 
++        io.papermc.paper.linear.LinearCoupledSave.departure(this); // Linear - coupled save: save this region's chunks and the player before the respawn moves the player
+         this.isChangingDimension = true;
+         origin.removePlayerImmediately(this, RemovalReason.CHANGED_DIMENSION);
+ 
+@@ -2131,6 +2132,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+ 
+     @Override
+     public void preChangeDimension() {
++        io.papermc.paper.linear.LinearCoupledSave.departure(this); // Linear - coupled save: save this region's chunks and the player before the player leaves it
+         super.preChangeDimension();
+ 
+         // only stop using item on cross region teleports

@@ -9,13 +9,14 @@ Canvas region-threading hunks are already present and must NOT be duplicated
 here. Contains only the Linear stop drain (0017, same wording as the Folia
 leg): evictAll + shutdownFlushPool between stopServer() and the Canvas
 savePlayers block.
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
 ---
 diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/papermc/paper/threadedregions/RegionShutdownThread.java
 --- a/io/papermc/paper/threadedregions/RegionShutdownThread.java
 +++ b/io/papermc/paper/threadedregions/RegionShutdownThread.java
-@@ -264,6 +264,21 @@ public class RegionShutdownThread extends ca.spottedleaf.moonrise.common.util.Ti
+@@ -306,6 +306,22 @@ public class RegionShutdownThread extends TickThread {
          }
-
+ 
          MinecraftServer.getServer().stopServer(); // stop part 1: most logic, kicking players, plugins, etc
 +        // Linear - stop drain (finding F fix, v4): force-drain every tracked linear
 +        // folder NOW, while regions/coordinators are fully populated. The per-region
@@ -25,6 +26,7 @@ diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/pap
 +        // once — per-mark victim batches would serialize multi-second
 +        // rebuilds behind the saves. Track-only from here; the tail forced
 +        // barriers (parallel floor) persist everything once.
++        net.linear.save.CoupledSave.beginShutdown(); // Linear - coupled save: no new captures, saves from here on are direct
 +        net.linear.LinearFlushCoordinator.linear$beginShutdown();
 +        net.linear.LinearFlushCoordinator.evictAll();
 +        // Linear - production pool shutdown (async split): the joining stop drain
@@ -35,4 +37,11 @@ diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/pap
          // Canvas start - region threading
          // this.playerList.removeAll(this.isRestarting); // Paper
          // this.getConnection().handleAllDisconnections(); // Paper
-         this.savePlayers();
+@@ -377,6 +393,7 @@ public class RegionShutdownThread extends TickThread {
+         LOGGER.info("Saving all player data...");
+         MinecraftServer.getServer().getPlayerList().saveAll();
+         LOGGER.info("Saved all player data");
++        net.linear.save.CoupledSave.finishShutdown(10_000L); // Linear - coupled save: staged saves of players who left land after the chunk save
+ 
+         MinecraftServer.getServer().stopPart2(); // stop part 2: close other resources (io thread, etc)
+         // done, part 2 should call exit()

@@ -19,6 +19,35 @@ four nodes, so someone who holds only `linear.command.convert` or
 | `linear.command.convert` | `/linear convert` |
 | `linear.command.queue` | `/linear queue ...` |
 
+## Vanilla save commands
+
+LinearMC changes three vanilla commands on the Folia and CanvasMC forks and
+on Horizon on every host (Paper, Folia, CanvasMC); the grammar and the
+permission (operator level 4) stay vanilla.
+
+- `save-all flush` is a durability barrier: success is reported only after
+  every region was saved, the chunk writes it queued have landed, and every
+  Linear file is renamed and directory synced, and it writes
+  `<world>/linear-checkpoint/save-all.done`
+  (`{"id","startMs","endMs","regions","failed"}`; the id is an
+  auto-increment). `failed` above 0 makes the command report failure. Plain
+  `save-all` behaves as before and writes no marker. The Folia fork
+  registers `save-all` again (Folia upstream left it out).
+
+  | Leg / host | Barrier | Marker | Players after their chunks |
+  | --- | --- | --- | --- |
+  | Folia fork, CanvasMC fork | yes | yes | yes |
+  | Horizon on Paper | yes (tick frozen while it waits, at most 20 s) | yes | yes |
+  | Horizon on CanvasMC | yes (region-scheduled, as the CanvasMC fork) | yes | yes |
+  | Horizon on Folia | yes (Horizon registers `save-all`, as the Folia fork) | yes | yes |
+
+  A backup script can check the marker on every leg and host; see
+  `configuration.md`.
+- `save-off` also pauses the periodic player autosave, and expires after
+  `linear.save-off-max-duration` seconds (default 120, 0 never) with a WARN
+  and an operator broadcast.
+- `save-on` behaves as before and cancels the pending expiry.
+
 ## Stats
 
 - `/linearstats [filter]` shows every tracked folder, or only paths that contain the filter word.

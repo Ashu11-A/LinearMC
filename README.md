@@ -23,7 +23,8 @@
 LinearMC stores each region as one compressed <code>.linear</code> file
 instead of a padded file of 4 KiB sectors. On large survival worlds that saves
 up to <strong>45% of disk</strong>. Java players, Bedrock players and plugins
-all see the same world.
+all see the same world, and a crash no longer leaves player inventories out of
+step with the chunks around them.
 </sub>
 </p>
 
@@ -37,6 +38,8 @@ all see the same world.
 * Existing `.mca` files keep loading next to the new `.linear` files.
 * Any world can go back to the normal format, and once it has, you can swap in the stock server jar.
 * `/linearstats` or `/linear stats` shows live compression figures in game.
+* A player file is written only after the chunks of the player's region reach the disk, so a crash cannot delete an item the player just put in a chest.
+* `save-all flush` returns only when the world is on disk, and leaves a marker file that backup scripts can check.
 
 ## Compatibility
 
@@ -105,11 +108,29 @@ region-format:
     compression-level: 6
     implementation: V1
     grid-size: 8
+    save-off-max-duration: 120
+    durable-player-data: true
+    coupled-save:
+      enabled: true
+      interval: 20
 ```
 
 `format` takes `LINEAR` for compact files, `B_LINEAR` for the buffered tier, or `ANVIL` for normal files. The match is exact, so a misspelled value logs a warning and that world runs on Anvil. The setting only affects new files.
 
-`compression-level` accepts 1 to 22. Keep it at 6 unless you accept the risk, and never go to 12 or higher. `implementation` picks the writer for new `.linear` files (`V1`, `V2` or `V3`, see Versions), and `grid-size` sets the `V2`/`V3` bucket grid. The `-Dlinearmc.*` flags set all of this without editing any file (see Startup parameters).
+`compression-level` accepts 1 to 22. Keep it at 6 unless you accept the risk, and never go to 12 or higher. `implementation` picks the writer for new `.linear` files (`V1`, `V2` or `V3`, see Versions), and `grid-size` sets the `V2`/`V3` bucket grid. The `-Dlinearmc.*` flags set these four without editing any file (see Startup parameters).
+
+The last three keys control crash safety (see the next section). `save-off-max-duration` turns saving back on, with a warning to operators, when a `save-off` has lasted that many seconds; `0` disables the limit. On the forks these keys live in the server's global config (`paper-global.yml` on Folia, `canvas-server.yml` on CanvasMC), and on Horizon in `plugins/LinearMC/config.yml`. `docs/configuration.md` lists the exact paths.
+
+## Crash safety
+
+A vanilla server saves the world and the players on separate timers. If it dies between the two saves, a player can come back with an inventory from after a move and a chest from before it, and the item is gone. LinearMC closes that gap:
+
+* With `coupled-save.enabled` (on by default), each region saves its chunks every `interval` seconds and keeps its players' files in memory until those chunks are on disk. Logout, `save-all` and a player leaving the region use the same order. A crash can still roll a player back a few seconds together with the world, and at worst duplicate an item moved just before it, but it does not lose one.
+* `save-all flush` waits until every region file is written, renamed and synced, then writes `<world>/linear-checkpoint/save-all.done`.
+* Player files (`.dat`, stats, advancements) are replaced with one atomic rename (`durable-player-data`), so a crash never leaves one half-written.
+* After each region rename the folder itself is synced, so a power cut cannot undo the rename. A zero-length region file is moved aside to `.corrupt-<ms>`, and an unreadable one is copied to `<dimension>/linear-conflicts/` before anything else touches it.
+
+The ordering holds within a region. It is not a transaction across regions, and `docs/limitations.md` lists the cases it does not cover.
 
 ## Versions
 
@@ -143,7 +164,7 @@ Back up every world before you start, and keep the backup until players confirm 
 
 * The default compression level is **6**. Levels **12 and above are unsafe** and have caused chunk loss in testing.
 * Tools that read only `.mca` files cannot see chunks stored in `.linear` files.
-* LinearMC is crash-safe, not crash-proof: a server killed in the middle of a save can still lose recent edits. **Keep backups.**
+* A crash still loses the last few seconds of play, for the world and the players alike. A disk that fails, or a host without power-loss protection, can lose more. Keep backups.
 
 ## Documentation
 

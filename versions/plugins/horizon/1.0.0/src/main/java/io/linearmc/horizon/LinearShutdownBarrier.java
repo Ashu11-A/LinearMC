@@ -40,6 +40,8 @@ public final class LinearShutdownBarrier {
             // close first, so every Linear file is persisted by its own instance.
             DeferredRegionCloses.closeAllPending();
             FlushReports.FolderDrain.onServerStop();
+            // Coupled save: staged saves of players who left land after the final chunk save.
+            net.linear.save.CoupledSave.finishShutdown(10_000L);
             LOGGER.info("LinearMC: final stop drain complete ({})", site);
         } catch (RuntimeException e) {
             LOGGER.error("LinearMC: final stop drain failed ({})", site, e);

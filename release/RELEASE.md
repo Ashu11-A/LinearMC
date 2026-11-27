@@ -32,12 +32,12 @@ used by the release notes and asset suffix. The Horizon pin lives at
 `HORIZON_BUILD` (the Horizon Jenkins build of `HORIZON_REF`, not the Paper
 dev-bundle build) plus `HORIZON_MC_RANGE`.
 
-Supported matrix (v1.3.0-release.1):
+Supported matrix (v1.4.0-release.1):
 
 | Leg | Pin | Build |
 | --- | --- | --- |
-| Folia 26.3 | `ver/26.3.x` at `eca40f918928e78c2c5f9c944cfb083d7d9851d4` | #26 |
-| CanvasMC 26.3 | `main` at `23ea235ddd934a81309d048c5e3261ac0eb5cd88` | #1046 |
+| Folia 26.3 | `ver/26.3.x` at `b5c780830a3987889675871592c76668f37d88cb` | #28 |
+| CanvasMC 26.3 | `main` at `59357cb71a198591a940e079e9323376e952c84e` | #1047 |
 | Horizon 1.0.0 | `31d1a1b7` (Horizon stable #90); Paper `26.1.2.build.74-stable` | #90 |
 
 Folia 26.1.x and CanvasMC 26.1.2/26.2 are archived under `versions/servers/removed/` (Folia 26.1.2 hosts are served by

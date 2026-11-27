@@ -90,13 +90,29 @@ public final class LinearCommandExecutor {
         }
         long files = 0;
         long fail = 0;
+        long quarantined = 0;
+        long conflicts = 0;
         for (LinearRegionTimings.LinearFolderSnapshot s : snaps.values()) {
             files += s.filesFlushed();
             fail += s.failures();
+            quarantined += s.quarantines();
+            conflicts += s.conflicts();
         }
         StringBuilder sb = new StringBuilder("Linear stats (" + snaps.size() + " folders)");
         action.worldFilter().ifPresent(w -> sb.append(" filter=").append(w));
         sb.append(": files=").append(files).append(" fail=").append(fail);
+        if (quarantined > 0) {
+            sb.append(" quarantined=").append(quarantined);
+        }
+        if (conflicts > 0) {
+            sb.append(" conflicts=").append(conflicts);
+        }
+        if (net.linear.save.CoupledSave.enabled()) {
+            final int withheld = net.linear.save.CoupledSave.withheldCaptures();
+            if (withheld > 0) {
+                sb.append(" coupled-withheld=").append(withheld);
+            }
+        }
         sender.sendMessage(sb.toString());
     }
 

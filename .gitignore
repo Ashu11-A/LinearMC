@@ -36,3 +36,7 @@ __pycache__/
 !/.claude/skills/
 /CLAUDE.local.md
 /.ai-memory.toml
+
+# Horizon test task writes rotated server logs into the module (latest.log stays tracked).
+/versions/plugins/horizon/1.0.0/logs/*.gz
+

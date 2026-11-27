@@ -6,15 +6,15 @@ Subject: [PATCH] LinearMC: net/minecraft/server/MinecraftServer.java
 Ported from the Folia feature stack (minecraft-0017-Linear-save-drain.patch).
 Hunks kept in stack-apply order. Reconcile against Canvas base
 patches touching this file before staging (see PORT-PLAN.md).
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
 ---
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -954,5 +954,13 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
-             level.save(null, flush, SharedConstants.DEBUG_DONT_SAVE_WORLD || level.noSave && !force, close); // Paper - add close param
+@@ -957,6 +957,14 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
              result = true;
          }
-
+ 
 +        // Linear - stop drain (finding F fix): the close=true path skips
 +        // chunkSource.save, and Folia/Moonrise never flush or close vanilla
 +        // storages, so force-drain every tracked linear folder here. Runs on
@@ -24,3 +24,40 @@ diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/Mi
 +            net.linear.LinearFlushCoordinator.evictAll();
 +        }
          // Paper start - split out global level data
+         return result;
+     }
+@@ -1671,8 +1679,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         final boolean fullSave = this.autosavePeriod > 0 && io.papermc.paper.threadedregions.RegionizedServer.getCurrentTick() % this.autosavePeriod == 0; // Folia - region threading
+         try {
+             this.isSaving = true;
+-            if (io.canvasmc.canvas.GlobalConfiguration.getInstance().autosave.autosavePlayers && playerSaveInterval > 0) { // Canvas - region threading
++            if (io.canvasmc.canvas.GlobalConfiguration.getInstance().autosave.autosavePlayers && playerSaveInterval > 0 && !region.world.noSave) { // Canvas - region threading // Linear - save-off pauses periodic player saves too
++                if (!io.papermc.paper.linear.LinearCoupledSave.periodic(this)) { // Linear - coupled save: region captures replace the periodic player save
+                 this.playerList.saveAll(playerSaveInterval);
++                } // Linear - coupled save
+             }
+             if (false && fullSave) { // Folia - region threading - don't auto save level data
+                 this.saveGlobalData(false);
+@@ -2929,9 +2939,22 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             }
+         }
+ 
++        net.linear.save.SaveOffLease.onAutoSaveChanged(enable, success, this::linear$releaseSaveOffLease); // Linear - save-off lease
+         return success;
+     }
+ 
++    // Linear start - save-off lease: a save-off nobody turns back on expires
++    private void linear$releaseSaveOffLease() {
++        io.papermc.paper.threadedregions.RegionizedServer.getInstance().addTask(() -> {
++            if (this.setAutoSave(true)) {
++                final String message = net.linear.save.SaveOffLease.releaseMessage(net.linear.save.SaveOffLease.maxDurationSeconds());
++                LOGGER.warn(message);
++                org.bukkit.Bukkit.broadcast(net.kyori.adventure.text.Component.text(message, net.kyori.adventure.text.format.NamedTextColor.RED), org.bukkit.Server.BROADCAST_CHANNEL_ADMINISTRATIVE);
++            }
++        });
++    }
++    // Linear end - save-off lease
++
+     public boolean isAutoSave() {
+         for (ServerLevel level : this.getAllLevels()) {
+             if (level != null && !level.noSave) {

@@ -69,6 +69,8 @@ public final class LinearStatsView {
         long tLoad = 0;
         long tFiles = 0;
         long tFail = 0;
+        long tQuarantined = 0;
+        long tConflicts = 0;
         long tRaw = 0;
         long tPacked = 0;
 
@@ -112,7 +114,9 @@ public final class LinearStatsView {
                     LinearStatsFormat.humanMicros(s.flushP50Micros()),
                     LinearStatsFormat.humanMicros(s.flushP99Micros()),
                     s.millisSinceLastFlush() < 0L ? "never flushed"
-                        : LinearStatsFormat.humanMillisSince(s.millisSinceLastFlush()) + " ago"));
+                        : LinearStatsFormat.humanMillisSince(s.millisSinceLastFlush()) + " ago")
+                    + (s.quarantines() > 0L ? "  quarantined=" + s.quarantines() : "")
+                    + (s.conflicts() > 0L ? "  conflicts=" + s.conflicts() : ""));
 
                 tRead += s.read().count();
                 tReadMicros += s.read().totalMicros();
@@ -123,6 +127,8 @@ public final class LinearStatsView {
                 tLoad += s.load().count();
                 tFiles += s.filesFlushed();
                 tFail += s.failures();
+                tQuarantined += s.quarantines();
+                tConflicts += s.conflicts();
                 tRaw += s.rawBytes();
                 tPacked += s.compressedBytes();
             }
@@ -135,7 +141,9 @@ public final class LinearStatsView {
             tRead, LinearStatsFormat.humanMicros(tRead == 0 ? 0 : tReadMicros / tRead),
             tWrite, LinearStatsFormat.humanMicros(tWrite == 0 ? 0 : tWriteMicros / tWrite),
             tFlush, LinearStatsFormat.humanMicros(tFlush == 0 ? 0 : tFlushMicros / tFlush),
-            tLoad, tFiles, tFail, snaps.size(), totalBytes));
+            tLoad, tFiles, tFail, snaps.size(), totalBytes)
+            + (tQuarantined > 0L ? "  quarantined=" + tQuarantined : "")
+            + (tConflicts > 0L ? "  conflicts=" + tConflicts : ""));
         return rows;
     }
 

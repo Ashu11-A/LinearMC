@@ -319,9 +319,13 @@ public final class LinearFlushCoordinator {
         return ParallelFlushFanout.sharedPool(threads);
     }
 
+    /**
+     * Wraps a batch already detached from {@link #dirty} (and registered in
+     * {@link #inFlight} by the caller, in the same critical section).
+     */
     private java.util.concurrent.FutureTask<?> linear$createFlushTask(
             final List<AbstractRegionFile> snapshot) {
-        return ParallelFlushFanout.createFlushTask(snapshot, this::flushOne, key(this.folder));
+        return ParallelFlushFanout.createFlushTask(snapshot, this.flushDetached, key(this.folder));
     }
 
     private void linear$submitFlushTask(java.util.concurrent.FutureTask<?> tracked) {
@@ -369,6 +373,7 @@ public final class LinearFlushCoordinator {
                 }
                 batch = eligible;
             }
+            registerInFlightLocked(batch);
             java.util.concurrent.FutureTask<?> tracked = linear$createFlushTask(batch);
             if (force) {
                 this.dirty.clear();
@@ -404,6 +409,22 @@ public final class LinearFlushCoordinator {
     /** Set once this instance left the registry (evict/evictAll): the fast path skips it. */
     private volatile boolean evicted;
     private final java.util.LinkedHashMap<AbstractRegionFile, Long> dirty = new java.util.LinkedHashMap<>();
+    /**
+     * Files detached from {@link #dirty} whose flush has not finished yet,
+     * with a count (one file can sit in two batches). A forced barrier joins
+     * every file listed here, so a flush that another thread started before
+     * the barrier (dirty already cleared, rename not done) cannot make the
+     * barrier return early. Guarded by this monitor. Identity map: open
+     * addressing (no per-entry node) and cached small Integer counts, so
+     * registering and releasing allocate nothing in steady state.
+     */
+    private final java.util.IdentityHashMap<AbstractRegionFile, Integer> inFlight =
+        new java.util.IdentityHashMap<>();
+    /** Pre-built flush actions: no per-batch lambda allocation. */
+    private final java.util.function.Consumer<AbstractRegionFile> flushDetached = f -> this.flushDetached(f, false);
+    private final java.util.function.Consumer<AbstractRegionFile> flushDetachedForced = f -> this.flushDetached(f, true);
+    private final java.util.function.Consumer<AbstractRegionFile> flushForced = f -> this.flushOne(f, true);
+    private final java.util.function.Consumer<AbstractRegionFile> flushPlain = f -> this.flushOne(f, false);
     /** Folder-wide timing + windowed latency (all counters live here). */
     private final FlushLatencyWindow timings = new FlushLatencyWindow();
 
@@ -431,6 +452,7 @@ public final class LinearFlushCoordinator {
                 java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> it =
                     this.dirty.entrySet().iterator();
                 AbstractRegionFile eldest = it.next().getKey();
+                registerInFlightLocked(eldest);
                 drain = linear$createFlushTask(Collections.singletonList(eldest));
                 it.remove();
             } else if (!SHUTDOWN_MODE && frequencyNanos > 0L && !this.dirty.isEmpty()) {
@@ -439,6 +461,7 @@ public final class LinearFlushCoordinator {
                 java.util.Map.Entry<AbstractRegionFile, Long> e = head.next();
                 if (now - e.getValue() >= frequencyNanos) {
                     AbstractRegionFile aged = e.getKey();
+                    registerInFlightLocked(aged);
                     drain = linear$createFlushTask(Collections.singletonList(aged));
                     head.remove();
                 }
@@ -458,14 +481,22 @@ public final class LinearFlushCoordinator {
     /**
      * REAL age-based flush behind flush-frequency. Only files whose
      * first-dirty age {@code >=} frequency seconds are flushed; younger files
-     * stay tracked for the next save. {@code force} (evict/unload) flushes
-     * everything regardless of age.
+     * stay tracked for the next save. {@code force} (evict/unload/save
+     * barrier) flushes everything regardless of age and is a durability
+     * barrier: it returns only after every flush of this folder that was
+     * already running when it started (fire-and-forget drains and other
+     * threads' batches) has renamed its file and synced the directory, even
+     * when nothing is dirty any more. Public so the legs' storage flush can
+     * call the forced barrier directly.
      */
-    void flushDirty(boolean force) {
+    public void flushDirty(boolean force) {
+        final FailureScope scope = FAILURE_SCOPE.get();
+        if (scope != null) {
+            scope.enter(this);
+        }
         if (force) {
             linear$joinInFlightAsync();
-        }
-        if (this.isEmpty()) {
+        } else if (this.isEmpty()) {
             return;
         }
         final long now = System.nanoTime();
@@ -479,40 +510,88 @@ public final class LinearFlushCoordinator {
             }
             frequencyNanos = seconds * 1_000_000_000L;
         }
-        final List<AbstractRegionFile> snapshot;
+        List<AbstractRegionFile> snapshot = null;
+        AbstractRegionFile[] runningElsewhere = null;
         synchronized (this) {
-            if (this.dirty.isEmpty()) {
-                return;
-            }
             if (force) {
-                snapshot = new ArrayList<>(this.dirty.keySet());
-                this.dirty.clear();
+                // Taken before this barrier registers its own batch, so it
+                // lists exactly the flushes started by someone else.
+                if (!this.inFlight.isEmpty()) {
+                    runningElsewhere = this.inFlight.keySet().toArray(new AbstractRegionFile[0]);
+                }
+                if (!this.dirty.isEmpty()) {
+                    snapshot = new ArrayList<>(this.dirty.keySet());
+                    this.dirty.clear();
+                }
             } else {
-                snapshot = new ArrayList<>();
+                if (this.dirty.isEmpty()) {
+                    return;
+                }
                 java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> it =
                     this.dirty.entrySet().iterator();
                 while (it.hasNext()) {
                     java.util.Map.Entry<AbstractRegionFile, Long> e = it.next();
                     long age = now - e.getValue();
                     if (age >= frequencyNanos) {
+                        if (snapshot == null) {
+                            snapshot = new ArrayList<>();
+                        }
                         snapshot.add(e.getKey());
                         it.remove();
                     }
                 }
-                if (snapshot.isEmpty()) {
+                if (snapshot == null) {
                     return;
                 }
             }
+            if (snapshot != null) {
+                registerInFlightLocked(snapshot);
+            }
         }
-        final long batchStartNanos = System.nanoTime();
-        final int filesAttempted = snapshot.size();
-        try {
-            this.linear$flushSnapshot(snapshot, force);
-        } finally {
-            final long elapsedMicros = (System.nanoTime() - batchStartNanos) / 1000L;
-            linear$notifyFlushSync(key(this.folder), filesAttempted, elapsedMicros);
+        if (snapshot != null) {
+            final long batchStartNanos = System.nanoTime();
+            final int filesAttempted = snapshot.size();
+            try {
+                ParallelFlushFanout.flushSnapshot(snapshot, force,
+                    force ? this.flushDetachedForced : this.flushDetached);
+            } finally {
+                final long elapsedMicros = (System.nanoTime() - batchStartNanos) / 1000L;
+                linear$notifyFlushSync(key(this.folder), filesAttempted, elapsedMicros);
+            }
+        }
+        if (runningElsewhere != null) {
+            for (AbstractRegionFile file : runningElsewhere) {
+                this.flushOne(file, true);
+            }
         }
         linear$joinInFlightAsync();
+    }
+
+    /** Caller holds this monitor. */
+    private void registerInFlightLocked(AbstractRegionFile file) {
+        final Integer count = this.inFlight.get(file);
+        this.inFlight.put(file, count == null ? 1 : count + 1);
+    }
+
+    /** Caller holds this monitor. */
+    private void registerInFlightLocked(List<AbstractRegionFile> files) {
+        for (int i = 0, n = files.size(); i < n; i++) {
+            registerInFlightLocked(files.get(i));
+        }
+    }
+
+    private synchronized void releaseInFlight(AbstractRegionFile file) {
+        final Integer count = this.inFlight.get(file);
+        if (count == null || count <= 1) {
+            this.inFlight.remove(file);
+        } else {
+            this.inFlight.put(file, count - 1);
+        }
+    }
+
+    /** Test-only: files whose detached flush has not finished. */
+    synchronized int linear$inFlightCountForTests() {
+        return this.inFlight.size();
     }
 
     public synchronized boolean isEmpty() {
@@ -535,13 +614,44 @@ public final class LinearFlushCoordinator {
      * participation and join-before-return (durability barrier).
      */
     public void linear$flushSnapshot(List<AbstractRegionFile> snapshot, boolean forceBarrier) {
-        ParallelFlushFanout.flushSnapshot(snapshot, forceBarrier, this::flushOne);
+        ParallelFlushFanout.flushSnapshot(snapshot, forceBarrier,
+            forceBarrier ? this.flushForced : this.flushPlain);
     }
 
-    private void flushOne(AbstractRegionFile file) {
+    /**
+     * Flushes a file this coordinator detached, then releases its in-flight
+     * entry. A non-forced flush of a file that looks clean may race a flush
+     * that runs outside the coordinator (an eviction {@code close()}, which
+     * clears the dirty flag and then renames under {@code flushGuard}): the
+     * entry is released only after {@code awaitDurable()}, so a forced
+     * barrier that starts meanwhile still finds the file in {@link #inFlight}
+     * and joins that flush. Runs on flush/drain threads only (never a region
+     * thread); a lock/unlock pair, no allocation.
+     */
+    private void flushDetached(AbstractRegionFile file, boolean force) {
+        try {
+            this.flushOne(file, force);
+            if (!force) {
+                file.awaitDurable();
+            }
+        } finally {
+            this.releaseInFlight(file);
+        }
+    }
+
+    /**
+     * Flushes one file when dirty. {@code force}: a file that looks clean
+     * may have a flush running on another thread that already cleared its
+     * dirty flag but has not renamed yet; join it ({@code awaitDurable}),
+     * then flush again if that flush failed and re-armed the flag.
+     */
+    private void flushOne(AbstractRegionFile file, boolean force) {
         boolean ok = false;
         boolean requeueClean = false;
         try {
+            if (force && !file.isMarkedToSave()) {
+                file.awaitDurable();
+            }
             if (file.isMarkedToSave()) {
                 file.flush();
             }
@@ -601,6 +711,16 @@ public final class LinearFlushCoordinator {
         this.timings.recordOversizeReject();
     }
 
+    /** An existing region file could not be used as found (moved aside or copied out). */
+    public void recordQuarantine() {
+        this.timings.recordQuarantine();
+    }
+
+    /** A region file that failed to open was copied to the conflicts folder (original kept). */
+    public void recordConflict() {
+        this.timings.recordConflict();
+    }
+
     void recordCacheHit() {
         this.timings.recordCacheHit();
     }
@@ -633,6 +753,95 @@ public final class LinearFlushCoordinator {
             depth = this.dirty.size();
         }
         return this.timings.snapshot(depth);
+    }
+
+    private static final ThreadLocal<FailureScope> FAILURE_SCOPE = new ThreadLocal<>();
+
+    /**
+     * Failure count scoped to one barrier: every coordinator whose
+     * {@link #flushDirty(boolean)} is called on the opening thread while the
+     * scope is open is remembered with its failure count at that moment, and
+     * {@link #failures()} sums only the growth of those coordinators. A flush
+     * failure in a folder the barrier never touched (another world, a
+     * dimension the barrier does not cover) does not fail it. Within a
+     * touched folder the count is per coordinator, not per file: a failed
+     * flush of an unrelated region file in the same folder during the scope
+     * (a fire-and-forget drain on another thread) also counts. That is the
+     * conservative direction on purpose: the capture is withheld and retried,
+     * never written over a possibly missing chunk. Scopes nest
+     * (the inner one restores the outer on close); the outer scope also sees
+     * coordinators first entered inside an inner one. Not thread-safe: one
+     * scope belongs to the thread that opened it.
+     */
+    public static final class FailureScope implements AutoCloseable {
+        private final FailureScope outer;
+        private final java.util.IdentityHashMap<LinearFlushCoordinator, Long> base = new java.util.IdentityHashMap<>();
+        private boolean closed;
+
+        private FailureScope(final FailureScope outer) {
+            this.outer = outer;
+        }
+
+        void enter(final LinearFlushCoordinator coordinator) {
+            if (!this.base.containsKey(coordinator)) {
+                this.base.put(coordinator, coordinator.timings.failureCount());
+            }
+            if (this.outer != null) {
+                this.outer.enter(coordinator);
+            }
+        }
+
+        /** Failures recorded since entry by the coordinators flushed in this scope. */
+        public long failures() {
+            long total = 0L;
+            for (final java.util.Map.Entry<LinearFlushCoordinator, Long> e : this.base.entrySet()) {
+                total += Math.max(0L, e.getKey().timings.failureCount() - e.getValue());
+            }
+            return total;
+        }
+
+        /** Number of distinct coordinators flushed in this scope (tests, diagnostics). */
+        public int coordinators() {
+            return this.base.size();
+        }
+
+        @Override
+        public void close() {
+            if (!this.closed) {
+                this.closed = true;
+                if (FAILURE_SCOPE.get() == this) {
+                    if (this.outer == null) {
+                        FAILURE_SCOPE.remove();
+                    } else {
+                        FAILURE_SCOPE.set(this.outer);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Opens a {@link FailureScope} on this thread (close it with try-with-resources). */
+    public static FailureScope openFailureScope() {
+        final FailureScope scope = new FailureScope(FAILURE_SCOPE.get());
+        FAILURE_SCOPE.set(scope);
+        return scope;
+    }
+
+    /**
+     * Flush failures recorded so far over every tracked folder (best effort,
+     * 0 on any counter error). Barriers compare it before and after to see a
+     * failure that the coordinator logged instead of throwing.
+     */
+    public static long totalFailures() {
+        long total = 0L;
+        try {
+            for (final LinearRegionTimings.LinearFolderSnapshot snapshot : snapshots().values()) {
+                total += snapshot.failures();
+            }
+        } catch (RuntimeException ignored) {
+            // Counters are best effort.
+        }
+        return total;
     }
 
     /** Per-folder snapshots keyed by absolute folder-path string. */

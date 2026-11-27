@@ -125,6 +125,8 @@ public final class LinearStatsCompact {
         }
         long tFiles = 0;
         long tFail = 0;
+        long tQuarantined = 0;
+        long tConflicts = 0;
         long tRaw = 0;
         long tPacked = 0;
 
@@ -164,7 +166,9 @@ public final class LinearStatsCompact {
                 String text = displayWorld + " L" + levelLabel + " " + shortType
                     + " d" + s.dirtyDepth() + "/" + LinearFlushCoordinator.MAX_DIRTY
                     + " f" + s.failures()
-                    + " p99 " + p99 + " " + saved + " " + age + " W" + wAge;
+                    + " p99 " + p99 + " " + saved + " " + age + " W" + wAge
+                    + (s.quarantines() > 0L ? " q" + s.quarantines() : "")
+                    + (s.conflicts() > 0L ? " c" + s.conflicts() : "");
 
                 Map<String, LinearStatsHealth> health = new LinkedHashMap<>();
                 health.put("dirty", LinearStatsStatus.dirtyHealth(s.dirtyDepth()));
@@ -185,10 +189,20 @@ public final class LinearStatsCompact {
                 parts.put("saved", saved);
                 parts.put("age", age);
                 parts.put("wage", "W" + wAge);
+                if (s.quarantines() > 0L) {
+                    parts.put("quarantined", "q" + s.quarantines());
+                    health.put("quarantined", LinearStatsHealth.CRIT);
+                }
+                if (s.conflicts() > 0L) {
+                    parts.put("conflicts", "c" + s.conflicts());
+                    health.put("conflicts", LinearStatsHealth.CRIT);
+                }
                 rows.add(new CompactRow(text, Map.copyOf(health), Map.copyOf(parts), RowKind.FOLDER));
 
                 tFiles += s.filesFlushed();
                 tFail += s.failures();
+                tQuarantined += s.quarantines();
+                tConflicts += s.conflicts();
                 tRaw += s.rawBytes();
                 tPacked += s.compressedBytes();
             }
@@ -196,8 +210,13 @@ public final class LinearStatsCompact {
         String savedTotal = tRaw <= 0L
             ? "na"
             : LinearStatsFormat.savedPercent(tRaw, tPacked) + "%";
+        // Quarantined files go last: the legs colour the TOTALS row up to
+        // the saved part and print the rest verbatim, so it shows on every
+        // leg without a leg change.
         String totalText =
-            "TOTALS files=" + tFiles + " fail=" + tFail + " " + savedTotal + " " + snaps.size() + " folders";
+            "TOTALS files=" + tFiles + " fail=" + tFail + " " + savedTotal + " " + snaps.size() + " folders"
+                + (tQuarantined > 0L ? " quarantined=" + tQuarantined : "")
+                + (tConflicts > 0L ? " conflicts=" + tConflicts : "");
         Map<String, LinearStatsHealth> totalHealth = new LinkedHashMap<>();
         totalHealth.put("fail", LinearStatsStatus.failuresHealth(tFail));
         LinearStatsHealth totalSaved = LinearStatsStatus.savedHealth(tRaw, tPacked);

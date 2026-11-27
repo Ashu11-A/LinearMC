@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import net.linear.bucket.LinearBase;
 import net.linear.bucket.LinearBucketReader;
 import net.linear.bucket.LinearBucketWriter;
+import net.linear.io.DirectoryFsync;
 import net.linear.io.LinearDirect;
 import net.linear.io.LinearDirectStreams;
 import net.linear.probe.LinearBucketGrid;
@@ -74,7 +75,7 @@ import net.linear.probe.LinearBucketGrid;
    *   <li>Durability is owned by the caller (the Moonrise-based storage
  *       layer): it polls {@link #isMarkedToSave()} from its per-world IO threads
  *       and calls {@link #flush()}, which persists via tmp-file + fsync +
- *       atomic move. {@link #clearMarkedToSave()} is an explicit reset for
+ *       atomic move + directory fsync. {@link #clearMarkedToSave()} is an explicit reset for
  *       owner-driven lifecycle handling (e.g. discard after a failed flush and
  *       unload); {@link #flush()} itself clears the flag when it snapshots.</li>
  *   <li>Buffer ownership: {@link #write} copies the caller's remaining bytes
@@ -220,8 +221,143 @@ public final class LinearRegionFile implements AbstractRegionFile {
         this.gridSize = LinearBucketGrid.isValid(gridSize) ? gridSize : LinearPolicy.DEFAULT_GRID_SIZE;
         this.parentDir = file.toAbsolutePath().getParent();
         createParentDirs(file);
-        if (Files.isRegularFile(file) && Files.size(file) > 0L) {
-            this.load();
+        if (Files.isRegularFile(file)) {
+            if (Files.size(file) == 0L) {
+                // An existing region is never treated as absent silently:
+                // keep the empty file aside, say so loudly, count it.
+                quarantineEmpty();
+            } else {
+                try {
+                    this.load();
+                } catch (final IOException | RuntimeException failed) {
+                    preserveConflictCopy(failed);
+                    throw failed;
+                }
+            }
+        }
+    }
+
+    /** Linear: maps a region file to the folder its conflict copies go to. */
+    private static volatile java.util.function.Function<Path, Path> CONFLICTS_FOLDER_RESOLVER =
+        LinearRegionFile::defaultConflictsFolder;
+
+    /**
+     * Adapter wiring: where copies of region files that failed to open go.
+     * The resolver gets the region file path and returns the target folder;
+     * {@code null} restores the default
+     * ({@code <dimension>/linear-conflicts/<region|entities|poi>}).
+     */
+    public static void linear$setConflictsFolderResolver(final java.util.function.Function<Path, Path> resolver) {
+        CONFLICTS_FOLDER_RESOLVER = resolver != null ? resolver : LinearRegionFile::defaultConflictsFolder;
+    }
+
+    /**
+     * Default conflicts folder. For a world storage folder
+     * ({@code region}, {@code entities}, {@code poi}) it is
+     * {@code linear-conflicts/<folder name>} beside that folder, so
+     * {@code world/dimensions/minecraft/overworld/region/r.0.0.linear} is
+     * copied under {@code world/dimensions/minecraft/overworld/linear-conflicts/region/}:
+     * it travels with the world (backups include it) and no region scanner
+     * looks inside it. Any other folder (conversion staging, tools) keeps its
+     * copies in its own {@code linear-conflicts} subfolder, never outside it.
+     */
+    public static Path defaultConflictsFolder(final Path regionFile) {
+        final Path folder = regionFile.toAbsolutePath().getParent();
+        if (folder == null) {
+            return Path.of("linear-conflicts");
+        }
+        final Path dimension = folder.getParent();
+        final Path name = folder.getFileName();
+        if (dimension != null && name != null
+                && net.linear.probe.LinearFolderNames.STORAGE_FOLDERS.contains(name.toString())) {
+            return dimension.resolve("linear-conflicts").resolve(name.toString());
+        }
+        return folder.resolve("linear-conflicts");
+    }
+
+    /**
+     * A zero-length {@code .linear} has no header, so it is not a valid
+     * region of any version: it is the trace of a write that never reached
+     * disk (or of an outside tool). Opening it as an empty region would let
+     * the next flush replace it without a trace. Instead it is renamed to
+     * {@code <name>.corrupt-<epochMs>} beside the original (moved, never
+     * deleted), the event is logged at ERROR and counted in
+     * {@code /linear stats}, and the region opens empty: the affected chunks
+     * regenerate unless the file is restored from a backup.
+     */
+    private void quarantineEmpty() throws IOException {
+        quarantineEmptyFile(this.file, this.parentDir);
+    }
+
+    /** Shared by LINEAR and B_LINEAR (master file): see {@link #quarantineEmpty()}. */
+    static void quarantineEmptyFile(final Path file, final Path parentDir) throws IOException {
+        final Path target = file.resolveSibling(file.getFileName() + ".corrupt-" + System.currentTimeMillis());
+        Files.move(file, target, StandardCopyOption.ATOMIC_MOVE);
+        DirectoryFsync.syncQuietly(parentDir);
+        LOGGER.error("Region file {} is empty (0 bytes), so it holds no region data. Moved it to {} and opened the"
+            + " region empty: its chunks will regenerate. Restore the region from a backup if it mattered.",
+            file, target.getFileName());
+        recordQuarantine(parentDir);
+    }
+
+    /**
+     * Copies the bytes of a region file that failed to open to the
+     * conflicts folder, before the failure reaches the server (which may
+     * regenerate the chunks and later overwrite the file). The copy name
+     * carries the source's mtime and size, so retried opens of the same
+     * broken file make one copy, not one per attempt. Best effort: a failed
+     * copy is logged and never hides the original failure.
+     */
+    private void preserveConflictCopy(final Throwable cause) {
+        preserveConflictCopyOf(this.file, this.parentDir, cause);
+    }
+
+    /** Shared by LINEAR and B_LINEAR (master file): see {@link #preserveConflictCopy(Throwable)}. */
+    static void preserveConflictCopyOf(final Path file, final Path parentDir, final Throwable cause) {
+        Path tmp = null;
+        try {
+            final long size = Files.size(file);
+            final long mtime = Files.getLastModifiedTime(file).toMillis();
+            final Path folder = CONFLICTS_FOLDER_RESOLVER.apply(file);
+            final Path target = folder.resolve(file.getFileName() + ".conflict-" + mtime + "-" + size);
+            if (Files.exists(target)) {
+                return;
+            }
+            Files.createDirectories(folder);
+            tmp = target.resolveSibling(target.getFileName() + ".tmp");
+            Files.copy(file, tmp, StandardCopyOption.REPLACE_EXISTING);
+            try (FileChannel channel = FileChannel.open(tmp, StandardOpenOption.WRITE)) {
+                channel.force(true);
+            }
+            Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            tmp = null;
+            DirectoryFsync.syncQuietly(folder);
+            LOGGER.error("Region file {} could not be opened ({}). Copied its bytes to {} before the server"
+                + " continues, so they survive a regeneration.", file, cause.getMessage(), target);
+            recordConflict(parentDir);
+        } catch (IOException | RuntimeException copyFailed) {
+            LOGGER.error("Region file {} could not be opened and could not be copied to the conflicts folder",
+                file, copyFailed);
+        } finally {
+            deleteQuietly(tmp);
+        }
+    }
+
+    private static void recordConflict(final Path parentDir) {
+        try {
+            if (parentDir != null) {
+                LinearFlushCoordinator.forFolder(parentDir).recordConflict();
+            }
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private static void recordQuarantine(final Path parentDir) {
+        try {
+            if (parentDir != null) {
+                LinearFlushCoordinator.forFolder(parentDir).recordQuarantine();
+            }
+        } catch (RuntimeException ignored) {
         }
     }
 
@@ -497,6 +633,19 @@ public final class LinearRegionFile implements AbstractRegionFile {
         this.doFlush();
     }
 
+    /**
+     * Joins a flush running on another thread: every flush holds
+     * {@code flushGuard} from its snapshot through the rename and the
+     * directory fsync, so taking and releasing the guard returns only after
+     * that flush is durable (or failed and re-armed dirty). Allocation-free;
+     * returns at once when no flush runs. Safe on a closed file.
+     */
+    @Override
+    public void awaitDurable() {
+        this.flushGuard.lock();
+        this.flushGuard.unlock();
+    }
+
     /** Dirty check for the owning storage layer; leaves the flag set. */
     @Override
     public boolean isMarkedToSave() {
@@ -725,6 +874,11 @@ public final class LinearRegionFile implements AbstractRegionFile {
             } catch (final AtomicMoveNotSupportedException fallback) {
                 Files.move(tmp, this.file, StandardCopyOption.REPLACE_EXISTING);
             }
+            // The rename is a directory change: sync the directory so the new
+            // name survives a host crash (never fails the flush; see
+            // DirectoryFsync). Still under flushGuard, so awaitDurable()
+            // returns only after it.
+            DirectoryFsync.syncQuietly(this.parentDir);
             // Linear: byte counters (lock-free, no pool re-cut).
             // totalRaw is the summed payload bytes; packed is the compressed
             // body (table + bucket frames for V2/V3, zstd frame for V1),

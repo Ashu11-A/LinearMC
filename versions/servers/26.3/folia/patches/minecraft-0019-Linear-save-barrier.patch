@@ -1,0 +1,223 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-ci <30575805+Ashu11-A@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 12:00:00 -0300
+Subject: [PATCH] Linear save barrier: real save-all flush, save-off lease,
+ durable player data
+
+save-all is registered again on Folia (upstream left it as TODO) and runs
+region by region: one tick task per owned region section, the first task
+in a region saves that region's chunks (flush: storages go through the
+forced Linear barrier) and then only that region's players, so a player
+file is never written before its region's chunks. After the last task a
+flush save-all runs the forced coordinator barrier off-thread and writes
+<level>/linear-checkpoint/save-all.done {id,startMs,endMs,regions,failed}
+atomically before reporting success. The periodic player autosave now
+respects save-off (level.noSave), and a save-off older than
+save-off-max-duration (default 120 s, 0 disables) turns saving back on
+with a WARN and an ops broadcast. With durable-player-data (default true)
+player .dat files are replaced by a .dat_old hard link and one
+ATOMIC_MOVE (no fsync on the tick thread); stats and advancements are
+replaced atomically; orphan temp files are quarantined at boot; every
+.dat_old fallback logs a WARN.
+
+diff --git a/net/minecraft/commands/Commands.java b/net/minecraft/commands/Commands.java
+index 8db0bf6c5500fab0b278a9afdf8c2c161097a5d3..1c9b4ffb23c2bb0bb12d0a7290290a831fef06cf 100644
+--- a/net/minecraft/commands/Commands.java
++++ b/net/minecraft/commands/Commands.java
+@@ -303,7 +303,7 @@ public class Commands {
+             PardonCommand.register(this.dispatcher);
+             PardonIpCommand.register(this.dispatcher);
+             //PerfCommand.register(this.dispatcher); // Folia - region threading - TODO later
+-            //SaveAllCommand.register(this.dispatcher); // Folia - region threading - TODO later
++            SaveAllCommand.register(this.dispatcher); // Folia - region threading // Linear - region-scheduled save-all with a durability barrier
+             SaveOffCommand.register(this.dispatcher);
+             SaveOnCommand.register(this.dispatcher);
+             SetPlayerIdleTimeoutCommand.register(this.dispatcher);
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 0e05aad82f93cf1b26c28d0cd5801d4be763abb8..eded772c8d3ef7583782da3fc2d64b0fc1a99561 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1750,7 +1750,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         foliaProfiler.startTimer(ca.spottedleaf.leafprofiler.LProfilerRegistry.AUTOSAVE); try { // Folia - profiler
+         try {
+             this.isSaving = true;
+-            if (playerSaveInterval > 0) {
++            if (playerSaveInterval > 0 && (region == null || !region.world.noSave)) { // Linear - save-off pauses periodic player saves too
+                 this.playerList.saveAll(playerSaveInterval);
+             }
+             if (region == null && fullSave) { // Folia - region threading - don't auto save level data
+@@ -3040,9 +3040,22 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             }
+         }
+ 
++        net.linear.save.SaveOffLease.onAutoSaveChanged(enable, success, this::linear$releaseSaveOffLease); // Linear - save-off lease
+         return success;
+     }
+ 
++    // Linear start - save-off lease: a save-off nobody turns back on expires
++    private void linear$releaseSaveOffLease() {
++        io.papermc.paper.threadedregions.RegionizedServer.getInstance().addTask(() -> {
++            if (this.setAutoSave(true)) {
++                final String message = net.linear.save.SaveOffLease.releaseMessage(net.linear.save.SaveOffLease.maxDurationSeconds());
++                LOGGER.warn(message);
++                org.bukkit.Bukkit.broadcast(net.kyori.adventure.text.Component.text(message, net.kyori.adventure.text.format.NamedTextColor.RED), org.bukkit.Server.BROADCAST_CHANNEL_ADMINISTRATIVE);
++            }
++        });
++    }
++    // Linear end - save-off lease
++
+     public boolean isAutoSave() {
+         for (ServerLevel level : this.getAllLevels()) {
+             if (level != null && !level.noSave) {
+diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
+index e70701663abd6f19a506690167d80f0dceab8000..add1fb74ea47c1ea158d7b338c3fa6632fa7467a 100644
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -134,7 +134,7 @@ public class PlayerAdvancements {
+         try {
+             FileUtil.createDirectoriesSafe(this.playerSavePath.getParent());
+ 
+-            try (Writer outputWriter = Files.newBufferedWriter(this.playerSavePath, StandardCharsets.UTF_8)) {
++            try (Writer outputWriter = net.linear.io.PlayerFileDurability.newWriter(this.playerSavePath, StandardCharsets.UTF_8)) { // Linear - durable-player-data: atomic replace
+                 GSON.toJson(json, GSON.newJsonWriter(outputWriter));
+             }
+         } catch (IOException | JsonIOException e) {
+diff --git a/net/minecraft/server/commands/SaveAllCommand.java b/net/minecraft/server/commands/SaveAllCommand.java
+index 299991905c24a7018f8ac60d0c16e56fa43cd710..6d857edb2e7c02c457f6f109e7a4b69d37b0f30f 100644
+--- a/net/minecraft/server/commands/SaveAllCommand.java
++++ b/net/minecraft/server/commands/SaveAllCommand.java
+@@ -24,12 +24,73 @@ public class SaveAllCommand {
+     private static int saveAll(final CommandSourceStack source, final boolean flush) throws CommandSyntaxException {
+         source.sendSuccess(() -> Component.translatable("commands.save.saving"), false);
+         MinecraftServer server = source.getServer();
+-        boolean success = server.saveEverything(true, flush, true);
+-        if (!success) {
+-            throw ERROR_FAILED.create();
++        linear$saveAllRegionised(source, server, flush); // Linear - Folia never registered save-all: save every region on its own thread
++        return Command.SINGLE_SUCCESS;
++    }
++
++    // Linear start - region-scheduled save-all with a durability barrier
++    /**
++     * Saves every region on its own tick thread: one tick task per owned
++     * region section (tasks follow their section through merges and
++     * splits; the first task that runs in a region saves it, the others of
++     * that region skip), each saving the region's chunks (flush: storages
++     * flushed through the forced Linear barrier) and then the region's own
++     * players, so a player file is never written before its region's chunks.
++     * When the last task is done, a flush save-all runs the forced
++     * coordinator barrier off-thread and writes
++     * {@code <level>/linear-checkpoint/save-all.done}; only then is success
++     * reported. Global and level data keep Folia's own schedule (stop).
++     */
++    private static void linear$saveAllRegionised(final CommandSourceStack source, final MinecraftServer server, final boolean flush) {
++        final net.linear.save.SaveAllBarrier.Ticket ticket = net.linear.save.SaveAllBarrier.begin(
++            server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT), flush);
++        for (final net.minecraft.server.level.ServerLevel level : server.getAllLevels()) {
++            final java.util.List<io.papermc.paper.threadedregions.ThreadedRegionizer.ThreadedRegion<io.papermc.paper.threadedregions.TickRegions.TickRegionData, io.papermc.paper.threadedregions.TickRegions.TickRegionSectionData>> regions = new java.util.ArrayList<>();
++            level.regioniser.computeForAllRegions(regions::add);
++            final int shift = level.regioniser.sectionChunkShift;
++            for (final io.papermc.paper.threadedregions.ThreadedRegionizer.ThreadedRegion<io.papermc.paper.threadedregions.TickRegions.TickRegionData, io.papermc.paper.threadedregions.TickRegions.TickRegionSectionData> region : regions) {
++                final it.unimi.dsi.fastutil.longs.LongArrayList sections = region.getOwnedSections();
++                for (int i = 0, len = sections.size(); i < len; ++i) {
++                    final long section = sections.getLong(i);
++                    ticket.taskQueued();
++                    final ca.spottedleaf.concurrentutil.executor.PrioritisedExecutor.PrioritisedTask task = io.papermc.paper.threadedregions.RegionizedServer.getInstance().taskQueue.createTickTaskQueue(
++                        level,
++                        ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkX(section) << shift,
++                        ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkZ(section) << shift,
++                        () -> linear$saveCurrentRegion(server, level, ticket, flush),
++                        ca.spottedleaf.concurrentutil.util.Priority.NORMAL
++                    );
++                    if (!task.queue()) {
++                        ticket.regionFailed(); // cancelled before it could run: never report this save-all as clean
++                        ticket.taskDone();
++                    }
++                }
++            }
+         }
++        ticket.seal(result -> {
++            if (result.failed() > 0 || (result.flush() && !result.markerWritten())) {
++                source.sendFailure(Component.literal(ERROR_FAILED.create().getMessage() + " (" + result.summary() + ")"));
++            } else {
++                source.sendSuccess(() -> Component.translatable("commands.save.success"), true);
++            }
++        });
++    }
+ 
+-        source.sendSuccess(() -> Component.translatable("commands.save.success"), true);
+-        return Command.SINGLE_SUCCESS;
++    private static void linear$saveCurrentRegion(final MinecraftServer server, final net.minecraft.server.level.ServerLevel level,
++                                                 final net.linear.save.SaveAllBarrier.Ticket ticket, final boolean flush) {
++        try {
++            if (ticket.claimRegion(io.papermc.paper.threadedregions.TickRegionScheduler.getCurrentRegion())) {
++                ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)level).moonrise$getChunkTaskScheduler().chunkHolderManager.saveAllChunksRegionised(
++                    flush, false, false, false, false, true, false
++                );
++                server.getPlayerList().saveAll(); // only players owned by this region thread
++            }
++        } catch (final Throwable thrown) {
++            ticket.regionFailed();
++            MinecraftServer.LOGGER.error("save-all {}: region save failed in world '{}'", ticket.id(), level.getWorld().getName(), thrown);
++        } finally {
++            ticket.taskDone();
++        }
+     }
++    // Linear end - region-scheduled save-all with a durability barrier
+ }
+diff --git a/net/minecraft/stats/ServerStatsCounter.java b/net/minecraft/stats/ServerStatsCounter.java
+index f5beb001b938072e78c0ead7e0ad0499784ed1cf..2906a0c441550d0b9149200771db6c328d71ebc9 100644
+--- a/net/minecraft/stats/ServerStatsCounter.java
++++ b/net/minecraft/stats/ServerStatsCounter.java
+@@ -93,7 +93,7 @@ public class ServerStatsCounter extends StatsCounter {
+         try {
+             FileUtil.createDirectoriesSafe(this.file.getParent());
+ 
+-            try (Writer writer = Files.newBufferedWriter(this.file, StandardCharsets.UTF_8)) {
++            try (Writer writer = net.linear.io.PlayerFileDurability.newWriter(this.file, StandardCharsets.UTF_8)) { // Linear - durable-player-data: atomic replace
+                 GSON.toJson(this.toJson(), GSON.newJsonWriter(writer));
+             }
+         } catch (IOException | JsonIOException e) {
+diff --git a/net/minecraft/world/level/storage/PlayerDataStorage.java b/net/minecraft/world/level/storage/PlayerDataStorage.java
+index 142a34eb046c87f16b73023c83218d8752922fbe..8065425bac66a3475afb701f8fe70aa0480e35d4 100644
+--- a/net/minecraft/world/level/storage/PlayerDataStorage.java
++++ b/net/minecraft/world/level/storage/PlayerDataStorage.java
+@@ -28,6 +28,7 @@ public class PlayerDataStorage {
+         this.fixerUpper = fixerUpper;
+         this.playerDir = levelAccess.getLevelPath(LevelResource.PLAYER_DATA_DIR).toFile();
+         this.playerDir.mkdirs();
++        net.linear.io.PlayerFileDurability.quarantineOrphans(this.playerDir.toPath()); // Linear - temp files of an interrupted save move aside at boot
+     }
+ 
+     public void save(final Player player) {
+@@ -41,7 +42,13 @@ public class PlayerDataStorage {
+             NbtIo.writeCompressed(dataToStore, tmpFile);
+             Path realFile = playerDirPath.resolve(player.getStringUUID() + ".dat");
+             Path oldFile = playerDirPath.resolve(player.getStringUUID() + ".dat_old");
++            // Linear start - durable-player-data: atomic replace, .dat_old hard link, one ATOMIC_MOVE; no fsync on the tick thread (coupled-save writes are forced and directory-synced)
++            if (net.linear.io.PlayerFileDurability.enabled()) {
++                net.linear.io.PlayerFileDurability.replace(realFile, tmpFile, oldFile);
++            } else {
+             Util.safeReplaceFile(realFile, tmpFile, oldFile);
++            }
++            // Linear end - durable-player-data
+         } catch (Exception ignored) {
+             LOGGER.warn("Failed to save player data for {}", player.getPlainTextName(), ignored); // Paper - Print exception
+         }
+@@ -96,7 +103,15 @@ public class PlayerDataStorage {
+             this.backup(nameAndId, ".dat");
+         }
+ 
+-        return optTag.or(() -> this.load(nameAndId, ".dat_old")).map(tag -> {
++        return optTag.or(() -> {
++            // Linear start - say so when a player resumes from the previous save
++            final Optional<CompoundTag> old = this.load(nameAndId, ".dat_old");
++            if (old.isPresent()) {
++                net.linear.io.PlayerFileDurability.warnDatOldFallback(nameAndId.name(), nameAndId.id());
++            }
++            return old;
++            // Linear end
++        }).map(tag -> {
+             int version = NbtUtils.getDataVersion(tag);
+             return ca.spottedleaf.dataconverter.minecraft.MCDataConverter.convertTag(ca.spottedleaf.dataconverter.minecraft.datatypes.MCTypeRegistry.PLAYER, DataFixTypes.PLAYER, tag, version, ca.spottedleaf.dataconverter.minecraft.util.Version.getCurrentVersion());
+         });

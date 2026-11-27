@@ -1,18 +1,27 @@
+Coupled save (2026-11-26, same hunks as Folia minecraft-0020 / paper-0013): see net.linear.save.CoupledSave.
 diff --git a/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java b/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java
-index e361b920..6ed86cff 100644
 --- a/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java
 +++ b/canvas-server/src/main/java/io/canvasmc/canvas/GlobalConfiguration.java
-@@ -161,6 +161,9 @@ public class GlobalConfiguration extends Part {
+@@ -161,6 +161,18 @@ public class GlobalConfiguration extends Part {
  
          // validate the configuration so users don't end up doing a stupid
          Validator.validateObject(configuration);
 +        // Linear - writer keys: validated and published to the core once per config load.
 +        net.linear.config.LinearFileConfig.pushWriterValues(
 +            configuration.linear.implementation, configuration.linear.gridSize, LOGGER::warn, LOGGER::info);
++        // Linear - save barrier keys, published to the core once per config load.
++        configuration.linear.saveOffMaxDuration = net.linear.save.SaveOffLease.resolveMaxDurationSeconds(
++            configuration.linear.saveOffMaxDuration, LOGGER::error);
++        net.linear.save.SaveOffLease.setMaxDurationSeconds(configuration.linear.saveOffMaxDuration);
++        net.linear.io.PlayerFileDurability.setEnabled(configuration.linear.durablePlayerData);
++        // Linear - coupled save keys, published to the core once per config load.
++        configuration.linear.coupledSave.interval = net.linear.save.CoupledSave.resolveIntervalSeconds(
++            configuration.linear.coupledSave.interval, LOGGER::error);
++        net.linear.save.CoupledSave.configure(configuration.linear.coupledSave.enabled, configuration.linear.coupledSave.interval);
  
          if (TickRegions.hasStarted()) {
  
-@@ -401,6 +404,65 @@ public class GlobalConfiguration extends Part {
+@@ -401,6 +413,115 @@ public class GlobalConfiguration extends Part {
          public boolean preventExcessiveVelocityMoveOutOfRegion = false;
      }
  
@@ -64,6 +73,54 @@ index e361b920..6ed86cff 100644
 +                        "Off-list values log a warning and use 8. -Dlinearmc.grid-size wins."
 +                    )
 +                );
++            option("saveOffMaxDuration")
++                .docs(
++                    Style.wrap(
++                        "Seconds a save-off may last before saving turns itself back on, with a WARN",
++                        "and an ops broadcast (default 120; 0 disables)."
++                    )
++                );
++            option("durablePlayerData")
++                .docs(
++                    Style.wrap(
++                        "Player .dat, stats and advancements: one atomic rename (no fsync on the tick thread;",
++                        "coupled-save writes are synced off-thread), .dat_old kept as the previous save, orphan",
++                        "temp files quarantined at boot (default true). Same bytes as vanilla; false = vanilla."
++                    )
++                );
++            option("coupledSave")
++                .docs(
++                    Style.wrap(
++                        "Coupled save order: a player file is never written before the chunks of its",
++                        "region are on disk (default off)."
++                    )
++                );
++        }
++
++        public CoupledSave coupledSave = new CoupledSave();
++        public static class CoupledSave extends Part {
++            {
++                option("enabled")
++                    .docs(
++                        Style.wrap(
++                            "Off by default. On: every interval each region saves all its chunks and stages its",
++                            "players' .dat, stats and advancements in memory; they are written (atomically) only",
++                            "after those chunks are durable. Logout, Player#saveData and save-all follow the same",
++                            "order, and the separate periodic player autosave is skipped. An item placed just",
++                            "before a crash may then be duplicated, never lost."
++                        )
++                    );
++                option("interval")
++                    .docs(
++                        Style.wrap(
++                            "Seconds between captures of one region (default 20, minimum 1). Also the longest",
++                            "a player file can lag behind its chunks."
++                        )
++                    );
++            }
++
++            public boolean enabled = true;
++            public long interval = 20L;
 +        }
 +
 +        public long flushFrequency = 10L;
@@ -73,6 +130,8 @@ index e361b920..6ed86cff 100644
 +        public boolean logFlushBatches = false;
 +        public String implementation = "V1";
 +        public int gridSize = 8;
++        public long saveOffMaxDuration = 120L;
++        public boolean durablePlayerData = true;
 +    }
 +
      public ChunkSystem chunkSystem = new ChunkSystem();

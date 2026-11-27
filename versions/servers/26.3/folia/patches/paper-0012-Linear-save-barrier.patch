@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-ci <30575805+Ashu11-A@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 12:00:00 -0300
+Subject: [PATCH] Linear save barrier: real save-all flush, save-off lease,
+ durable player data
+
+save-all is registered again on Folia (upstream left it as TODO) and runs
+region by region: one tick task per owned region section, the first task
+in a region saves that region's chunks (flush: storages go through the
+forced Linear barrier) and then only that region's players, so a player
+file is never written before its region's chunks. After the last task a
+flush save-all runs the forced coordinator barrier off-thread and writes
+<level>/linear-checkpoint/save-all.done {id,startMs,endMs,regions,failed}
+atomically before reporting success. The periodic player autosave now
+respects save-off (level.noSave), and a save-off older than
+save-off-max-duration (default 120 s, 0 disables) turns saving back on
+with a WARN and an ops broadcast. With durable-player-data (default true)
+player .dat files are replaced by a .dat_old hard link and one
+ATOMIC_MOVE (no fsync on the tick thread); stats and advancements are
+replaced atomically; orphan temp files are quarantined at boot; every
+.dat_old fallback logs a WARN.
+
+diff --git a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
+index 6457e64de8a810e506bcdcd2f68036453234d534..3622e622b77fa7731019d390a9e11fb2140b11f3 100644
+--- a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
++++ b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
+@@ -366,9 +366,17 @@ public class GlobalConfiguration extends ConfigurationPart {
+             public String implementation = "V1";
+             @Comment("Bucket grid for V2/V3 writes: 1, 2, 4, 8 (default), 16 or 32. Off-list values log a warning and use 8. -Dlinearmc.grid-size wins.")
+             public int gridSize = 8;
++            @Comment("Seconds a save-off may last before saving turns itself back on, with a WARN and an ops broadcast (default 120; 0 disables). Stops a backup client that died after save-off from freezing saves.")
++            public long saveOffMaxDuration = 120;
++            @Comment("Player .dat, stats and advancements: one atomic rename, .dat_old kept as the previous save, orphan temp files quarantined at boot (default true). No fsync on the tick thread; coupled-save writes are forced and directory-synced off-thread. Same bytes as vanilla; false restores the vanilla replace.")
++            public boolean durablePlayerData = true;
+ 
+             @PostProcess
+             private void postProcess() {
++                // Linear - save barrier keys, published to the core once per config load.
++                this.saveOffMaxDuration = net.linear.save.SaveOffLease.resolveMaxDurationSeconds(this.saveOffMaxDuration, LOGGER::error);
++                net.linear.save.SaveOffLease.setMaxDurationSeconds(this.saveOffMaxDuration);
++                net.linear.io.PlayerFileDurability.setEnabled(this.durablePlayerData);
+                 if (this.flushFrequency < 1) {
+                     LOGGER.error("[region-format] linear.flush-frequency must be >= 1, got {}. Falling back to 10.", this.flushFrequency);
+                     this.flushFrequency = 10;

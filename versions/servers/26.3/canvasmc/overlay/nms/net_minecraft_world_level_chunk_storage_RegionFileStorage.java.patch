@@ -25,7 +25,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
  import java.nio.file.Files;
  import java.nio.file.Path;
  import java.util.Objects;
-@@ -15,24 +17,33 @@
+@@ -15,24 +17,33 @@ import net.minecraft.nbt.NbtIo;
  import net.minecraft.nbt.StreamTagVisitor;
  import net.minecraft.util.ExceptionCollector;
  import net.minecraft.util.FileUtil;
@@ -62,7 +62,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
      }
  
      private boolean doesRegionFilePossiblyExist(final long position) {
-@@ -60,6 +71,29 @@
+@@ -60,6 +71,29 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              }
          }
      }
@@ -92,7 +92,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
  
      @Override
      public final boolean moonrise$doesRegionFileNotExistNoIO(final int chunkX, final int chunkZ) {
-@@ -67,13 +101,17 @@
+@@ -67,13 +101,17 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      }
  
      @Override
@@ -113,7 +113,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
          return this.getRegionFile(new ChunkPos(chunkX, chunkZ), false);
      }
  
-@@ -89,11 +127,52 @@
+@@ -89,11 +127,52 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
          }
  
          final ChunkPos pos = new ChunkPos(chunkX, chunkZ);
@@ -168,7 +168,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
  
          try { // Paper - implement RegionFileSizeException
          try {
-@@ -106,7 +185,8 @@
+@@ -106,7 +185,8 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              // note: it's OK if close() is called, as close() here will not issue a write to the RegionFile
              // see startWrite
              final int maxSize = RegionFile.MAX_CHUNK_SIZE / (1024 * 1024);
@@ -178,7 +178,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
              return new ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData(
                  compound, ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData.WriteResult.DELETE,
                  null, null
-@@ -123,9 +203,11 @@
+@@ -123,9 +203,11 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      ) throws IOException {
          final ChunkPos pos = new ChunkPos(chunkX, chunkZ);
          if (writeData.result() == ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.WriteData.WriteResult.DELETE) {
@@ -192,7 +192,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
              } // else: didn't exist
  
              return;
-@@ -138,7 +220,7 @@
+@@ -138,7 +220,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      public final ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO.RegionDataController.ReadData moonrise$readData(
          final int chunkX, final int chunkZ
      ) throws IOException {
@@ -201,7 +201,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
  
          // retrieve the count after reading under the regionfile lock, so that it matches the header the data was read with
          final int recalculateCount;
-@@ -148,8 +230,10 @@
+@@ -148,8 +230,10 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              input = null;
          } else {
              synchronized (regionFile) {
@@ -214,7 +214,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
              }
          }
  
-@@ -196,9 +280,16 @@
+@@ -196,9 +280,16 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              return ret;
          }
  
@@ -234,7 +234,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
              return null;
          }
  
-@@ -208,88 +299,246 @@
+@@ -208,88 +299,246 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              return ret;
          }
  
@@ -428,9 +428,9 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +                final Optional<AbstractRegionFile> evictedOpt = this.regionCache.removeLast(); // close outside (see below)
 +                if (evictedOpt != null && evictedOpt.isPresent()) {
 +                    evicted = evictedOpt.get();
-                 }
-             }
- 
++                }
++            }
++
 +            final Path regionPath;
 +            if (create) {
 +                // Linear - an existing region keeps its file; else the configured format (core-owned).
@@ -447,10 +447,10 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +                    // nonExistingRegionFiles so that a read miss cannot evict a live RegionFile from the cache
 +                    this.markNonExisting(key);
 +                    return null;
-+                }
+                 }
 +                regionPath = probed;
-+            }
-+
+             }
+ 
              this.createRegionFile(key);
  
              FileUtil.createDirectoriesSafe(this.folder);
@@ -511,7 +511,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
              serialisedChunkData = regionChunkInputStream == null ? null : ca.spottedleaf.moonrise.patches.nbt_rw.FastNBTParser.nbtIoRead(regionChunkInputStream);
          }
  
-@@ -302,28 +550,28 @@
+@@ -302,28 +551,28 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              return serialisedChunkData;
          }
  
@@ -548,7 +548,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
                  if (regionChunkInputStream != null) {
                      NbtIo.parse(regionChunkInputStream, scanner, NbtAccounter.unlimitedHeap());
                  }
-@@ -339,22 +587,50 @@
+@@ -339,22 +588,50 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
          }
          // Paper end - rewrite chunk system
          if (!SharedConstants.DEBUG_DONT_SAVE_WORLD) {
@@ -605,7 +605,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
              }
          }
      }
-@@ -362,39 +638,80 @@
+@@ -362,39 +639,80 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      @Override
      public void close() throws IOException {
          // Paper start - rewrite chunk system
@@ -630,7 +630,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 -                    exceptionCollector.add(ex);
 -                }
 +                snapshot.add(entry.get());
-+            }
+             }
 +        }
 +        final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
 +        for (final AbstractRegionFile regionFile : snapshot) {
@@ -638,7 +638,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +                regionFile.close();
 +            } catch (final IOException ex) {
 +                exceptionCollector.add(ex);
-             }
++            }
 +        }
 +        try {
              exceptionCollector.throwIfPresent();
@@ -654,7 +654,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 +        // negative cache (re-verified in applied tree: coordinator dirty set
 +        // only), so run the batch outside the monitor. Snapshot keeps the
 +        // regionCache iteration safe without blocking concurrent opens.
-+        LinearFlushCoordinator.forFolder(this.folder).flushDirty(); // Linear - persist deferred Linear writes first (driven by Moonrise save path, no extra threads)
++        LinearFlushCoordinator.forFolder(this.folder).flushDirty(true); // Linear - persist deferred Linear writes first (driven by Moonrise save path, no extra threads); forced: joins flushes already running (save barrier)
 +        final java.util.List<AbstractRegionFile> snapshot;
          synchronized (this) {
 -            final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();

@@ -44,6 +44,8 @@ public final class FlushLatencyWindow {
     private final LongAdder filesFlushedCount = new LongAdder();
     private final LongAdder failureCount = new LongAdder();
     private final LongAdder oversizeRejectCount = new LongAdder();
+    private final LongAdder quarantineCount = new LongAdder();
+    private final LongAdder conflictCount = new LongAdder();
     private final LongAdder evictCount = new LongAdder();
     private final LongAdder cacheHitCount = new LongAdder();
     private final LongAdder cacheMissCount = new LongAdder();
@@ -174,8 +176,21 @@ public final class FlushLatencyWindow {
         this.failureCount.increment();
     }
 
+    /** Failures recorded so far (one counter read, for barrier failure scopes). */
+    public long failureCount() {
+        return this.failureCount.sum();
+    }
+
     public void recordOversizeReject() {
         this.oversizeRejectCount.increment();
+    }
+
+    public void recordQuarantine() {
+        this.quarantineCount.increment();
+    }
+
+    public void recordConflict() {
+        this.conflictCount.increment();
     }
 
     public void recordCacheHit() {
@@ -244,7 +259,9 @@ public final class FlushLatencyWindow {
             this.compressedBytesTotal.sum(),
             p50,
             p99,
-            millisSince);
+            millisSince,
+            this.quarantineCount.sum(),
+            this.conflictCount.sum());
     }
 
     private static long bucketQuantile(long[] buckets, long total, double q) {
@@ -284,6 +301,8 @@ public final class FlushLatencyWindow {
         this.filesFlushedCount.reset();
         this.failureCount.reset();
         this.oversizeRejectCount.reset();
+        this.quarantineCount.reset();
+        this.conflictCount.reset();
         this.evictCount.reset();
         this.cacheHitCount.reset();
         this.cacheMissCount.reset();

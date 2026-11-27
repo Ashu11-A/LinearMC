@@ -10,6 +10,86 @@ one universal jar for Paper/Folia/CanvasMC 26.1-26.3 as
 `linearmc-horizon-26.1-26.3-<project>+build.<N>.jar`, built against the
 oldest bundle with `api-version: 26.1`.
 
+## v1.4.0-release.1
+
+### Matrix
+- Folia fork 26.3: `ver/26.3.x` at `b5c78083`, build #28 (was #26).
+- CanvasMC 26.3: build #1047 (`59357cb7`, was #1046).
+- Horizon 1.0.0: unchanged (stable #90, Paper/Folia/CanvasMC 26.1-26.3).
+
+### Crash consistency
+- `save-all flush` is a real barrier on the Folia and CanvasMC forks and on
+  Horizon on every host (Paper, Folia, CanvasMC): it waits for every chunk write still queued and
+  every Linear flush already running, an eviction close included (renamed
+  and directory synced) and writes
+  `<world>/linear-checkpoint/save-all.done` (`id`, `startMs`, `endMs`,
+  `regions`, `failed`) before reporting success. The Folia fork registers
+  `save-all` again and saves region by region, chunks first, then that
+  region's players. Horizon wires it on Paper hosts and, on Folia and
+  CanvasMC hosts, runs the forks' region-scheduled barrier (reflective
+  region API; on Folia it registers `save-all` too).
+- `save-off` pauses the periodic player autosave too, and a `save-off` older
+  than the new `linear.save-off-max-duration` (default 120 s, 0 disables)
+  turns saving back on with a WARN and an operator broadcast.
+- New `linear.durable-player-data` (default true): player `.dat` files are
+  replaced with a `.dat_old` hard link and one atomic rename; stats and
+  advancements are replaced atomically; no fsync on the tick thread (the
+  coupled-save writes are forced and directory-synced off-thread); orphan
+  temp files are quarantined at boot; every `.dat_old` fallback logs a WARN.
+- New `linear.coupled-save.enabled` (default true) and
+  `linear.coupled-save.interval` (default 20 s) on every leg: each region
+  saves all its chunks and stages its players' `.dat`, stats and
+  advancements in memory; a background thread writes them only after the
+  chunk writes in flight have landed and the forced storage flush returned,
+  and retries with backoff when that barrier fails. Logout,
+  `Player#saveData` and `save-all` use the same order, the periodic player
+  autosave is skipped, a player leaving a region (teleport, portal,
+  respawn) triggers a capture of the region being left, and a login reads
+  a staged save before the file. Within a region, for saves made by the
+  periodic capture, logout and `save-all`, a player file is never newer
+  than its region's chunks, so a place or deposit right before a crash
+  becomes at worst a duplicate. Not covered: region splits, and direct
+  writes (`stop`, `Server#savePlayers`, `save-off`, `saveData` called off
+  the player's thread); it is not a cross-region transaction
+  (`docs/limitations.md`). A failed chunk write withholds staged player
+  files until it is retried successfully: WARN at first, ERROR once a
+  capture is withheld for 60 s, and `/linear stats` shows
+  `coupled-withheld=N` meanwhile.
+- Region files: the parent directory is synced after every rename, a
+  zero-length `.linear` (or `.b_linear` master) is moved to `.corrupt-<ms>`
+  with an ERROR, an unreadable region (or `.b_linear` master, before its
+  swap heals it) is copied to `<dimension>/linear-conflicts/` before it can
+  regenerate (fixed location, not configurable), and `/linear stats` shows
+  `quarantined=N` (zero-length files moved aside: their chunks regenerate)
+  and `conflicts=N` (copies kept, original in place) when above 0.
+
+- Coupled save: the barrier counts flush failures only in the folders it
+  flushed (`LinearFlushCoordinator.FailureScope`), so a failing folder of
+  another world no longer withholds unrelated player files; the per-region
+  due check is lock-free (weak concurrent map, no global lock per tick).
+- Coupled save covers ANVIL folders too (the forced flush fsyncs every open
+  `.mca`); the scope and its ANVIL caveats are logged at enable.
+- New `-Dlinearmc.coupled-save.debug=true` debug lines and
+  `scripts/coupled-order-check.py`, a live order validator for a running
+  local server.
+- Smoke scripts: a relative `[work-root]` works, and a run that produced no
+  report exits non-zero; `save-barrier-smoke.sh` runs the save-off lease
+  phase on the forks too (and takes `JVM_EXTRA`).
+
+### Upgrade notes (behaviour changes)
+- `linear.coupled-save.enabled` is on by default: the periodic player
+  autosave is replaced by the per-region capture. Set it to `false` to get
+  the previous behaviour.
+- Backup scripts that hold `save-off` for more than 120 s must raise
+  `linear.save-off-max-duration` or set it to 0: the lease turns saving back
+  on after 120 s by default.
+- Player files are no longer written during `save-off` (the periodic player
+  autosave pauses; there is no flag to turn that off). A logout during
+  `save-off` still writes the player file.
+- On Horizon on Paper, `save-all flush` can hold the tick for up to 20 s
+  while it waits; on the forks with `coupled-save.enabled` off, each region
+  waits for its own forced flush during `save-all flush`.
+
 ## v1.3.0-release.2
 
 A companion build of the same patch set on newer upstream builds. No
