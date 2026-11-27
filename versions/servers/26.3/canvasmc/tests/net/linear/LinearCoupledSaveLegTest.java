@@ -210,6 +210,7 @@ public class LinearCoupledSaveLegTest {
     public void adapterAndFenceHooksExist() throws Exception {
         assertNotNull(MoonriseRegionFileIO.class.getMethod("linear$snapshotInFlight", net.minecraft.server.level.ServerLevel.class, List.class));
         assertNotNull(MoonriseRegionFileIO.class.getMethod("linear$fenceState", Object.class));
+        CoupledSave.configure(false, 20L);
         assertFalse(LinearCoupledSave.periodic(null), "off: the periodic player save runs as before");
         CoupledSave.configure(true, 20L);
         assertTrue(LinearCoupledSave.periodic(null), "on: the periodic player save is skipped (no region on this thread)");

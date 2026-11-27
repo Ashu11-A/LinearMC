@@ -103,6 +103,7 @@ public class LinearSaveBarrierLegTest {
         assertNotEquals(before, Files.getAttribute(file, "unix:ino"), "atomic replace: new inode");
         assertFalse(Files.exists(dir.resolve(UUID + ".json" + AtomicFiles.TMP_SUFFIX)), "no temp left");
 
+        net.linear.save.CoupledSave.configure(false, 20L);
         PlayerFileDurability.setEnabled(false);
         Object vanilla = Files.getAttribute(file, "unix:ino");
         stats.save();
